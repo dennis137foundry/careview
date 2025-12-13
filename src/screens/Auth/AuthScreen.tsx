@@ -1,6 +1,7 @@
+/* eslint-disable react-native/no-inline-styles */
+// src/screens/Auth/AuthScreen.tsx
 import React, { useState } from "react";
 import {
-  View,
   Text,
   TextInput,
   TouchableOpacity,
@@ -10,35 +11,39 @@ import {
   Platform,
   Alert,
 } from "react-native";
-import { useDispatch } from "react-redux";
-import { login } from "../../redux/userSlice";
 import authService from "../../services/authService";
 
-export default function AuthScreen({ navigation }: any) {
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import type { RootStackParamList } from "../../navigation/AppNavigator";
+
+type AuthScreenProps = {
+  navigation: NativeStackNavigationProp<RootStackParamList, "AuthPhone">;
+};
+
+export default function AuthScreen({ navigation }: AuthScreenProps) {
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
-  const dispatch = useDispatch();
 
-  const handleLogin = async () => {
-    if (!phone.trim()) return Alert.alert("Enter phone number");
+  const handleSendCode = async () => {
+    const trimmed = phone.trim();
+    if (!trimmed) {
+      Alert.alert("Phone required", "Please enter your mobile number.");
+      return;
+    }
 
     try {
       setBusy(true);
+      const success = await authService.sendCode(trimmed);
 
-      // fake verify: always succeeds
-      const user = await authService.verifyCode(phone, "1234");
-      if (user) {
-        dispatch(login(user));
-        navigation.reset({
-          index: 0,
-          routes: [{ name: "Main" }],
-        });
-      } else {
-        Alert.alert("Invalid code");
+      if (!success) {
+        Alert.alert("Error", "Could not send verification code.");
+        return;
       }
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Error", "Login failed");
+
+      navigation.navigate("AuthCode", { phone: trimmed });
+    } catch (e: any) {
+      console.error("[AuthScreen] Error:", e);
+      Alert.alert("Error", e?.message || "Failed to send code. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -51,37 +56,43 @@ export default function AuthScreen({ navigation }: any) {
     >
       {/* Logo */}
       <Image
-        source={require("../../assets/logo.png")} // replace with your logo file
+        source={require("../../assets/logo.png")}
         style={styles.logo}
         resizeMode="contain"
       />
 
       {/* Title */}
       <Text style={styles.title}>Welcome to Trinity CareView</Text>
-      <Text style={styles.subtitle}>Enter your phone number to continue</Text>
+      <Text style={styles.subtitle}>
+        Enter your mobile number to receive a verification code.
+      </Text>
 
       {/* Input */}
       <TextInput
         style={styles.input}
-        placeholder="Phone number"
+        placeholder="Mobile number"
         placeholderTextColor="#888"
         keyboardType="phone-pad"
         value={phone}
         onChangeText={setPhone}
+        autoComplete="tel"
+        textContentType="telephoneNumber"
       />
 
       {/* Button */}
       <TouchableOpacity
         style={[styles.button, busy && { opacity: 0.6 }]}
-        onPress={handleLogin}
+        onPress={handleSendCode}
         disabled={busy}
       >
         <Text style={styles.buttonText}>
-          {busy ? "Please wait..." : "Continue"}
+          {busy ? "Sending code..." : "Send Code"}
         </Text>
       </TouchableOpacity>
 
-      <Text style={styles.demoNote}>Demo mode – no code required</Text>
+      <Text style={styles.demoNote}>
+        We'll text a 6-digit code to verify your number.
+      </Text>
     </KeyboardAvoidingView>
   );
 }
@@ -120,6 +131,7 @@ const styles = StyleSheet.create({
     padding: 14,
     fontSize: 16,
     marginBottom: 20,
+    color: "#000",
   },
   button: {
     backgroundColor: "#002040",
@@ -139,5 +151,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#888",
     marginTop: 8,
+    textAlign: "center",
   },
 });

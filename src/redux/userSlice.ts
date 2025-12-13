@@ -1,15 +1,21 @@
 import { createSlice, PayloadAction, createAsyncThunk } from "@reduxjs/toolkit";
-import { getUser, saveUser, clearUser } from "../services/sqliteService";
+import { getUser, clearUser, LocalUser } from "../services/sqliteService";
 
 // ----------------------------------
 // State type definition
 // ----------------------------------
 interface UserState {
   isAuthenticated: boolean;
-  patientId?: string;
-  name?: string;
-  phone?: string;
   loading: boolean;
+
+  patientId?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+
+  providerFirstName?: string;
+  providerLastName?: string;
+  providerPracticeName?: string;
 }
 
 // ----------------------------------
@@ -17,16 +23,16 @@ interface UserState {
 // ----------------------------------
 const initialState: UserState = {
   isAuthenticated: false,
-  loading: true, // true until loadUser() runs at startup
+  loading: true,
 };
 
 // ----------------------------------
-// Thunk: load user from SQLite at app launch
+// Thunk: load user from SQLite at startup
 // ----------------------------------
 export const loadUser = createAsyncThunk("user/loadUser", async () => {
   try {
     const user = await getUser();
-    return user;
+    return user; // LocalUser | null
   } catch (e) {
     console.error("❌ Failed to load user:", e);
     return null;
@@ -40,39 +46,37 @@ const userSlice = createSlice({
   name: "user",
   initialState,
   reducers: {
-    // --- Login (called from AuthScreen) ---
-    login: (
-      state,
-      action: PayloadAction<{ patientId: string; name: string; phone: string }>
-    ) => {
-      const { patientId, name, phone } = action.payload;
-      try {
-        saveUser(patientId, name, phone); // persist to SQLite
-        console.log("✅ User saved locally:", name);
-      } catch (e) {
-        console.error("❌ Failed to save user:", e);
-      }
+    // --- Login sets Redux state (SQLite is handled in authService) ---
+    login: (state, action: PayloadAction<LocalUser>) => {
+      const u = action.payload;
 
       state.isAuthenticated = true;
-      state.patientId = patientId;
-      state.name = name;
-      state.phone = phone;
+      state.patientId = u.patientId;
+      state.firstName = u.firstName;
+      state.lastName = u.lastName;
+      state.phone = u.phone;
+      state.providerFirstName = u.providerFirstName;
+      state.providerLastName = u.providerLastName;
+      state.providerPracticeName = u.providerPracticeName;
       state.loading = false;
     },
 
-    // --- SetUser (manual override if needed) ---
-    setUser: (
-      state,
-      action: PayloadAction<{ patientId: string; name: string; phone: string }>
-    ) => {
+    // --- Manual override if needed ---
+    setUser: (state, action: PayloadAction<LocalUser>) => {
+      const u = action.payload;
+
       state.isAuthenticated = true;
-      state.patientId = action.payload.patientId;
-      state.name = action.payload.name;
-      state.phone = action.payload.phone;
+      state.patientId = u.patientId;
+      state.firstName = u.firstName;
+      state.lastName = u.lastName;
+      state.phone = u.phone;
+      state.providerFirstName = u.providerFirstName;
+      state.providerLastName = u.providerLastName;
+      state.providerPracticeName = u.providerPracticeName;
       state.loading = false;
     },
 
-    // --- Logout clears both SQLite + Redux state ---
+    // --- Logout clears state + SQLite ---
     logout: (state) => {
       try {
         clearUser();
@@ -83,24 +87,32 @@ const userSlice = createSlice({
 
       state.isAuthenticated = false;
       state.patientId = undefined;
-      state.name = undefined;
+      state.firstName = undefined;
+      state.lastName = undefined;
       state.phone = undefined;
+      state.providerFirstName = undefined;
+      state.providerLastName = undefined;
+      state.providerPracticeName = undefined;
       state.loading = false;
     },
   },
 
-  // --- Load persisted user at startup ---
+  // --- Restore user after SQLite load ---
   extraReducers: (builder) => {
     builder.addCase(loadUser.fulfilled, (state, action) => {
-      if (action.payload) {
+      const u = action.payload;
+
+      if (u) {
         state.isAuthenticated = true;
-        state.patientId = action.payload.patientId;
-        state.name = action.payload.name;
-        state.phone = action.payload.phone;
-        console.log("✅ Restored user session from SQLite");
-      } else {
-        console.log("ℹ️ No user found in SQLite");
+        state.patientId = u.patientId;
+        state.firstName = u.firstName;
+        state.lastName = u.lastName;
+        state.phone = u.phone;
+        state.providerFirstName = u.providerFirstName;
+        state.providerLastName = u.providerLastName;
+        state.providerPracticeName = u.providerPracticeName;
       }
+
       state.loading = false;
     });
   },

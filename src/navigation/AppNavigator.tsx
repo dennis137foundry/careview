@@ -4,16 +4,29 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { useSelector } from "react-redux";
-import TabNavigator from "./TabNavigator";
 import { View, ActivityIndicator, Image } from "react-native";
 
-const Stack = createNativeStackNavigator();
+import TabNavigator from "./TabNavigator";
+import AuthScreen from "../screens/Auth/AuthScreen";
+import CodeVerifyScreen from "../screens/Auth/CodeVerifyScreen";
+
+import type { RootState } from "../redux/store";
+
+export type RootStackParamList = {
+  AuthPhone: undefined;
+  AuthCode: { phone: string };
+  Main: undefined;
+};
+
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function AppNavigator() {
-  const user = useSelector((s: any) => s.user);
+  const { isAuthenticated, loading } = useSelector(
+    (state: RootState) => state.user
+  );
 
   // Show loading spinner while SQLite user is being checked
-  if (user.loading) {
+  if (loading) {
     return (
       <View
         style={{
@@ -28,7 +41,6 @@ export default function AppNavigator() {
     );
   }
 
-  // ✅ Navigator must return ONLY Stack.Screen elements as direct children
   return (
     <Stack.Navigator
       screenOptions={{
@@ -44,11 +56,28 @@ export default function AppNavigator() {
         headerShadowVisible: false,
       }}
     >
-      <Stack.Screen
-        name="Main"
-        component={TabNavigator}
-        options={{ headerShown: true }} // shows logo bar, no screen title bar
-      />
+      {isAuthenticated ? (
+        // Authenticated: show main app
+        <Stack.Screen
+          name="Main"
+          component={TabNavigator}
+          options={{ headerShown: true }}
+        />
+      ) : (
+        // Not authenticated: show auth flow
+        <>
+          <Stack.Screen
+            name="AuthPhone"
+            component={AuthScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="AuthCode"
+            component={CodeVerifyScreen}
+            options={{ headerShown: false }}
+          />
+        </>
+      )}
     </Stack.Navigator>
   );
 }

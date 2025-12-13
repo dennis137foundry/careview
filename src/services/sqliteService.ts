@@ -8,9 +8,18 @@ const db = open({ name: "trinity.db" });
 // ----------------------
 export function initDB() {
   // Create tables if they don't exist
-  db.execute(
-    "CREATE TABLE IF NOT EXISTS user (patientId TEXT PRIMARY KEY, name TEXT, phone TEXT);"
-  );
+  db.execute(`
+    CREATE TABLE IF NOT EXISTS user (
+        patientId TEXT PRIMARY KEY,
+        firstName TEXT,
+        lastName TEXT,
+        phone TEXT,
+        providerFirstName TEXT,
+        providerLastName TEXT,
+        providerPracticeName TEXT
+    );
+    `);
+
   
   // Create devices table with all columns
   db.execute(`
@@ -69,41 +78,53 @@ export function initDB() {
 // ----------------------
 // User Helpers
 // ----------------------
-export function saveUser(patientId: string, name: string, phone: string) {
+export interface LocalUser {
+  patientId: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  providerFirstName: string;
+  providerLastName: string;
+  providerPracticeName: string;
+}
+
+export function saveUser(u: LocalUser) {
   try {
     db.execute("DELETE FROM user;");
-    db.execute("INSERT INTO user (patientId, name, phone) VALUES (?, ?, ?);", [
-      patientId,
-      name,
-      phone,
-    ]);
-    console.log("✅ User saved:", patientId);
+    db.execute(
+      `INSERT INTO user 
+      (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName)
+      VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      [
+        u.patientId,
+        u.firstName,
+        u.lastName,
+        u.phone,
+        u.providerFirstName,
+        u.providerLastName,
+        u.providerPracticeName,
+      ]
+    );
+    console.log("✅ User saved:", u.patientId);
   } catch (e) {
     console.error("❌ Failed to save user:", e);
   }
 }
 
-export function clearUser() {
+export async function getUser(): Promise<LocalUser | null> {
   try {
-    db.execute("DELETE FROM user;");
-    console.log("✅ User table cleared");
-  } catch (e) {
-    console.error("❌ Failed to clear user:", e);
-  }
-}
-
-export async function getUser(): Promise<{ patientId: string; name: string; phone: string } | null> {
-  try {
-    const res = db.execute("SELECT patientId, name, phone FROM user LIMIT 1;");
+    const res = db.execute(
+      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName FROM user LIMIT 1;"
+    );
     if (!res.rows || res.rows.length === 0) return null;
-    const row = res.rows.item(0);
-    console.log("✅ Loaded user:", row);
-    return row;
+
+    return res.rows.item(0) as LocalUser;
   } catch (e) {
     console.error("❌ Failed to get user:", e);
     return null;
   }
 }
+
 
 // ----------------------
 // Device Helpers
@@ -217,6 +238,16 @@ export function saveReading(r: SavedReading) {
     console.error("❌ Failed to save reading:", e);
   }
 }
+
+export function clearUser() {
+  try {
+    db.execute("DELETE FROM user;");
+    console.log("✅ User table cleared");
+  } catch (e) {
+    console.error("❌ Failed to clear user:", e);
+  }
+}
+
 
 export function getAllReadings(): SavedReading[] {
   try {

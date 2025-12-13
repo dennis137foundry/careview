@@ -10,66 +10,98 @@ import {
   ActivityIndicator,
   Platform,
 } from "react-native";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { addDevice } from "../../redux/deviceSlice";
-import type { AppDispatch } from "../../redux/store";
+import type { AppDispatch, RootState } from "../../redux/store";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import { NativeModules, NativeEventEmitter, PermissionsAndroid } from "react-native";
+import {
+  NativeModules,
+  NativeEventEmitter,
+  PermissionsAndroid,
+} from "react-native";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
 
 // Map device type codes to human-readable categories
-const deviceTypeMap: Record<string, 'BP' | 'SCALE' | 'BG'> = {
-  'BP3L': 'BP',
-  'BP5': 'BP',
-  'BP5S': 'BP',
-  'BG5': 'BG',
-  'BG5S': 'BG',
-  'HS2S': 'SCALE',
-  'HS2': 'SCALE',
-  'HS4S': 'SCALE',
+const deviceTypeMap: Record<string, "BP" | "SCALE" | "BG"> = {
+  BP3L: "BP",
+  BP5: "BP",
+  BP5S: "BP",
+  BG5: "BG",
+  BG5S: "BG",
+  HS2S: "SCALE",
+  HS2: "SCALE",
+  HS4S: "SCALE",
 };
 
 const deviceTypeLabels: Record<string, string> = {
-  'BP3L': 'Blood Pressure Monitor',
-  'BP5': 'Blood Pressure Monitor',
-  'BP5S': 'Blood Pressure Monitor',
-  'BG5': 'Glucose Meter (QR Required)',
-  'BG5S': 'Glucose Meter',
-  'HS2S': 'Smart Scale',
-  'HS2': 'Smart Scale',
-  'HS4S': 'Smart Scale',
+  BP3L: "Blood Pressure Monitor",
+  BP5: "Blood Pressure Monitor",
+  BP5S: "Blood Pressure Monitor",
+  BG5: "Glucose Meter (QR Required)",
+  BG5S: "Glucose Meter",
+  HS2S: "Smart Scale",
+  HS2: "Smart Scale",
+  HS4S: "Smart Scale",
+};
+
+const categoryLabels: Record<string, string> = {
+  BP: "Blood Pressure Monitor",
+  SCALE: "Smart Scale",
+  BG: "Glucose Meter",
 };
 
 const deviceIcons: Record<string, string> = {
-  'BP': 'favorite',
-  'SCALE': 'monitor-weight',
-  'BG': 'bloodtype',
+  BP: "favorite",
+  SCALE: "monitor-weight",
+  BG: "bloodtype",
 };
 
 type DiscoveredDevice = {
   mac: string;
   name: string;
-  type: string;  // The model: BP3L, BG5, BG5S, etc.
+  type: string; // The model: BP3L, BG5, BG5S, etc.
   rssi: number;
 };
 
 export default function AddDeviceScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
-  
+  const existingDevices = useSelector(
+    (state: RootState) => state.devices.devices
+  );
+
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [_debugLogs, setDebugLogs] = useState<string[]>([]);
 
   const addLog = useCallback((msg: string) => {
     console.log(`[AddDevice] ${msg}`);
-    setDebugLogs(prev => [...prev.slice(-50), `${new Date().toLocaleTimeString()}: ${msg}`]);
+    setDebugLogs((prev) => [
+      ...prev.slice(-50),
+      `${new Date().toLocaleTimeString()}: ${msg}`,
+    ]);
   }, []);
+
+  // Check if a device type already exists
+  const hasDeviceType = useCallback(
+    (type: "BP" | "SCALE" | "BG"): boolean => {
+      return existingDevices.some((d) => d.type === type);
+    },
+    [existingDevices]
+  );
+
+  // Get existing device of type (for display in alert)
+  const getExistingDeviceOfType = useCallback(
+    (type: "BP" | "SCALE" | "BG") => {
+      return existingDevices.find((d) => d.type === type);
+    },
+    [existingDevices]
+  );
 
   // Request permissions on Android
   useEffect(() => {
-    if (Platform.OS === 'android') {
+    if (Platform.OS === "android") {
       const requestPermissions = async () => {
         try {
           const granted = await PermissionsAndroid.requestMultiple([
@@ -93,21 +125,27 @@ export default function AddDeviceScreen({ navigation }: any) {
       return;
     }
 
-    const sub = emitter.addListener('onDeviceFound', (device: DiscoveredDevice) => {
-      addLog(`Found: ${device.name} (${device.type}) MAC=${device.mac}`);
-      
-      setDevices(prev => {
-        // Avoid duplicates
-        if (prev.find(d => d.mac === device.mac)) {
-          return prev;
-        }
-        return [...prev, device];
-      });
-    });
+    const sub = emitter.addListener(
+      "onDeviceFound",
+      (device: DiscoveredDevice) => {
+        addLog(`Found: ${device.name} (${device.type}) MAC=${device.mac}`);
 
-    const debugSub = emitter.addListener('onDebugLog', (data: { message: string }) => {
-      addLog(`[Native] ${data.message}`);
-    });
+        setDevices((prev) => {
+          // Avoid duplicates
+          if (prev.find((d) => d.mac === device.mac)) {
+            return prev;
+          }
+          return [...prev, device];
+        });
+      }
+    );
+
+    const debugSub = emitter.addListener(
+      "onDebugLog",
+      (data: { message: string }) => {
+        addLog(`[Native] ${data.message}`);
+      }
+    );
 
     return () => {
       sub.remove();
@@ -137,7 +175,7 @@ export default function AddDeviceScreen({ navigation }: any) {
     try {
       // Authenticate first
       addLog("Authenticating SDK...");
-      await IHealthDevices.authenticate('license.pem');
+      await IHealthDevices.authenticate("license.pem");
       addLog("✅ Authenticated");
     } catch (e: any) {
       addLog(`Auth note: ${e.message}`);
@@ -145,7 +183,16 @@ export default function AddDeviceScreen({ navigation }: any) {
 
     try {
       // Scan for all supported device types
-      await IHealthDevices.startScan(['BP3L', 'BP5', 'BP5S', 'BG5', 'BG5S', 'HS2S', 'HS2', 'HS4S']);
+      await IHealthDevices.startScan([
+        "BP3L",
+        "BP5",
+        "BP5S",
+        "BG5",
+        "BG5S",
+        "HS2S",
+        "HS2",
+        "HS4S",
+      ]);
       addLog("✅ Scan started - wake your devices!");
 
       // Auto-stop after 30 seconds
@@ -172,38 +219,53 @@ export default function AddDeviceScreen({ navigation }: any) {
   };
 
   const selectDevice = (device: DiscoveredDevice) => {
-    const category = deviceTypeMap[device.type] || 'BP';
-    const isBG5 = device.type === 'BG5';
+    const category = deviceTypeMap[device.type] || "BP";
+    const isBG5 = device.type === "BG5";
+
+    // Check if device type already exists
+    if (hasDeviceType(category)) {
+      const existing = getExistingDeviceOfType(category);
+      const categoryName = categoryLabels[category];
+
+      Alert.alert(
+        "Device Type Already Added",
+        `You already have a ${categoryName} (${existing?.name || "device"}) added.\n\nTo add a different ${categoryName.toLowerCase()}, please delete the existing one first from the Devices screen.`,
+        [{ text: "OK", style: "default" }]
+      );
+      return;
+    }
 
     Alert.alert(
       "Add Device",
-      `Add "${device.name}" (${device.type}) to your devices?${isBG5 ? '\n\nNote: BG5 requires scanning test strip bottle QR code.' : ''}`,
+      `Add "${device.name}" (${device.type}) to your devices?${
+        isBG5 ? "\n\nNote: BG5 requires scanning test strip bottle QR code." : ""
+      }`,
       [
         { text: "Cancel", style: "cancel" },
         {
           text: isBG5 ? "Add & Scan QR" : "Add",
           onPress: () => {
             stopScan();
-            
+
             // Save device with model info
             const newDevice = {
               id: device.mac,
               name: device.name || device.type,
               type: category,
               mac: device.mac,
-              model: device.type,  // BP3L, BG5, BG5S, HS2S, etc.
+              model: device.type, // BP3L, BG5, BG5S, HS2S, etc.
               bottleCode: undefined,
             };
-            
+
             dispatch(addDevice(newDevice));
             addLog(`✅ Device saved: ${device.name}`);
 
             if (isBG5) {
               // Navigate to QR scanner for BG5
-              navigation.replace('ScanQR', {
+              navigation.replace("ScanQR", {
                 deviceId: device.mac,
                 deviceName: device.name,
-                returnTo: 'Capture',
+                returnTo: "Capture",
               });
             } else {
               // Go back to devices list
@@ -216,49 +278,84 @@ export default function AddDeviceScreen({ navigation }: any) {
   };
 
   const handleScanQR = () => {
-    navigation.navigate('ScanQR');
+    navigation.navigate("ScanQR");
   };
 
   const renderDevice = ({ item }: { item: DiscoveredDevice }) => {
-    const category = deviceTypeMap[item.type] || 'BP';
-    const icon = deviceIcons[category] || 'bluetooth';
+    const category = deviceTypeMap[item.type] || "BP";
+    const icon = deviceIcons[category] || "bluetooth";
     const label = deviceTypeLabels[item.type] || item.type;
-    const isBG5 = item.type === 'BG5';
+    const isBG5 = item.type === "BG5";
+    const alreadyHasType = hasDeviceType(category);
 
     return (
       <TouchableOpacity
-        style={styles.deviceCard}
+        style={[styles.deviceCard, alreadyHasType && styles.deviceCardDisabled]}
         onPress={() => selectDevice(item)}
         activeOpacity={0.7}
       >
-        <View style={[styles.deviceIcon, { backgroundColor: getIconBg(category) }]}>
+        <View
+          style={[styles.deviceIcon, { backgroundColor: getIconBg(category) }]}
+        >
           <MaterialIcons name={icon} size={24} color={getIconColor(category)} />
         </View>
         <View style={styles.deviceInfo}>
           <Text style={styles.deviceName}>{item.name || item.type}</Text>
           <Text style={styles.deviceType}>{label}</Text>
           <Text style={styles.deviceMac}>{item.mac}</Text>
+          {alreadyHasType && (
+            <Text style={styles.alreadyAddedText}>
+              ⚠️ You already have this device type
+            </Text>
+          )}
         </View>
         <View style={styles.deviceAction}>
           {isBG5 && (
-            <MaterialIcons name="qr-code" size={16} color="#FF9800" style={{ marginRight: 4 }} />
+            <MaterialIcons
+              name="qr-code"
+              size={16}
+              color="#FF9800"
+              style={{ marginRight: 4 }}
+            />
           )}
-          <MaterialIcons name="add-circle" size={28} color="#00509f" />
+          {alreadyHasType ? (
+            <MaterialIcons name="block" size={28} color="#999" />
+          ) : (
+            <MaterialIcons name="add-circle" size={28} color="#00509f" />
+          )}
         </View>
       </TouchableOpacity>
     );
   };
 
+  // Show which device types are already added
+  const existingTypes = existingDevices.map((d) => d.type);
+  const hasAnyDevices = existingDevices.length > 0;
+
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+        >
           <MaterialIcons name="arrow-back" size={24} color="#1a1a2e" />
         </TouchableOpacity>
         <Text style={styles.title}>Add Device</Text>
         <View style={{ width: 40 }} />
       </View>
+
+      {/* Existing devices notice */}
+      {hasAnyDevices && (
+        <View style={styles.existingNotice}>
+          <MaterialIcons name="info-outline" size={18} color="#666" />
+          <Text style={styles.existingNoticeText}>
+            You have:{" "}
+            {existingTypes.map((t) => categoryLabels[t]).join(", ")}
+          </Text>
+        </View>
+      )}
 
       {/* Instructions */}
       <View style={styles.instructions}>
@@ -267,7 +364,7 @@ export default function AddDeviceScreen({ navigation }: any) {
           {scanning ? "Searching for devices..." : "Find Your Device"}
         </Text>
         <Text style={styles.instructionText}>
-          {scanning 
+          {scanning
             ? "Wake your device: press the button on BP monitors, step on scales, or turn on glucose meters."
             : "Make sure your iHealth device is nearby and ready to pair."}
         </Text>
@@ -317,7 +414,8 @@ export default function AddDeviceScreen({ navigation }: any) {
           <ActivityIndicator size="large" color="#00509f" />
           <Text style={styles.emptyText}>Looking for devices...</Text>
           <Text style={styles.emptyHint}>
-            Press the button on your BP monitor, step on your scale, or turn on your glucose meter.
+            Press the button on your BP monitor, step on your scale, or turn on
+            your glucose meter.
           </Text>
         </View>
       )}
@@ -327,102 +425,123 @@ export default function AddDeviceScreen({ navigation }: any) {
 
 function getIconBg(type: string): string {
   switch (type) {
-    case 'BP': return 'rgba(244, 67, 54, 0.1)';
-    case 'SCALE': return 'rgba(76, 175, 80, 0.1)';
-    case 'BG': return 'rgba(33, 150, 243, 0.1)';
-    default: return 'rgba(0, 0, 0, 0.05)';
+    case "BP":
+      return "rgba(244, 67, 54, 0.1)";
+    case "SCALE":
+      return "rgba(76, 175, 80, 0.1)";
+    case "BG":
+      return "rgba(33, 150, 243, 0.1)";
+    default:
+      return "rgba(0, 0, 0, 0.05)";
   }
 }
 
 function getIconColor(type: string): string {
   switch (type) {
-    case 'BP': return '#F44336';
-    case 'SCALE': return '#4CAF50';
-    case 'BG': return '#2196F3';
-    default: return '#666';
+    case "BP":
+      return "#F44336";
+    case "SCALE":
+      return "#4CAF50";
+    case "BG":
+      return "#2196F3";
+    default:
+      return "#666";
   }
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: "#f8f9fa",
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingTop: 50,
     paddingBottom: 16,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: "#eee",
   },
   backButton: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
   },
   title: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a2e',
+    fontWeight: "600",
+    color: "#1a1a2e",
+  },
+  existingNotice: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff3cd",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  existingNoticeText: {
+    fontSize: 13,
+    color: "#666",
+    flex: 1,
   },
   instructions: {
-    alignItems: 'center',
+    alignItems: "center",
     padding: 24,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     marginBottom: 16,
   },
   instructionTitle: {
     fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1a2e',
+    fontWeight: "600",
+    color: "#1a1a2e",
     marginTop: 12,
     marginBottom: 8,
   },
   instructionText: {
     fontSize: 14,
-    color: '#666',
-    textAlign: 'center',
+    color: "#666",
+    textAlign: "center",
     lineHeight: 20,
   },
   scanButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#00509f',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#00509f",
     marginHorizontal: 16,
     paddingVertical: 16,
     borderRadius: 12,
     gap: 8,
   },
   scanButtonActive: {
-    backgroundColor: '#c62828',
+    backgroundColor: "#c62828",
   },
   scanButtonText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   qrButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     marginHorizontal: 16,
     marginTop: 12,
     paddingVertical: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(0, 80, 159, 0.1)',
+    backgroundColor: "rgba(0, 80, 159, 0.1)",
     gap: 8,
   },
   qrButtonText: {
-    color: '#00509f',
+    color: "#00509f",
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   listContainer: {
     flex: 1,
@@ -430,8 +549,8 @@ const styles = StyleSheet.create({
   },
   listTitle: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#666',
+    fontWeight: "600",
+    color: "#666",
     marginHorizontal: 16,
     marginBottom: 8,
   },
@@ -440,24 +559,28 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   deviceCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff",
     padding: 16,
     borderRadius: 12,
     marginBottom: 8,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
   },
+  deviceCardDisabled: {
+    backgroundColor: "#f5f5f5",
+    opacity: 0.8,
+  },
   deviceIcon: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     marginRight: 12,
   },
   deviceInfo: {
@@ -465,39 +588,45 @@ const styles = StyleSheet.create({
   },
   deviceName: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a2e',
+    fontWeight: "600",
+    color: "#1a1a2e",
   },
   deviceType: {
     fontSize: 13,
-    color: '#666',
+    color: "#666",
     marginTop: 2,
   },
   deviceMac: {
     fontSize: 11,
-    color: '#999',
+    color: "#999",
     marginTop: 2,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  alreadyAddedText: {
+    fontSize: 11,
+    color: "#e65100",
+    marginTop: 4,
+    fontWeight: "500",
   },
   deviceAction: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
   },
   emptyState: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     padding: 32,
   },
   emptyText: {
     fontSize: 16,
-    color: '#666',
+    color: "#666",
     marginTop: 16,
   },
   emptyHint: {
     fontSize: 13,
-    color: '#999',
-    textAlign: 'center',
+    color: "#999",
+    textAlign: "center",
     marginTop: 8,
     lineHeight: 18,
   },
