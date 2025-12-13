@@ -658,33 +658,6 @@ export default function CaptureScreen({ route, navigation }: any) {
             renderReadingDisplay()
           ) : (
             <View style={styles.statusSection}>
-              {busy && (
-                <View style={styles.waveContainer}>
-                  {[0, 1, 2, 3, 4].map((i) => (
-                    <Animated.View
-                      key={i}
-                      style={[
-                        styles.waveLine,
-                        { backgroundColor: theme.primary },
-                        {
-                          transform: [
-                            {
-                              scaleY: waveAnim.interpolate({
-                                inputRange: [0, 0.5, 1],
-                                outputRange: [
-                                  0.3 + Math.sin(i * 0.8) * 0.3,
-                                  0.8 + Math.cos(i * 0.5) * 0.2,
-                                  0.3 + Math.sin(i * 0.8) * 0.3,
-                                ],
-                              }),
-                            },
-                          ],
-                        },
-                      ]}
-                    />
-                  ))}
-                </View>
-              )}
               <Text
                 style={[
                   styles.statusText,
@@ -825,8 +798,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 50,
-    paddingBottom: 16,
+    paddingTop: 44,
+    paddingBottom: 12,
   },
   backBtn: {
     width: 40,
@@ -859,21 +832,21 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     paddingHorizontal: 24,
-    paddingTop: 20,
+    paddingTop: 10,
   },
   deviceSection: {
-    width: 200,
-    height: 200,
+    width: 160,
+    height: 160,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 24,
+    marginBottom: 16,
   },
   deviceRing: {
     position: "absolute",
-    width: 200,
-    height: 200,
-    borderRadius: 100,
-    borderWidth: 3,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    borderWidth: 2,
     borderStyle: "dashed",
     opacity: 0.5,
   },
@@ -894,16 +867,16 @@ const styles = StyleSheet.create({
     marginLeft: -6,
   },
   deviceImageContainer: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
     backgroundColor: "rgba(255,255,255,0.05)",
     alignItems: "center",
     justifyContent: "center",
   },
   deviceImage: {
-    width: 100,
-    height: 100,
+    width: 75,
+    height: 75,
     resizeMode: "contain",
   },
   successBadge: {
@@ -919,21 +892,21 @@ const styles = StyleSheet.create({
     borderColor: "#1a1a2e",
   },
   deviceName: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: "700",
     color: "#fff",
-    marginBottom: 4,
+    marginBottom: 2,
     textAlign: "center",
   },
   deviceType: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#888",
-    marginBottom: 32,
+    marginBottom: 20,
     textAlign: "center",
   },
   statusSection: {
     alignItems: "center",
-    minHeight: 120,
+    minHeight: 60,
     justifyContent: "center",
   },
   waveContainer: {
@@ -1026,7 +999,7 @@ const styles = StyleSheet.create({
   },
   buttonContainer: {
     width: "100%",
-    marginTop: 40,
+    marginTop: 24,
     marginBottom: 20,
   },
   buttonTouchable: {

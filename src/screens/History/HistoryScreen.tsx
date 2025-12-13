@@ -10,35 +10,56 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
+  RefreshControl,
 } from "react-native";
 import { TabView, TabBar } from "react-native-tab-view";
 import { useDispatch, useSelector } from "react-redux";
 import { loadReadings } from "../../redux/readingSlice";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import RNFS from "react-native-fs";
 import Share from "react-native-share";
 import { LineChart } from "react-native-gifted-charts";
+import type { RootState, AppDispatch } from "../../redux/store";
+import type { SavedReading } from "../../services/sqliteService";
 
 const screenWidth = Dimensions.get("window").width;
 
+// Extended reading type with display number
+interface DisplayReading extends SavedReading {
+  displayNumber: number;
+}
+
+// Route type for TabView
+interface TabRoute {
+  key: string;
+  title: string;
+}
+
 // Enable layout animation on Android
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
+if (
+  Platform.OS === "android" &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
 export default function HistoryScreen() {
-  const dispatch = useDispatch();
-  const { items } = useSelector((s: any) => s.readings);
+  const dispatch = useDispatch<AppDispatch>();
+  const { items } = useSelector((state: RootState) => state.readings);
   const [index, setIndex] = useState(0);
-  const [routes, setRoutes] = useState<any[]>([]);
-  const [sortDirections, setSortDirections] = useState<Record<string, boolean>>({});
+  const [routes, setRoutes] = useState<TabRoute[]>([]);
+  const [sortDirections, setSortDirections] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    dispatch(loadReadings() as any);
+    dispatch(loadReadings());
   }, [dispatch]);
 
   const grouped = useMemo(() => {
-    return items.reduce((acc: any, r: any) => {
+    return items.reduce((acc: Record<string, SavedReading[]>, r: SavedReading) => {
       if (!acc[r.deviceId]) acc[r.deviceId] = [];
       acc[r.deviceId].push(r);
       return acc;
@@ -46,12 +67,20 @@ export default function HistoryScreen() {
   }, [items]);
 
   useEffect(() => {
-    const newRoutes = Object.keys(grouped).map((id, i) => ({
+    const newRoutes: TabRoute[] = Object.keys(grouped).map((id, i) => ({
       key: id,
       title: grouped[id][0]?.deviceName || `Device ${i + 1}`,
     }));
-    setRoutes(newRoutes.length ? newRoutes : [{ key: "empty", title: "No Devices" }]);
+    setRoutes(
+      newRoutes.length ? newRoutes : [{ key: "empty", title: "No Devices" }]
+    );
   }, [grouped]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await dispatch(loadReadings());
+    setRefreshing(false);
+  }, [dispatch]);
 
   const handleExport = async () => {
     try {
@@ -70,7 +99,7 @@ export default function HistoryScreen() {
         "Heart Rate",
         "Timestamp",
       ];
-      const rows = items.map((r: any) => [
+      const rows = items.map((r: SavedReading) => [
         r.deviceName || "",
         r.deviceId || "",
         r.type || "",
@@ -81,23 +110,28 @@ export default function HistoryScreen() {
         new Date(r.ts).toLocaleString(),
       ]);
       const csv = [header, ...rows]
-        .map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","))
+        .map((row) =>
+          row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")
+        )
         .join("\n");
 
       const now = new Date();
-      const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-        2,
-        "0"
-      )}-${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(
-        2,
-        "0"
-      )}-${String(now.getMinutes()).padStart(2, "0")}`;
+      const timestamp = `${now.getFullYear()}-${String(
+        now.getMonth() + 1
+      ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(
+        now.getHours()
+      ).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}`;
       const path = `${RNFS.DocumentDirectoryPath}/TrinityReadings_${timestamp}.csv`;
 
       await RNFS.writeFile(path, csv, "utf8");
-      await Share.open({ url: "file://" + path, type: "text/csv", showAppsToView: true });
-    } catch (err: any) {
-      Alert.alert("Export failed", err.message || "Unable to export readings.");
+      await Share.open({
+        url: "file://" + path,
+        type: "text/csv",
+        showAppsToView: true,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unable to export readings.";
+      Alert.alert("Export failed", message);
     }
   };
 
@@ -106,11 +140,15 @@ export default function HistoryScreen() {
     setSortDirections((prev) => ({ ...prev, [deviceId]: !prev[deviceId] }));
   }, []);
 
-  const renderScene = ({ route }: any) => {
+  const renderScene = ({ route }: { route: TabRoute }) => {
     if (route.key === "empty") {
       return (
         <View style={styles.emptyContainer}>
-          <Text style={{ color: "#666" }}>No readings yet.</Text>
+          <MaterialIcons name="show-chart" size={64} color="#ccc" />
+          <Text style={styles.emptyTitle}>No Readings Yet</Text>
+          <Text style={styles.emptySubtitle}>
+            Take a measurement to see your history here
+          </Text>
         </View>
       );
     }
@@ -123,6 +161,8 @@ export default function HistoryScreen() {
         data={deviceReadings}
         sortAsc={sortAsc}
         onToggleSort={() => toggleSort(route.key)}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
       />
     );
   };
@@ -132,12 +172,16 @@ export default function HistoryScreen() {
       <View style={styles.headerRow}>
         <Text style={styles.title}>History</Text>
         <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
-          <MaterialCommunityIcons name="file-export-outline" size={20} color="#fff" />
+          <MaterialCommunityIcons
+            name="file-export-outline"
+            size={20}
+            color="#fff"
+          />
           <Text style={styles.exportText}>Export</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={{ flex: 1 }}>
+      <View style={styles.tabContainer}>
         <TabView
           navigationState={{ index, routes }}
           renderScene={renderScene}
@@ -146,15 +190,8 @@ export default function HistoryScreen() {
           renderTabBar={(props) => (
             <TabBar
               {...props}
-              indicatorStyle={{ backgroundColor: "#002040", height: 3 }}
-              style={{ backgroundColor: "#e6eef7" }}
-              labelStyle={{
-                color: "#002040",
-                fontWeight: "700",
-                textTransform: "none",
-              }}
-              inactiveColor="#777"
-              activeColor="#002040"
+              indicatorStyle={styles.tabIndicator}
+              style={styles.tabBar}
               scrollEnabled
             />
           )}
@@ -164,19 +201,102 @@ export default function HistoryScreen() {
   );
 }
 
+/* ---- Summary Stats Component ---- */
+function SummaryStats({
+  data,
+  type,
+}: {
+  data: SavedReading[];
+  type: "BP" | "SCALE" | "BG";
+}) {
+  const stats = useMemo(() => {
+    if (!data.length) return null;
+
+    const values = data.map((r) => r.value || 0);
+    const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+    const high = Math.max(...values);
+    const low = Math.min(...values);
+
+    if (type === "BP") {
+      const values2 = data.map((r) => r.value2 || 0);
+      const avg2 = Math.round(values2.reduce((a, b) => a + b, 0) / values2.length);
+      const high2 = Math.max(...values2);
+      const low2 = Math.min(...values2);
+      
+      // Heart rate stats
+      const hrValues = data.filter((r) => r.heartRate != null).map((r) => r.heartRate!);
+      const avgHR = hrValues.length
+        ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
+        : null;
+      
+      return { avg, high, low, avg2, high2, low2, avgHR };
+    }
+
+    return { avg, high, low };
+  }, [data, type]);
+
+  if (!stats) return null;
+
+  return (
+    <View style={styles.statsContainer}>
+      <View style={styles.statItem}>
+        <MaterialIcons name="trending-up" size={16} color="#e53935" />
+        <Text style={styles.statLabel}>High</Text>
+        <Text style={styles.statValue}>
+          {type === "BP" ? `${stats.high}/${stats.high2}` : stats.high}
+        </Text>
+      </View>
+      <View style={styles.statItem}>
+        <MaterialIcons name="show-chart" size={16} color="#00acc1" />
+        <Text style={styles.statLabel}>Avg</Text>
+        <Text style={styles.statValue}>
+          {type === "BP" ? `${stats.avg}/${stats.avg2}` : stats.avg}
+        </Text>
+      </View>
+      <View style={styles.statItem}>
+        <MaterialIcons name="trending-down" size={16} color="#43a047" />
+        <Text style={styles.statLabel}>Low</Text>
+        <Text style={styles.statValue}>
+          {type === "BP" ? `${stats.low}/${stats.low2}` : stats.low}
+        </Text>
+      </View>
+      {type === "BP" && stats.avgHR != null && (
+        <View style={styles.statItem}>
+          <MaterialCommunityIcons name="heart-pulse" size={16} color="#e53935" />
+          <Text style={styles.statLabel}>Avg HR</Text>
+          <Text style={styles.statValue}>{stats.avgHR}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 /* ---- Per-device chart & list ---- */
 function DeviceHistoryTab({
   data,
   sortAsc,
   onToggleSort,
+  refreshing,
+  onRefresh,
 }: {
-  data: any[];
+  data: SavedReading[];
   sortAsc: boolean;
   onToggleSort: () => void;
+  refreshing: boolean;
+  onRefresh: () => void;
 }) {
-  const chronological = useMemo(() => [...data].sort((a, b) => a.ts - b.ts), [data]);
-  const numbered = useMemo(
-    () => chronological.map((r, i) => ({ ...r, displayNumber: i + 1 })),
+  const chronological = useMemo(
+    () => [...data].sort((a, b) => a.ts - b.ts),
+    [data]
+  );
+
+  const numbered: DisplayReading[] = useMemo(
+    () =>
+      chronological.map((r, i) => ({
+        ...r,
+        displayNumber: i + 1,
+        // synced comes from database now
+      })),
     [chronological]
   );
 
@@ -188,17 +308,19 @@ function DeviceHistoryTab({
     [numbered, sortAsc]
   );
 
+  const deviceType = numbered[0]?.type || "BP";
+
   // dynamic min/max for chart range
   const values = useMemo(() => {
     if (!numbered.length) return [];
-    if (numbered[0].type === "BP") {
+    if (deviceType === "BP") {
       return numbered.flatMap((r) => [
-        parseFloat(r.value) || 0,
-        parseFloat(r.value2) || 0,
+        parseFloat(String(r.value)) || 0,
+        parseFloat(String(r.value2)) || 0,
       ]);
     }
-    return numbered.map((r) => parseFloat(r.value) || 0);
-  }, [numbered]);
+    return numbered.map((r) => parseFloat(String(r.value)) || 0);
+  }, [numbered, deviceType]);
 
   const minVal = values.length ? Math.min(...values) : 0;
   const maxVal = values.length ? Math.max(...values) : 0;
@@ -208,7 +330,7 @@ function DeviceHistoryTab({
   const primaryData = useMemo(
     () =>
       numbered.map((r) => ({
-        value: parseFloat(r.value) || 0,
+        value: parseFloat(String(r.value)) || 0,
         label: `#${r.displayNumber}`,
         dataPointText: String(r.value ?? ""),
       })),
@@ -217,146 +339,204 @@ function DeviceHistoryTab({
 
   const secondaryData = useMemo(
     () =>
-      numbered[0]?.type === "BP"
+      deviceType === "BP"
         ? numbered.map((r) => ({
-            value: parseFloat(r.value2) || 0,
+            value: parseFloat(String(r.value2)) || 0,
             label: `#${r.displayNumber}`,
             dataPointText: String(r.value2 ?? ""),
           }))
         : [],
-    [numbered]
+    [numbered, deviceType]
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: DisplayReading }) => (
+      <View style={styles.row}>
+        <View style={styles.info}>
+          <View style={styles.valueRow}>
+            <View style={styles.numberCircle}>
+              <Text style={styles.numberText}>{item.displayNumber}</Text>
+            </View>
+            <View style={styles.valueColumn}>
+              <Text style={styles.value}>
+                {item.type === "BP"
+                  ? `${item.value}/${item.value2} ${item.unit}`
+                  : `${item.value} ${item.unit}`}
+              </Text>
+              {item.type === "BP" && item.heartRate != null && (
+                <View style={styles.heartRateRow}>
+                  <MaterialCommunityIcons
+                    name="heart-pulse"
+                    size={14}
+                    color="#e53935"
+                  />
+                  <Text style={styles.heartRateText}>
+                    {item.heartRate} BPM
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+          <Text style={styles.timeText}>
+            {new Date(item.ts).toLocaleDateString([], {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            })}{" "}
+            at{" "}
+            {new Date(item.ts).toLocaleTimeString([], {
+              hour: "numeric",
+              minute: "2-digit",
+            })}
+          </Text>
+        </View>
+        <View style={styles.statusContainer}>
+          {item.synced ? (
+            <View style={styles.syncedBadge}>
+              <MaterialCommunityIcons
+                name="cloud-check"
+                size={20}
+                color="#fff"
+              />
+            </View>
+          ) : (
+            <View style={styles.pendingBadge}>
+              <MaterialCommunityIcons
+                name="cloud-upload-outline"
+                size={20}
+                color="#ff9800"
+              />
+            </View>
+          )}
+        </View>
+      </View>
+    ),
+    []
   );
 
   return (
     <View style={styles.scene}>
-      {numbered.length > 2 && (
-        <View style={styles.chartContainer}>
-          <View style={styles.chartInner}>
-            <LineChart
-              scrollable
-              scrollToEnd
-              adjustToWidth={false}
-              initialSpacing={20}
-              spacing={Math.max(40, 280 / numbered.length)}
-              thickness={3}
-              height={140}
-              noOfSections={4}
-              curved
-              textShiftY={-8}
-              hideRules={false} // show horizontal lines
-              showVerticalLines={true} // 👈 enable vertical grid lines
-              verticalLinesColor="rgba(255,255,255,0.2)"
-              yAxisColor="#60809f"
-              xAxisColor="#60809f"
-              yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
-              xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
-              showDataPoints
-              showValuesAsDataPointsText={numbered.length <= 15}
-              dataPointsShape="circle"
-              dataPointsWidth={6}
-              dataPointsHeight={6}
-              dataPointsRadius={5}
-              textColor="#fff"
-              dataPointsLabelColor="#fff"
-              isAnimated
-              animationDuration={600}
-              yAxisOffset={yAxisOffset}
-              maxValue={yAxisMax}
-              {...(numbered[0]?.type === "BP"
-                ? {
-                    dataSet: [
-                      {
-                        data: primaryData,
-                        color: "#ffba49",
-                        dataPointsColor: "#ffba49",
-                      },
-                      {
-                        data: secondaryData,
-                        color: "#f5f5f5",
-                        dataPointsColor: "#f5f5f5",
-                      },
-                    ],
-                  }
-                : {
-                    data: primaryData,
-                    color: "#f5f5f5",
-                    dataPointsColor: "#f5f5f5",
-                  })}
-            />
-            {numbered[0]?.type === "BP" && (
-              <View style={styles.legendRow}>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: "#ffba49" }]} />
-                  <Text style={styles.legendText}>Systolic</Text>
-                </View>
-                <View style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: "#f5f5f5" }]} />
-                  <Text style={styles.legendText}>Diastolic</Text>
+      <FlatList
+        data={sortedList}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#002040"
+            colors={["#002040"]}
+          />
+        }
+        ListHeaderComponent={
+          <>
+            {/* Summary Stats */}
+            {numbered.length > 0 && (
+              <SummaryStats data={data} type={deviceType} />
+            )}
+
+            {/* Chart */}
+            {numbered.length > 2 && (
+              <View style={styles.chartContainer}>
+                <View style={styles.chartInner}>
+                  {deviceType === "BP" ? (
+                    <LineChart
+                      dataSet={[
+                        {
+                          data: primaryData,
+                          color: "#ffba49",
+                        },
+                        {
+                          data: secondaryData,
+                          color: "#f5f5f5",
+                        },
+                      ]}
+                      initialSpacing={20}
+                      spacing={Math.max(40, 280 / numbered.length)}
+                      thickness={3}
+                      height={140}
+                      noOfSections={4}
+                      curved
+                      hideRules={false}
+                      yAxisColor="#60809f"
+                      xAxisColor="#60809f"
+                      yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
+                      xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
+                      yAxisOffset={yAxisOffset}
+                      maxValue={yAxisMax}
+                    />
+                  ) : (
+                    <LineChart
+                      data={primaryData}
+                      initialSpacing={20}
+                      spacing={Math.max(40, 280 / numbered.length)}
+                      thickness={3}
+                      height={140}
+                      noOfSections={4}
+                      curved
+                      hideRules={false}
+                      yAxisColor="#60809f"
+                      xAxisColor="#60809f"
+                      yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
+                      xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
+                      color="#f5f5f5"
+                      yAxisOffset={yAxisOffset}
+                      maxValue={yAxisMax}
+                    />
+                  )}
+                  {deviceType === "BP" && (
+                    <View style={styles.legendRow}>
+                      <View style={styles.legendItem}>
+                        <View
+                          style={[
+                            styles.legendDot,
+                            { backgroundColor: "#ffba49" },
+                          ]}
+                        />
+                        <Text style={styles.legendText}>Systolic</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View
+                          style={[
+                            styles.legendDot,
+                            { backgroundColor: "#f5f5f5" },
+                          ]}
+                        />
+                        <Text style={styles.legendText}>Diastolic</Text>
+                      </View>
+                    </View>
+                  )}
                 </View>
               </View>
             )}
-          </View>
-        </View>
-      )}
 
-      <View style={styles.metaRow}>
-        <Text style={styles.countText}>
-          {numbered.length} reading{numbered.length !== 1 ? "s" : ""}
-        </Text>
-        <TouchableOpacity style={styles.metaButton} onPress={onToggleSort}>
-          <MaterialCommunityIcons
-            name={
-              sortAsc
-                ? "sort-clock-ascending-outline"
-                : "sort-clock-descending-outline"
-            }
-            size={18}
-            color="#002040"
-          />
-          <Text style={styles.sortText}>
-            {sortAsc ? "Oldest first" : "Newest first"}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* List with numbered circles before values */}
-      <FlatList
-        data={sortedList}
-        keyExtractor={(i: any) => i.id}
-        renderItem={({ item }) => (
-          <View style={styles.row}>
-            <View style={styles.info}>
-              <View style={styles.valueRow}>
-                <View style={styles.numberCircle}>
-                  <Text style={styles.numberText}>{item.displayNumber}</Text>
-                </View>
-                <Text style={styles.value}>
-                  {item.type === "BP"
-                    ? `${item.value}/${item.value2} ${item.unit}`
-                    : `${item.value} ${item.unit}`}
-                </Text>
-              </View>
-              <Text style={styles.timeText}>
-                {new Date(item.ts).toLocaleDateString([], {
-                  year: "numeric",
-                  month: "numeric",
-                  day: "numeric",
-                })}{" "}
-                {new Date(item.ts).toLocaleTimeString([], {
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
+            {/* Meta row */}
+            <View style={styles.metaRow}>
+              <Text style={styles.countText}>
+                {numbered.length} reading{numbered.length !== 1 ? "s" : ""}
               </Text>
+              <TouchableOpacity style={styles.metaButton} onPress={onToggleSort}>
+                <MaterialCommunityIcons
+                  name={
+                    sortAsc
+                      ? "sort-clock-ascending-outline"
+                      : "sort-clock-descending-outline"
+                  }
+                  size={18}
+                  color="#002040"
+                />
+                <Text style={styles.sortText}>
+                  {sortAsc ? "Oldest first" : "Newest first"}
+                </Text>
+              </TouchableOpacity>
             </View>
-            <View style={styles.statusContainer}>
-              <MaterialCommunityIcons
-                name="database-check"
-                size={24}
-                color="#006b6b"
-              />
-            </View>
+          </>
+        }
+        ListEmptyComponent={
+          <View style={styles.listEmpty}>
+            <Text style={styles.listEmptyText}>No readings for this device</Text>
           </View>
-        )}
+        }
       />
     </View>
   );
@@ -364,86 +544,271 @@ function DeviceHistoryTab({
 
 /* ---------- styles ---------- */
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: {
+    flex: 1,
+    backgroundColor: "#f8f9fa",
+  },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 32,
+    paddingTop: 48,
     paddingBottom: 16,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
   },
-  title: { fontSize: 22, fontWeight: "700", color: "#002040" },
+  title: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#002040",
+  },
   exportButton: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#002040",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 50,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    gap: 6,
   },
-  exportText: { color: "#fff", fontWeight: "700", marginLeft: 6, fontSize: 14 },
-  scene: { flex: 1, paddingHorizontal: 16, paddingTop: 10 },
+  exportText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  tabContainer: {
+    flex: 1,
+  },
+  tabBar: {
+    backgroundColor: "#fff",
+    elevation: 0,
+    shadowOpacity: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  tabIndicator: {
+    backgroundColor: "#002040",
+    height: 3,
+  },
+  scene: {
+    flex: 1,
+    backgroundColor: "#f8f9fa",
+  },
+  // Summary Stats
+  statsContainer: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: "#fff",
+    marginHorizontal: 16,
+    marginTop: 16,
+    paddingVertical: 16,
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  statItem: {
+    alignItems: "center",
+    gap: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: "#888",
+    fontWeight: "500",
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#002040",
+  },
+  // Chart
   chartContainer: {
-    marginBottom: 12,
-    marginTop: 12,
+    marginHorizontal: 16,
+    marginTop: 16,
     borderRadius: 12,
     overflow: "hidden",
     shadowColor: "#000",
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.1,
     shadowRadius: 6,
     elevation: 3,
-    paddingLeft: 8,
   },
   chartInner: {
     backgroundColor: "#006b6b",
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 4,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
   },
-  legendRow: { flexDirection: "row", justifyContent: "center", marginTop: 8 },
-  legendItem: { flexDirection: "row", alignItems: "center", marginHorizontal: 10 },
-  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
-  legendText: { color: "#fff", fontSize: 13, fontWeight: "500" },
+  legendRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    marginTop: 8,
+    gap: 24,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  legendText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  // Meta row
   metaRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
-    paddingHorizontal: 4,
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 8,
   },
-  countText: { color: "#002040", fontWeight: "600" },
+  countText: {
+    color: "#666",
+    fontWeight: "600",
+    fontSize: 14,
+  },
   metaButton: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 8,
-    backgroundColor: "#e6eef7",
+    backgroundColor: "#fff",
+    gap: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  sortText: { color: "#002040", marginLeft: 4, fontWeight: "600", fontSize: 13 },
+  sortText: {
+    color: "#002040",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  // List row
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderColor: "#eee",
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  info: { flex: 1, paddingRight: 10 },
-  valueRow: { flexDirection: "row", alignItems: "center", marginBottom: 4 },
+  info: {
+    flex: 1,
+    paddingRight: 10,
+  },
+  valueRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 4,
+    gap: 10,
+  },
+  valueColumn: {
+    flexDirection: "column",
+  },
+  heartRateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: 2,
+  },
+  heartRateText: {
+    fontSize: 13,
+    color: "#e53935",
+    fontWeight: "600",
+  },
   numberCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: "#006b6b",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 8,
+    marginTop: 2,
   },
-  numberText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-  value: { fontSize: 18, fontWeight: "600", color: "#002040" },
-  timeText: { color: "#777", fontSize: 13 },
-  statusContainer: { alignItems: "center", justifyContent: "center", width: 60 },
-  emptyContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
+  numberText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  value: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#002040",
+  },
+  timeText: {
+    color: "#888",
+    fontSize: 13,
+    marginLeft: 36,
+    marginTop: 2,
+  },
+  statusContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  syncedBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#43a047",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pendingBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#fff3e0",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#ff9800",
+  },
+  // Empty states
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#333",
+    marginTop: 16,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: "#888",
+    textAlign: "center",
+    marginTop: 8,
+  },
+  listEmpty: {
+    padding: 32,
+    alignItems: "center",
+  },
+  listEmptyText: {
+    color: "#888",
+    fontSize: 14,
+  },
 });

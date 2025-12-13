@@ -7,20 +7,19 @@ const db = open({ name: "trinity.db" });
 // Initialize Database
 // ----------------------
 export function initDB() {
-  // Create tables if they don't exist
+  // Create user table with all fields
   db.execute(`
     CREATE TABLE IF NOT EXISTS user (
-        patientId TEXT PRIMARY KEY,
-        firstName TEXT,
-        lastName TEXT,
-        phone TEXT,
-        providerFirstName TEXT,
-        providerLastName TEXT,
-        providerPracticeName TEXT
+      patientId TEXT PRIMARY KEY,
+      firstName TEXT,
+      lastName TEXT,
+      phone TEXT,
+      providerFirstName TEXT,
+      providerLastName TEXT,
+      providerPracticeName TEXT
     );
-    `);
+  `);
 
-  
   // Create devices table with all columns
   db.execute(`
     CREATE TABLE IF NOT EXISTS devices (
@@ -32,7 +31,7 @@ export function initDB() {
       bottleCode TEXT
     );
   `);
-  
+
   // Migration: Add missing columns if table already existed with old schema
   try {
     db.execute("ALTER TABLE devices ADD COLUMN type TEXT;");
@@ -58,7 +57,7 @@ export function initDB() {
   } catch (e) {
     // Column already exists, ignore
   }
-  
+
   db.execute(`
     CREATE TABLE IF NOT EXISTS readings (
       id TEXT PRIMARY KEY,
@@ -69,9 +68,19 @@ export function initDB() {
       value2 REAL,
       heartRate REAL,
       unit TEXT,
-      ts INTEGER
+      ts INTEGER,
+      synced INTEGER DEFAULT 0
     );
   `);
+
+  // Migration: Add synced column if table already existed
+  try {
+    db.execute("ALTER TABLE readings ADD COLUMN synced INTEGER DEFAULT 0;");
+    console.log("✅ Added 'synced' column to readings");
+  } catch (e) {
+    // Column already exists, ignore
+  }
+
   console.log("✅ Database initialized");
 }
 
@@ -93,8 +102,8 @@ export function saveUser(u: LocalUser) {
     db.execute("DELETE FROM user;");
     db.execute(
       `INSERT INTO user 
-      (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName)
-      VALUES (?, ?, ?, ?, ?, ?, ?);`,
+       (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName)
+       VALUES (?, ?, ?, ?, ?, ?, ?);`,
       [
         u.patientId,
         u.firstName,
@@ -108,6 +117,15 @@ export function saveUser(u: LocalUser) {
     console.log("✅ User saved:", u.patientId);
   } catch (e) {
     console.error("❌ Failed to save user:", e);
+  }
+}
+
+export function clearUser() {
+  try {
+    db.execute("DELETE FROM user;");
+    console.log("✅ User table cleared");
+  } catch (e) {
+    console.error("❌ Failed to clear user:", e);
   }
 }
 
@@ -125,16 +143,15 @@ export async function getUser(): Promise<LocalUser | null> {
   }
 }
 
-
 // ----------------------
 // Device Helpers
 // ----------------------
 export type DeviceRecord = {
   id: string;
   name: string;
-  type: 'BP' | 'SCALE' | 'BG';
+  type: "BP" | "SCALE" | "BG";
   mac: string;
-  model?: string;      // e.g., 'BP3L', 'BG5', 'BG5S', 'HS2S'
+  model?: string; // e.g., 'BP3L', 'BG5', 'BG5S', 'HS2S'
   bottleCode?: string; // QR code from BG5 test strip bottle
 };
 
@@ -143,7 +160,14 @@ export function saveDevice(device: DeviceRecord) {
     console.log("💾 Saving device:", JSON.stringify(device));
     db.execute(
       "INSERT OR REPLACE INTO devices (id, name, type, mac, model, bottleCode) VALUES (?, ?, ?, ?, ?, ?);",
-      [device.id, device.name, device.type, device.mac, device.model || null, device.bottleCode || null]
+      [
+        device.id,
+        device.name,
+        device.type,
+        device.mac,
+        device.model || null,
+        device.bottleCode || null,
+      ]
     );
     console.log("✅ Device saved:", device.id);
   } catch (e) {
@@ -153,10 +177,10 @@ export function saveDevice(device: DeviceRecord) {
 
 export function updateDeviceBottleCode(deviceId: string, bottleCode: string) {
   try {
-    db.execute(
-      "UPDATE devices SET bottleCode = ? WHERE id = ?;",
-      [bottleCode, deviceId]
-    );
+    db.execute("UPDATE devices SET bottleCode = ? WHERE id = ?;", [
+      bottleCode,
+      deviceId,
+    ]);
     console.log("✅ Bottle code updated for device:", deviceId);
   } catch (e) {
     console.error("❌ Failed to update bottle code:", e);
@@ -165,7 +189,9 @@ export function updateDeviceBottleCode(deviceId: string, bottleCode: string) {
 
 export function getDevices(): DeviceRecord[] {
   try {
-    const res = db.execute("SELECT id, name, type, mac, model, bottleCode FROM devices ORDER BY name;");
+    const res = db.execute(
+      "SELECT id, name, type, mac, model, bottleCode FROM devices ORDER BY name;"
+    );
     const out: DeviceRecord[] = [];
     if (res.rows) {
       for (let i = 0; i < res.rows.length; i++) {
@@ -182,13 +208,32 @@ export function getDevices(): DeviceRecord[] {
 
 export function getDevice(id: string): DeviceRecord | null {
   try {
-    const res = db.execute("SELECT id, name, type, mac, model, bottleCode FROM devices WHERE id = ?;", [id]);
+    const res = db.execute(
+      "SELECT id, name, type, mac, model, bottleCode FROM devices WHERE id = ?;",
+      [id]
+    );
     if (res.rows && res.rows.length > 0) {
       return res.rows.item(0) as DeviceRecord;
     }
     return null;
   } catch (e) {
     console.error("❌ Failed to get device:", e);
+    return null;
+  }
+}
+
+export function getDeviceByType(type: "BP" | "SCALE" | "BG"): DeviceRecord | null {
+  try {
+    const res = db.execute(
+      "SELECT id, name, type, mac, model, bottleCode FROM devices WHERE type = ? LIMIT 1;",
+      [type]
+    );
+    if (res.rows && res.rows.length > 0) {
+      return res.rows.item(0) as DeviceRecord;
+    }
+    return null;
+  } catch (e) {
+    console.error("❌ Failed to get device by type:", e);
     return null;
   }
 }
@@ -215,12 +260,13 @@ export type SavedReading = {
   heartRate?: number;
   unit: string;
   ts: number;
+  synced: boolean;
 };
 
-export function saveReading(r: SavedReading) {
+export function saveReading(r: Omit<SavedReading, 'synced'> & { synced?: boolean }) {
   try {
     db.execute(
-      "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+      "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
       [
         r.id,
         r.deviceId,
@@ -231,6 +277,7 @@ export function saveReading(r: SavedReading) {
         r.heartRate ?? null,
         r.unit,
         r.ts,
+        r.synced ? 1 : 0,
       ]
     );
     console.log("✅ Reading saved:", r.id);
@@ -239,29 +286,85 @@ export function saveReading(r: SavedReading) {
   }
 }
 
-export function clearUser() {
-  try {
-    db.execute("DELETE FROM user;");
-    console.log("✅ User table cleared");
-  } catch (e) {
-    console.error("❌ Failed to clear user:", e);
-  }
-}
-
-
 export function getAllReadings(): SavedReading[] {
   try {
     const res = db.execute("SELECT * FROM readings ORDER BY ts DESC;");
     const out: SavedReading[] = [];
     if (res.rows) {
       for (let i = 0; i < res.rows.length; i++) {
-        out.push(res.rows.item(i) as SavedReading);
+        const row = res.rows.item(i);
+        out.push({
+          ...row,
+          synced: row.synced === 1,
+        } as SavedReading);
       }
     }
     return out;
   } catch (e) {
     console.error("❌ Failed to get readings:", e);
     return [];
+  }
+}
+
+// ----------------------
+// Sync Helpers
+// ----------------------
+
+/** Get all readings that haven't been synced yet */
+export function getUnsyncedReadings(): SavedReading[] {
+  try {
+    const res = db.execute("SELECT * FROM readings WHERE synced = 0 ORDER BY ts ASC;");
+    const out: SavedReading[] = [];
+    if (res.rows) {
+      for (let i = 0; i < res.rows.length; i++) {
+        const row = res.rows.item(i);
+        out.push({
+          ...row,
+          synced: false,
+        } as SavedReading);
+      }
+    }
+    console.log("📤 Unsynced readings:", out.length);
+    return out;
+  } catch (e) {
+    console.error("❌ Failed to get unsynced readings:", e);
+    return [];
+  }
+}
+
+/** Mark a single reading as synced */
+export function markReadingSynced(id: string) {
+  try {
+    db.execute("UPDATE readings SET synced = 1 WHERE id = ?;", [id]);
+    console.log("✅ Reading marked as synced:", id);
+  } catch (e) {
+    console.error("❌ Failed to mark reading as synced:", e);
+  }
+}
+
+/** Mark multiple readings as synced */
+export function markReadingsSynced(ids: string[]) {
+  try {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => "?").join(",");
+    db.execute(`UPDATE readings SET synced = 1 WHERE id IN (${placeholders});`, ids);
+    console.log("✅ Marked", ids.length, "readings as synced");
+  } catch (e) {
+    console.error("❌ Failed to mark readings as synced:", e);
+  }
+}
+
+/** Get count of unsynced readings */
+export function getUnsyncedCount(): number {
+  try {
+    const res = db.execute("SELECT COUNT(*) as count FROM readings WHERE synced = 0;");
+    if (res.rows && res.rows.length > 0) {
+      return res.rows.item(0).count;
+    }
+    return 0;
+  } catch (e) {
+    console.error("❌ Failed to get unsynced count:", e);
+    return 0;
   }
 }
 
@@ -277,7 +380,12 @@ export default {
   updateDeviceBottleCode,
   getDevices,
   getDevice,
+  getDeviceByType,
   removeDevice,
   saveReading,
   getAllReadings,
+  getUnsyncedReadings,
+  markReadingSynced,
+  markReadingsSynced,
+  getUnsyncedCount,
 };

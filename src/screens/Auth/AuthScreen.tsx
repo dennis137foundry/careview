@@ -100,7 +100,7 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#ffffff",
+    backgroundColor: "#001529",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
@@ -113,28 +113,29 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 22,
     fontWeight: "700",
-    color: "#002040",
+    color: "#ffffff",
     marginBottom: 8,
     textAlign: "center",
   },
   subtitle: {
     fontSize: 16,
-    color: "#666",
+    color: "#aabbcc",
     marginBottom: 24,
     textAlign: "center",
   },
   input: {
     width: "100%",
     borderWidth: 1,
-    borderColor: "#ccc",
+    borderColor: "#334455",
     borderRadius: 10,
     padding: 14,
     fontSize: 16,
     marginBottom: 20,
-    color: "#000",
+    color: "#fff",
+    backgroundColor: "rgba(255,255,255,0.1)",
   },
   button: {
-    backgroundColor: "#002040",
+    backgroundColor: "#0066CC",
     borderRadius: 30,
     width: "100%",
     paddingVertical: 14,
@@ -149,7 +150,7 @@ const styles = StyleSheet.create({
   },
   demoNote: {
     fontSize: 13,
-    color: "#888",
+    color: "#6688aa",
     marginTop: 8,
     textAlign: "center",
   },
