@@ -1,0 +1,8 @@
+﻿pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
+plugins { id("com.facebook.react.settings") }
+extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+rootProject.name = 'cvdemo'
+include ':app'
+include ':react-native-ihealth-devices'
+project(':react-native-ihealth-devices').projectDir = new File(rootProject.projectDir, '../modules/react-native-ihealth-devices/android')
+includeBuild('../node_modules/@react-native/gradle-plugin')

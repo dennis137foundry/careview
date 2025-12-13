@@ -1,0 +1,15 @@
+﻿{
+  "name": "react-native-ihealth-devices",
+  "version": "1.0.0",
+  "description": "React Native wrapper for iHealth device SDKs",
+  "main": "src/index.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": ["src", "android", "ios"],
+  "keywords": ["react-native", "ihealth", "bluetooth", "ble"],
+  "license": "MIT",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*"
+  }
+}
