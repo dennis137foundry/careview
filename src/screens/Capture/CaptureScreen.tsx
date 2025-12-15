@@ -18,6 +18,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { addReadingAndPersist } from "../../redux/readingSlice";
+import { syncPendingReadings } from "../../services/VitalsSyncService";
 import { NativeModules, NativeEventEmitter } from "react-native";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
@@ -32,7 +33,6 @@ const deviceImages: Record<string, any> = {
   BG: require("../../assets/bg5.png"),
 };
 
-// Theme colors per device type
 const deviceThemes: Record<
   string,
   { primary: string; secondary: string; gradient: string[]; icon: string }
@@ -70,6 +70,7 @@ export default function CaptureScreen({ route, navigation }: any) {
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [showDebug, setShowDebug] = useState(false);
   const [lastReading, setLastReading] = useState<any>(null);
+  const [syncStatus, setSyncStatus] = useState<"" | "syncing" | "synced" | "pending">("");
   const scrollRef = useRef<ScrollView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetMacRef = useRef<string>("");
@@ -112,8 +113,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         useNativeDriver: true,
       }),
     ]).start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fadeAnim, scaleAnim]);
 
   // Pulse animation when busy
   useEffect(() => {
@@ -180,7 +180,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     if (busy) {
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: 90000, // 90 seconds timeout
+        duration: 90000,
         easing: Easing.linear,
         useNativeDriver: false,
       }).start();
@@ -270,7 +270,28 @@ export default function CaptureScreen({ route, navigation }: any) {
     return () => sub.remove();
   }, [addLog, device, busy]);
 
-  // Save functions defined before the listener useEffect
+  // Helper to sync after saving
+  const syncToEMR = useCallback(async () => {
+    addLog("📤 Syncing to EMR...");
+    setSyncStatus("syncing");
+    try {
+      const result = await syncPendingReadings();
+      if (result.synced > 0) {
+        addLog(`✅ Synced to EMR`);
+        setSyncStatus("synced");
+      } else if (result.remaining > 0) {
+        addLog(`⏳ Queued for sync (offline or error)`);
+        setSyncStatus("pending");
+      } else {
+        setSyncStatus("synced");
+      }
+    } catch (e: any) {
+      addLog(`⚠️ Sync error: ${e.message}`);
+      setSyncStatus("pending");
+    }
+  }, [addLog]);
+
+  // Save functions
   const saveBPReading = useCallback(
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -293,8 +314,9 @@ export default function CaptureScreen({ route, navigation }: any) {
       setStatusText(`${data.systolic}/${data.diastolic}`);
       setBusy(false);
       playSuccessAnimation();
+      syncToEMR();
     },
-    [device, dispatch, playSuccessAnimation]
+    [device, dispatch, playSuccessAnimation, syncToEMR]
   );
 
   const saveWeightReading = useCallback(
@@ -315,8 +337,9 @@ export default function CaptureScreen({ route, navigation }: any) {
       setStatusText(`${lbs} lbs`);
       setBusy(false);
       playSuccessAnimation();
+      syncToEMR();
     },
-    [device, dispatch, playSuccessAnimation]
+    [device, dispatch, playSuccessAnimation, syncToEMR]
   );
 
   const saveGlucoseReading = useCallback(
@@ -335,8 +358,9 @@ export default function CaptureScreen({ route, navigation }: any) {
       setStatusText(`${data.value}`);
       setBusy(false);
       playSuccessAnimation();
+      syncToEMR();
     },
-    [device, dispatch, playSuccessAnimation]
+    [device, dispatch, playSuccessAnimation, syncToEMR]
   );
 
   // Listen for readings
@@ -377,6 +401,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     setDebugLogs([]);
     setBusy(true);
     setLastReading(null);
+    setSyncStatus("");
     successScale.setValue(0);
 
     const mac = device.mac || device.id;
@@ -461,13 +486,15 @@ export default function CaptureScreen({ route, navigation }: any) {
           colors={["#1a1a2e", "#16213e"]}
           style={StyleSheet.absoluteFill}
         />
-        <Text style={styles.errorText}>Device not found</Text>
-        <TouchableOpacity
-          style={styles.backButtonAlt}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.backButtonText}>Go Back</Text>
-        </TouchableOpacity>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Device not found</Text>
+          <TouchableOpacity
+            style={styles.backButtonAlt}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     );
   }
@@ -498,6 +525,19 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
   };
 
+  const getSyncStatusText = () => {
+    switch (syncStatus) {
+      case "syncing":
+        return "Syncing to EMR...";
+      case "synced":
+        return "✓ Synced to EMR";
+      case "pending":
+        return "Will sync when online";
+      default:
+        return "";
+    }
+  };
+
   const renderReadingDisplay = () => {
     if (phase === "success" && lastReading) {
       if (device.type === "BP") {
@@ -518,6 +558,17 @@ export default function CaptureScreen({ route, navigation }: any) {
               <MaterialIcons name="favorite" size={18} color={theme.secondary} />
               <Text style={styles.pulseText}>{lastReading.pulse} bpm</Text>
             </View>
+            {syncStatus !== "" && (
+              <Text
+                style={[
+                  styles.syncStatusText,
+                  syncStatus === "synced" && styles.syncStatusSynced,
+                  syncStatus === "pending" && styles.syncStatusPending,
+                ]}
+              >
+                {getSyncStatusText()}
+              </Text>
+            )}
           </Animated.View>
         );
       } else if (device.type === "SCALE") {
@@ -531,6 +582,17 @@ export default function CaptureScreen({ route, navigation }: any) {
             <Text style={styles.weightValue}>{lastReading.weight}</Text>
             <Text style={styles.readingUnit}>lbs</Text>
             <Text style={styles.subReading}>{lastReading.kg} kg</Text>
+            {syncStatus !== "" && (
+              <Text
+                style={[
+                  styles.syncStatusText,
+                  syncStatus === "synced" && styles.syncStatusSynced,
+                  syncStatus === "pending" && styles.syncStatusPending,
+                ]}
+              >
+                {getSyncStatusText()}
+              </Text>
+            )}
           </Animated.View>
         );
       } else if (device.type === "BG") {
@@ -543,6 +605,17 @@ export default function CaptureScreen({ route, navigation }: any) {
           >
             <Text style={styles.glucoseValue}>{lastReading.value}</Text>
             <Text style={styles.readingUnit}>{lastReading.unit}</Text>
+            {syncStatus !== "" && (
+              <Text
+                style={[
+                  styles.syncStatusText,
+                  syncStatus === "synced" && styles.syncStatusSynced,
+                  syncStatus === "pending" && styles.syncStatusPending,
+                ]}
+              >
+                {getSyncStatusText()}
+              </Text>
+            )}
           </Animated.View>
         );
       }
@@ -550,7 +623,6 @@ export default function CaptureScreen({ route, navigation }: any) {
     return null;
   };
 
-  // Calculate bottom padding based on safe area
   const bottomPadding = Math.max(insets.bottom + 100, 140);
 
   return (
@@ -563,13 +635,16 @@ export default function CaptureScreen({ route, navigation }: any) {
 
       {/* Header */}
       <Animated.View style={[styles.header, { opacity: fadeAnim }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.headerBtn}
+        >
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Capture Reading</Text>
         <TouchableOpacity
           onPress={() => setShowDebug(!showDebug)}
-          style={styles.debugBtn}
+          style={styles.headerBtn}
         >
           <MaterialIcons
             name="bug-report"
@@ -632,10 +707,16 @@ export default function CaptureScreen({ route, navigation }: any) {
             </Animated.View>
 
             <View style={styles.deviceImageContainer}>
-              <Image source={deviceImages[device.type]} style={styles.deviceImage} />
+              <Image
+                source={deviceImages[device.type]}
+                style={styles.deviceImage}
+              />
               {phase === "success" && (
                 <View
-                  style={[styles.successBadge, { backgroundColor: theme.primary }]}
+                  style={[
+                    styles.successBadge,
+                    { backgroundColor: theme.primary },
+                  ]}
                 >
                   <MaterialIcons name="check" size={24} color="#fff" />
                 </View>
@@ -693,48 +774,37 @@ export default function CaptureScreen({ route, navigation }: any) {
           {/* Action Buttons */}
           <View style={styles.buttonContainer}>
             {phase === "idle" && (
-              <TouchableOpacity
-                style={styles.buttonTouchable}
-                onPress={start}
-                activeOpacity={0.8}
-              >
+              <TouchableOpacity onPress={start} activeOpacity={0.8}>
                 <LinearGradient
                   colors={theme.gradient}
-                  style={styles.gradientButton}
+                  style={styles.primaryButton}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
-                  <MaterialIcons name="play-arrow" size={28} color="#fff" />
-                  <Text style={styles.buttonText}>Start Capture</Text>
+                  <Text style={styles.primaryButtonText}>Start Capture</Text>
                 </LinearGradient>
               </TouchableOpacity>
             )}
 
             {busy && phase !== "success" && (
               <TouchableOpacity
-                style={styles.cancelTouchable}
+                style={styles.secondaryButton}
                 onPress={cancel}
                 activeOpacity={0.8}
               >
-                <MaterialIcons name="close" size={24} color="#fff" />
-                <Text style={styles.cancelText}>Cancel</Text>
+                <Text style={styles.secondaryButtonText}>Cancel</Text>
               </TouchableOpacity>
             )}
 
             {phase === "success" && (
-              <TouchableOpacity
-                style={styles.buttonTouchable}
-                onPress={done}
-                activeOpacity={0.8}
-              >
+              <TouchableOpacity onPress={done} activeOpacity={0.8}>
                 <LinearGradient
                   colors={theme.gradient}
-                  style={styles.gradientButton}
+                  style={styles.primaryButton}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
-                  <MaterialIcons name="check-circle" size={24} color="#fff" />
-                  <Text style={styles.buttonText}>Done</Text>
+                  <Text style={styles.primaryButtonText}>Done</Text>
                 </LinearGradient>
               </TouchableOpacity>
             )}
@@ -769,6 +839,8 @@ export default function CaptureScreen({ route, navigation }: any) {
                     log.includes("🎯") && styles.logTarget,
                     log.includes("[Native]") && styles.logNative,
                     log.includes("[Found]") && styles.logFound,
+                    log.includes("📤") && styles.logSync,
+                    log.includes("Synced to EMR") && styles.logSuccess,
                   ]}
                 >
                   {log}
@@ -776,12 +848,32 @@ export default function CaptureScreen({ route, navigation }: any) {
               ))
             )}
           </ScrollView>
-          <TouchableOpacity
-            style={styles.copyBtn}
-            onPress={() => Alert.alert("Log", debugLogs.join("\n"))}
-          >
-            <Text style={styles.copyBtnText}>Copy Log</Text>
-          </TouchableOpacity>
+          <View style={styles.debugButtons}>
+            <TouchableOpacity
+              style={[styles.debugBtn, styles.debugBtnBlue]}
+              onPress={async () => {
+                if (IHealthDevices?.sendBG5SInit) {
+                  addLog("🔧 Sending BG5S init commands...");
+                  try {
+                    await IHealthDevices.sendBG5SInit();
+                    addLog("✅ Init commands sent - watch for response");
+                  } catch (e: any) {
+                    addLog(`❌ Init error: ${e.message}`);
+                  }
+                } else {
+                  addLog("❌ sendBG5SInit not available");
+                }
+              }}
+            >
+              <Text style={styles.debugBtnText}>Send Init</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.debugBtn}
+              onPress={() => Alert.alert("Log", debugLogs.join("\n"))}
+            >
+              <Text style={styles.debugBtnText}>Copy Log</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
     </View>
@@ -793,18 +885,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#1a1a2e",
   },
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 44,
+    paddingTop: 50,
     paddingBottom: 12,
   },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  headerBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: "rgba(255,255,255,0.1)",
     alignItems: "center",
     justifyContent: "center",
@@ -813,14 +910,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
     color: "#fff",
-  },
-  debugBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.1)",
-    alignItems: "center",
-    justifyContent: "center",
   },
   scrollView: {
     flex: 1,
@@ -906,20 +995,8 @@ const styles = StyleSheet.create({
   },
   statusSection: {
     alignItems: "center",
-    minHeight: 60,
+    minHeight: 80,
     justifyContent: "center",
-  },
-  waveContainer: {
-    flexDirection: "row",
-    alignItems: "center",
-    height: 50,
-    marginBottom: 16,
-  },
-  waveLine: {
-    width: 6,
-    height: 40,
-    borderRadius: 3,
-    marginHorizontal: 4,
   },
   statusText: {
     fontSize: 18,
@@ -985,6 +1062,17 @@ const styles = StyleSheet.create({
     fontWeight: "200",
     color: "#fff",
   },
+  syncStatusText: {
+    fontSize: 14,
+    color: "#888",
+    marginTop: 16,
+  },
+  syncStatusSynced: {
+    color: "#4caf50",
+  },
+  syncStatusPending: {
+    color: "#ffc107",
+  },
   progressContainer: {
     width: "80%",
     height: 4,
@@ -999,48 +1087,36 @@ const styles = StyleSheet.create({
   },
   buttonContainer: {
     width: "100%",
-    marginTop: 24,
+    alignItems: "center",
+    marginTop: 32,
     marginBottom: 20,
   },
-  buttonTouchable: {
+  primaryButton: {
     width: SCREEN_WIDTH - 48,
-    alignSelf: "center",
-    borderRadius: 30,
-    overflow: "hidden",
-  },
-  gradientButton: {
-    flexDirection: "row",
+    height: 56,
+    borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 18,
-    paddingHorizontal: 32,
-    minHeight: 60,
   },
-  buttonText: {
+  primaryButtonText: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "600",
-    marginLeft: 10,
   },
-  cancelTouchable: {
+  secondaryButton: {
     width: SCREEN_WIDTH - 48,
-    alignSelf: "center",
-    flexDirection: "row",
+    height: 56,
+    borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 18,
-    paddingHorizontal: 32,
-    borderRadius: 30,
     backgroundColor: "rgba(255,255,255,0.1)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.2)",
-    minHeight: 60,
   },
-  cancelText: {
+  secondaryButtonText: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "500",
-    marginLeft: 10,
   },
   debugPanel: {
     position: "absolute",
@@ -1058,26 +1134,60 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
-  debugTitle: { color: "#fff", fontSize: 18, fontWeight: "600" },
-  debugScroll: { flex: 1, marginBottom: 10 },
+  debugTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  debugScroll: {
+    flex: 1,
+    marginBottom: 10,
+  },
   logLine: {
     color: "#0f0",
     fontFamily: "monospace",
     fontSize: 11,
     marginBottom: 3,
   },
-  logSuccess: { color: "#4caf50", fontWeight: "bold" },
-  logError: { color: "#f44336" },
-  logTarget: { color: "#ffeb3b", fontWeight: "bold" },
-  logNative: { color: "#666" },
-  logFound: { color: "#03a9f4" },
-  copyBtn: {
+  logSuccess: {
+    color: "#4caf50",
+    fontWeight: "bold",
+  },
+  logError: {
+    color: "#f44336",
+  },
+  logTarget: {
+    color: "#ffeb3b",
+    fontWeight: "bold",
+  },
+  logNative: {
+    color: "#666",
+  },
+  logFound: {
+    color: "#03a9f4",
+  },
+  logSync: {
+    color: "#9c27b0",
+  },
+  debugButtons: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  debugBtn: {
     backgroundColor: "#333",
-    padding: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: 8,
     alignItems: "center",
+    flex: 1,
   },
-  copyBtnText: { color: "#fff" },
+  debugBtnBlue: {
+    backgroundColor: "#1976d2",
+  },
+  debugBtnText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
   errorText: {
     fontSize: 18,
     color: "#ff5252",
@@ -1086,10 +1196,12 @@ const styles = StyleSheet.create({
   },
   backButtonAlt: {
     backgroundColor: "rgba(255,255,255,0.1)",
-    padding: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
     borderRadius: 8,
-    alignItems: "center",
-    marginHorizontal: 40,
   },
-  backButtonText: { color: "#fff", fontSize: 16 },
+  backButtonText: {
+    color: "#fff",
+    fontSize: 16,
+  },
 });

@@ -11,6 +11,7 @@ import {
   Platform,
   UIManager,
   RefreshControl,
+  ActivityIndicator,
 } from "react-native";
 import { TabView, TabBar } from "react-native-tab-view";
 import { useDispatch, useSelector } from "react-redux";
@@ -20,23 +21,33 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import RNFS from "react-native-fs";
 import Share from "react-native-share";
 import { LineChart } from "react-native-gifted-charts";
+import {
+  onSyncStateChange,
+  forceSyncAll,
+} from "../../services/VitalsSyncService";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { SavedReading } from "../../services/sqliteService";
 
 const screenWidth = Dimensions.get("window").width;
 
-// Extended reading type with display number
 interface DisplayReading extends SavedReading {
   displayNumber: number;
 }
 
-// Route type for TabView
 interface TabRoute {
   key: string;
   title: string;
 }
 
-// Enable layout animation on Android
+interface SyncState {
+  status: "idle" | "syncing" | "offline" | "error";
+  pendingCount: number;
+  lastSyncAttempt: Date | null;
+  lastSuccessfulSync: Date | null;
+  lastError: string | null;
+  retryCount: number;
+}
+
 if (
   Platform.OS === "android" &&
   UIManager.setLayoutAnimationEnabledExperimental
@@ -53,17 +64,40 @@ export default function HistoryScreen() {
     {}
   );
   const [refreshing, setRefreshing] = useState(false);
+  const [syncState, setSyncState] = useState<SyncState>({
+    status: "idle",
+    pendingCount: 0,
+    lastSyncAttempt: null,
+    lastSuccessfulSync: null,
+    lastError: null,
+    retryCount: 0,
+  });
+
+  // Subscribe to sync state changes
+  useEffect(() => {
+    const unsubscribe = onSyncStateChange((state) => {
+      setSyncState(state);
+      // Refresh readings list when sync completes
+      if (state.status === "idle" && state.pendingCount === 0) {
+        dispatch(loadReadings());
+      }
+    });
+    return unsubscribe;
+  }, [dispatch]);
 
   useEffect(() => {
     dispatch(loadReadings());
   }, [dispatch]);
 
   const grouped = useMemo(() => {
-    return items.reduce((acc: Record<string, SavedReading[]>, r: SavedReading) => {
-      if (!acc[r.deviceId]) acc[r.deviceId] = [];
-      acc[r.deviceId].push(r);
-      return acc;
-    }, {});
+    return items.reduce(
+      (acc: Record<string, SavedReading[]>, r: SavedReading) => {
+        if (!acc[r.deviceId]) acc[r.deviceId] = [];
+        acc[r.deviceId].push(r);
+        return acc;
+      },
+      {}
+    );
   }, [items]);
 
   useEffect(() => {
@@ -82,6 +116,27 @@ export default function HistoryScreen() {
     setRefreshing(false);
   }, [dispatch]);
 
+  const handleSync = useCallback(async () => {
+    try {
+      const result = await forceSyncAll();
+      await dispatch(loadReadings());
+
+      if (result.synced > 0) {
+        Alert.alert(
+          "Sync Complete",
+          `${result.synced} reading${result.synced !== 1 ? "s" : ""} synced to EMR.`
+        );
+      } else if (result.remaining > 0) {
+        Alert.alert(
+          "Sync Incomplete",
+          `${result.remaining} reading${result.remaining !== 1 ? "s" : ""} still pending. Will retry automatically.`
+        );
+      }
+    } catch (error) {
+      Alert.alert("Sync Error", "Unable to sync readings. Please try again.");
+    }
+  }, [dispatch]);
+
   const handleExport = async () => {
     try {
       if (!items?.length) {
@@ -97,6 +152,7 @@ export default function HistoryScreen() {
         "Value2",
         "Unit",
         "Heart Rate",
+        "Synced",
         "Timestamp",
       ];
       const rows = items.map((r: SavedReading) => [
@@ -107,6 +163,7 @@ export default function HistoryScreen() {
         r.value2 ?? "",
         r.unit ?? "",
         r.heartRate ?? "",
+        r.synced ? "Yes" : "No",
         new Date(r.ts).toLocaleString(),
       ]);
       const csv = [header, ...rows]
@@ -130,7 +187,8 @@ export default function HistoryScreen() {
         showAppsToView: true,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Unable to export readings.";
+      const message =
+        err instanceof Error ? err.message : "Unable to export readings.";
       Alert.alert("Export failed", message);
     }
   };
@@ -167,19 +225,69 @@ export default function HistoryScreen() {
     );
   };
 
+  const pendingCount = syncState.pendingCount;
+  const isSyncing = syncState.status === "syncing";
+  const isOffline = syncState.status === "offline";
+
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>History</Text>
-        <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
-          <MaterialCommunityIcons
-            name="file-export-outline"
-            size={20}
-            color="#fff"
-          />
-          <Text style={styles.exportText}>Export</Text>
-        </TouchableOpacity>
+        <View style={styles.headerButtons}>
+          {/* Sync Button - only show if there are pending readings */}
+          {pendingCount > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.syncButton,
+                isSyncing && styles.syncButtonDisabled,
+                isOffline && styles.syncButtonOffline,
+              ]}
+              onPress={handleSync}
+              disabled={isSyncing || isOffline}
+            >
+              {isSyncing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <MaterialCommunityIcons
+                  name={isOffline ? "cloud-off-outline" : "cloud-upload"}
+                  size={18}
+                  color="#fff"
+                />
+              )}
+              <Text style={styles.syncButtonText}>
+                {isSyncing
+                  ? "Syncing..."
+                  : isOffline
+                  ? "Offline"
+                  : `Sync ${pendingCount}`}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Export Button */}
+          <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
+            <MaterialCommunityIcons
+              name="file-export-outline"
+              size={20}
+              color="#fff"
+            />
+            <Text style={styles.exportText}>Export</Text>
+          </TouchableOpacity>
+        </View>
       </View>
+
+      {/* Sync Status Banner */}
+      {syncState.lastError && pendingCount > 0 && (
+        <View style={styles.errorBanner}>
+          <MaterialIcons name="warning" size={16} color="#f57c00" />
+          <Text style={styles.errorBannerText}>
+            {pendingCount} reading{pendingCount !== 1 ? "s" : ""} pending sync
+          </Text>
+          <TouchableOpacity onPress={handleSync}>
+            <Text style={styles.errorBannerAction}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <View style={styles.tabContainer}>
         <TabView
@@ -219,16 +327,19 @@ function SummaryStats({
 
     if (type === "BP") {
       const values2 = data.map((r) => r.value2 || 0);
-      const avg2 = Math.round(values2.reduce((a, b) => a + b, 0) / values2.length);
+      const avg2 = Math.round(
+        values2.reduce((a, b) => a + b, 0) / values2.length
+      );
       const high2 = Math.max(...values2);
       const low2 = Math.min(...values2);
-      
-      // Heart rate stats
-      const hrValues = data.filter((r) => r.heartRate != null).map((r) => r.heartRate!);
+
+      const hrValues = data
+        .filter((r) => r.heartRate != null)
+        .map((r) => r.heartRate!);
       const avgHR = hrValues.length
         ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
         : null;
-      
+
       return { avg, high, low, avg2, high2, low2, avgHR };
     }
 
@@ -295,7 +406,6 @@ function DeviceHistoryTab({
       chronological.map((r, i) => ({
         ...r,
         displayNumber: i + 1,
-        // synced comes from database now
       })),
     [chronological]
   );
@@ -309,6 +419,13 @@ function DeviceHistoryTab({
   );
 
   const deviceType = numbered[0]?.type || "BP";
+
+  // Count synced/unsynced
+  const syncedCount = useMemo(
+    () => numbered.filter((r) => r.synced).length,
+    [numbered]
+  );
+  const unsyncedCount = numbered.length - syncedCount;
 
   // dynamic min/max for chart range
   const values = useMemo(() => {
@@ -370,9 +487,7 @@ function DeviceHistoryTab({
                     size={14}
                     color="#e53935"
                   />
-                  <Text style={styles.heartRateText}>
-                    {item.heartRate} BPM
-                  </Text>
+                  <Text style={styles.heartRateText}>{item.heartRate} BPM</Text>
                 </View>
               )}
             </View>
@@ -512,9 +627,23 @@ function DeviceHistoryTab({
 
             {/* Meta row */}
             <View style={styles.metaRow}>
-              <Text style={styles.countText}>
-                {numbered.length} reading{numbered.length !== 1 ? "s" : ""}
-              </Text>
+              <View style={styles.countRow}>
+                <Text style={styles.countText}>
+                  {numbered.length} reading{numbered.length !== 1 ? "s" : ""}
+                </Text>
+                {unsyncedCount > 0 && (
+                  <View style={styles.unsyncedPill}>
+                    <MaterialCommunityIcons
+                      name="cloud-upload-outline"
+                      size={12}
+                      color="#ff9800"
+                    />
+                    <Text style={styles.unsyncedPillText}>
+                      {unsyncedCount} pending
+                    </Text>
+                  </View>
+                )}
+              </View>
               <TouchableOpacity style={styles.metaButton} onPress={onToggleSort}>
                 <MaterialCommunityIcons
                   name={
@@ -564,6 +693,31 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#002040",
   },
+  headerButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  syncButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ff9800",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 24,
+    gap: 6,
+  },
+  syncButtonDisabled: {
+    backgroundColor: "#bdbdbd",
+  },
+  syncButtonOffline: {
+    backgroundColor: "#9e9e9e",
+  },
+  syncButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 14,
+  },
   exportButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -577,6 +731,24 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "600",
     fontSize: 14,
+  },
+  errorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff3e0",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  errorBannerText: {
+    flex: 1,
+    color: "#e65100",
+    fontSize: 13,
+  },
+  errorBannerAction: {
+    color: "#1976d2",
+    fontWeight: "600",
+    fontSize: 13,
   },
   tabContainer: {
     flex: 1,
@@ -672,10 +844,29 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 8,
   },
+  countRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   countText: {
     color: "#666",
     fontWeight: "600",
     fontSize: 14,
+  },
+  unsyncedPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#fff3e0",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  unsyncedPillText: {
+    color: "#e65100",
+    fontSize: 11,
+    fontWeight: "600",
   },
   metaButton: {
     flexDirection: "row",

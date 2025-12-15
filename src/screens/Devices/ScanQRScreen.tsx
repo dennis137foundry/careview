@@ -1,10 +1,12 @@
 /* eslint-disable react-native/no-inline-styles */
 import React, { useEffect, useState } from "react";
-import { View, Text, StyleSheet, Alert, Platform, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, Alert, Platform, TouchableOpacity, Dimensions } from "react-native";
 import QRCodeScanner from "react-native-qrcode-scanner";
 import { RNCamera } from "react-native-camera";
 import { request, PERMISSIONS, RESULTS } from "react-native-permissions";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 type ScanQRParams = {
   // If updating an existing device's bottle code
@@ -23,7 +25,7 @@ export default function ScanQRScreen({ navigation, route }: any) {
 
   const isUpdatingExisting = !!deviceId;
   const title = isUpdatingExisting 
-    ? `Scan Bottle Code for ${deviceName || 'Glucose Meter'}`
+    ? `Scan Code${deviceName ? ` - ${deviceName}` : ''}`
     : 'Scan Device QR Code';
 
   // Ask for camera permission on mount
@@ -120,58 +122,61 @@ export default function ScanQRScreen({ navigation, route }: any) {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity 
-          style={styles.closeButton}
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="close" size={24} color="#fff" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{title}</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
       <QRCodeScanner
         onRead={onSuccess}
         flashMode={RNCamera.Constants.FlashMode.off}
         showMarker={true}
         markerStyle={styles.marker}
         cameraStyle={styles.camera}
-        topContent={
-          <View style={styles.topContent}>
-            <Text style={styles.instructionText}>
-              {isUpdatingExisting 
-                ? "Scan the QR code on your test strip bottle"
-                : "Align the QR code within the frame"}
-            </Text>
-            {isUpdatingExisting && (
-              <View style={styles.hintBox}>
-                <MaterialIcons name="info" size={18} color="#00ACC1" />
-                <Text style={styles.hintText}>
-                  The QR code contains calibration data for your test strips
-                </Text>
-              </View>
-            )}
-          </View>
-        }
-        bottomContent={
-          <View style={styles.bottomContent}>
-            <View style={styles.scanIndicator}>
-              <MaterialIcons name="qr-code-scanner" size={24} color="#00ACC1" />
-              <Text style={styles.scanningText}>
-                {scanned ? "Processing..." : "Scanning..."}
-              </Text>
-            </View>
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => navigation.goBack()}
-            >
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        }
+        containerStyle={styles.cameraContainer}
+        topViewStyle={styles.zeroView}
+        bottomViewStyle={styles.zeroView}
+        reactivate={true}
+        reactivateTimeout={2000}
       />
+
+      {/* Overlay UI - positioned absolutely over the camera */}
+      <View style={styles.overlay} pointerEvents="box-none">
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity 
+            style={styles.closeButton}
+            onPress={() => navigation.goBack()}
+          >
+            <MaterialIcons name="close" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{title}</Text>
+          <View style={{ width: 40 }} />
+        </View>
+
+        {/* Instructions at top */}
+        <View style={styles.topContent}>
+          <Text style={styles.instructionText}>
+            {isUpdatingExisting 
+              ? "Scan the QR code on your test strip bottle"
+              : "Align the QR code within the frame"}
+          </Text>
+        </View>
+
+        {/* Spacer for scanner area */}
+        <View style={styles.scannerArea} />
+
+        {/* Bottom controls */}
+        <View style={styles.bottomContent}>
+          <View style={styles.scanIndicator}>
+            <MaterialIcons name="qr-code-scanner" size={24} color="#00ACC1" />
+            <Text style={styles.scanningText}>
+              {scanned ? "Processing..." : "Scanning..."}
+            </Text>
+          </View>
+          <TouchableOpacity 
+            style={styles.cancelButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </View>
   );
 }
@@ -179,21 +184,36 @@ export default function ScanQRScreen({ navigation, route }: any) {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: "#000" 
+    backgroundColor: "#000",
+  },
+  cameraContainer: {
+    flex: 1,
+  },
+  camera: {
+    height: SCREEN_HEIGHT,
+    width: SCREEN_WIDTH,
+  },
+  zeroView: {
+    height: 0,
+    flex: 0,
+  },
+  marker: {
+    borderColor: '#00ACC1',
+    borderRadius: 12,
+    borderWidth: 3,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'space-between',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 50,
+    paddingTop: 54,
     paddingBottom: 16,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   closeButton: {
     width: 40,
@@ -205,51 +225,34 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '600',
   },
-  camera: {
-    flex: 1,
-  },
-  marker: {
-    borderColor: '#00ACC1',
-    borderRadius: 12,
-  },
   topContent: {
-    paddingTop: 100,
     paddingHorizontal: 32,
-    paddingBottom: 20,
+    paddingVertical: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
   },
   instructionText: {
     color: "#fff",
-    fontSize: 16,
+    fontSize: 15,
     textAlign: "center",
-    marginBottom: 16,
   },
-  hintBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 172, 193, 0.2)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    gap: 8,
-  },
-  hintText: {
-    color: '#84FFFF',
-    fontSize: 13,
+  scannerArea: {
     flex: 1,
   },
   bottomContent: {
     paddingVertical: 32,
+    paddingBottom: 50,
     alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   scanIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   scanningText: {
     color: "#00ACC1",
@@ -257,15 +260,17 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   cancelButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 24,
+    paddingVertical: 14,
+    paddingHorizontal: 40,
+    borderRadius: 30,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    borderColor: 'rgba(255,255,255,0.4)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
   },
   cancelText: {
     color: "#fff",
     fontSize: 16,
+    fontWeight: '500',
   },
   center: {
     flex: 1,

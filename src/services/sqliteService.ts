@@ -260,15 +260,17 @@ export type SavedReading = {
   heartRate?: number;
   unit: string;
   ts: number;
-  synced: boolean;
+  synced?: boolean;
 };
 
-export function saveReading(r: Omit<SavedReading, 'synced'> & { synced?: boolean }) {
+export function saveReading(r: Omit<SavedReading, 'id' | 'ts'> & { id?: string; ts?: number }) {
+  const id = r.id || `reading_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const ts = r.ts || Date.now();
   try {
     db.execute(
       "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
       [
-        r.id,
+        id,
         r.deviceId,
         r.deviceName,
         r.type,
@@ -276,11 +278,11 @@ export function saveReading(r: Omit<SavedReading, 'synced'> & { synced?: boolean
         r.value2 ?? null,
         r.heartRate ?? null,
         r.unit,
-        r.ts,
+        ts,
         r.synced ? 1 : 0,
       ]
     );
-    console.log("✅ Reading saved:", r.id);
+    console.log("✅ Reading saved:", id);
   } catch (e) {
     console.error("❌ Failed to save reading:", e);
   }

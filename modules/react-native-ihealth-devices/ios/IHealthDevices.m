@@ -1,4 +1,5 @@
 #import "IHealthDevices.h"
+#import <CoreBluetooth/CoreBluetooth.h>
 #import "Headers/IHSDKCloudUser.h"
 #import "Headers/ScanDeviceController.h"
 #import "Headers/ConnectDeviceController.h"
@@ -30,9 +31,16 @@
 #import "Headers/HS4Controller.h"
 #import "Headers/HSMacroFile.h"
 
+// BG5S service UUID (ASCII: "com.jiuan.dev")
+static NSString * const kBG5SServiceUUID = @"636F6D2E-6A69-7561-6E2E-646576000000";
+
 // BG5S uses delegate pattern
-@interface IHealthDevices () <BG5SDelegate>
+@interface IHealthDevices () <BG5SDelegate, CBCentralManagerDelegate, CBPeripheralDelegate>
 @end
+
+// BG5S BLE characteristic UUIDs (decoded from "com.jiuan.dev" pattern)
+static NSString * const kBG5SNotifyCharUUID = @"7365642E-6A69-7561-6E2E-646576000000";  // "sed.jiuan.dev" - notify
+static NSString * const kBG5SWriteCharUUID = @"7265632E-6A69-7561-6E2E-646576000000";   // "rec.jiuan.dev" - write
 
 @implementation IHealthDevices {
     BOOL _isAuthenticated;
@@ -41,6 +49,20 @@
     NSMutableDictionary *_connectedDevices;
     NSString *_targetMAC;
     NSString *_targetType;
+    
+    // CoreBluetooth for BG5S scanning and connection
+    CBCentralManager *_centralManager;
+    BOOL _isScanning;
+    BOOL _scanningForBG5S;
+    NSMutableDictionary *_discoveredBG5SDevices;  // identifier -> {peripheral, serial}
+    NSMutableDictionary *_bg5sPeripherals;        // serial -> peripheral (for connection lookup)
+    CBPeripheral *_connectedBG5SPeripheral;
+    NSString *_connectedBG5SSerial;
+    
+    // BG5S BLE characteristics for direct communication
+    CBCharacteristic *_bg5sNotifyChar;
+    CBCharacteristic *_bg5sWriteChar;
+    BOOL _bg5sMeasurementActive;
 }
 
 RCT_EXPORT_MODULE();
@@ -51,19 +73,37 @@ RCT_EXPORT_MODULE();
         _isAuthenticated = NO;
         _controllersInitialized = NO;
         _connectedDevices = [NSMutableDictionary new];
+        _discoveredBG5SDevices = [NSMutableDictionary new];
+        _bg5sPeripherals = [NSMutableDictionary new];
+        _isScanning = NO;
+        _scanningForBG5S = NO;
+        _connectedBG5SPeripheral = nil;
+        _connectedBG5SSerial = nil;
+        _bg5sNotifyChar = nil;
+        _bg5sWriteChar = nil;
+        _bg5sMeasurementActive = NO;
         [self registerNotifications];
+        
+        // Initialize CoreBluetooth manager for BG5S scanning
+        dispatch_queue_t btQueue = dispatch_queue_create("com.careview.bluetooth", DISPATCH_QUEUE_SERIAL);
+        _centralManager = [[CBCentralManager alloc] initWithDelegate:self queue:btQueue options:@{
+            CBCentralManagerOptionShowPowerAlertKey: @YES
+        }];
     }
     return self;
 }
 
 - (void)dealloc {
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    if (_centralManager.isScanning) {
+        [_centralManager stopScan];
+    }
 }
 
 - (NSArray<NSString *> *)supportedEvents {
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
-             @"onBloodPressureReading", @"onBloodGlucoseReading", @"onWeightReading",
-             @"onError", @"onDebugLog"];
+             @"onBloodPressureReading", @"onBloodGlucoseReading", @"onBloodGlucoseStatus",
+             @"onWeightReading", @"onError", @"onDebugLog"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -88,6 +128,673 @@ RCT_EXPORT_MODULE();
 - (void)sendEventSafe:(NSString *)name body:(id)body {
     if (_hasListeners) {
         [self sendEventWithName:name body:body];
+    }
+}
+
+#pragma mark - CoreBluetooth Delegate (BG5S Discovery)
+
+- (void)centralManagerDidUpdateState:(CBCentralManager *)central {
+    NSString *stateStr;
+    switch (central.state) {
+        case CBManagerStatePoweredOn:
+            stateStr = @"PoweredOn";
+            break;
+        case CBManagerStatePoweredOff:
+            stateStr = @"PoweredOff";
+            break;
+        case CBManagerStateUnauthorized:
+            stateStr = @"Unauthorized";
+            break;
+        case CBManagerStateUnsupported:
+            stateStr = @"Unsupported";
+            break;
+        case CBManagerStateResetting:
+            stateStr = @"Resetting";
+            break;
+        default:
+            stateStr = @"Unknown";
+            break;
+    }
+    [self sendDebugLog:[NSString stringWithFormat:@"📱📱📱 CoreBluetooth state: %@ 📱📱📱", stateStr]];
+    
+    // If we were waiting to scan for BG5S, start now
+    if (central.state == CBManagerStatePoweredOn && _scanningForBG5S) {
+        [self sendDebugLog:@"📱 BT ready, starting deferred BG5S scan..."];
+        [self startCoreBluetoothScanForBG5S];
+    }
+}
+
+- (void)centralManager:(CBCentralManager *)central
+ didDiscoverPeripheral:(CBPeripheral *)peripheral
+     advertisementData:(NSDictionary<NSString *,id> *)advertisementData
+                  RSSI:(NSNumber *)RSSI {
+    
+    NSString *localName = advertisementData[CBAdvertisementDataLocalNameKey] ?: @"";
+    NSString *peripheralName = peripheral.name ?: @"";
+    NSString *displayName = localName.length > 0 ? localName : peripheralName;
+    
+    // LOG ALL PERIPHERALS for debugging
+    static NSMutableSet *loggedPeripherals = nil;
+    if (!loggedPeripherals) {
+        loggedPeripherals = [NSMutableSet new];
+    }
+    
+    NSString *identifier = peripheral.identifier.UUIDString;
+    if (![loggedPeripherals containsObject:identifier]) {
+        [loggedPeripherals addObject:identifier];
+        
+        // Log every unique peripheral we find
+        [self sendDebugLog:[NSString stringWithFormat:@"🔍 BLE PERIPHERAL: name='%@' localName='%@' RSSI=%@", 
+                           peripheralName, localName, RSSI]];
+        
+        // Log service UUIDs if available
+        NSArray *serviceUUIDs = advertisementData[CBAdvertisementDataServiceUUIDsKey];
+        if (serviceUUIDs.count > 0) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   Services: %@", serviceUUIDs]];
+        }
+        
+        // Log manufacturer data
+        NSData *mfgData = advertisementData[CBAdvertisementDataManufacturerDataKey];
+        if (mfgData) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   MfgData: %@", mfgData]];
+        }
+    }
+    
+    // Check if this is a BG5S device - use LocalName which has the actual device name
+    BOOL isBG5S = [localName containsString:@"BG5S"] || 
+                  [localName containsString:@"bg5s"] ||
+                  [peripheralName containsString:@"BG5S"] ||
+                  [peripheralName containsString:@"bg5s"];
+    
+    if (isBG5S) {
+        // Extract MAC/serial from manufacturer data or name
+        NSString *identifier = peripheral.identifier.UUIDString;
+        NSString *serialNumber = @"";
+        
+        // Try to extract from manufacturer data
+        NSData *manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey];
+        if (manufacturerData && manufacturerData.length >= 8) {
+            // iHealth manufacturer data format: Company ID (2 bytes) + MAC (6 bytes)
+            const unsigned char *bytes = manufacturerData.bytes;
+            serialNumber = [NSString stringWithFormat:@"%02X%02X%02X%02X%02X%02X",
+                           bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
+            [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S serial from mfgData: %@", serialNumber]];
+        }
+        
+        // Fallback: extract from LocalName (e.g., "BG5S 11070" -> "11070")
+        if (serialNumber.length == 0 || [serialNumber isEqualToString:@"000000000000"]) {
+            NSArray *parts = [localName componentsSeparatedByString:@" "];
+            if (parts.count > 1) {
+                serialNumber = [NSString stringWithFormat:@"BG5S%@", parts[1]];
+            } else {
+                serialNumber = [NSString stringWithFormat:@"BG5S_%@", [[identifier substringToIndex:8] uppercaseString]];
+            }
+            [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S serial from name: %@", serialNumber]];
+        }
+        
+        // Avoid duplicate notifications
+        if (_discoveredBG5SDevices[identifier]) {
+            return;
+        }
+        _discoveredBG5SDevices[identifier] = @{
+            @"peripheral": peripheral,
+            @"serial": serialNumber,
+            @"name": displayName
+        };
+        
+        // Also store by serial for connection lookup
+        _bg5sPeripherals[serialNumber] = peripheral;
+        
+        [self sendDebugLog:[NSString stringWithFormat:@"📡 BG5S DISCOVERED via CoreBluetooth: %@ (RSSI: %@)", displayName, RSSI]];
+        [self sendDebugLog:[NSString stringWithFormat:@"   Identifier: %@", identifier]];
+        [self sendDebugLog:[NSString stringWithFormat:@"   Serial: %@", serialNumber]];
+        [self sendDebugLog:[NSString stringWithFormat:@"   Advertisement: %@", advertisementData]];
+        
+        // Send to JS - same format as iHealth SDK discovery
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendEventSafe:@"onDeviceFound" body:@{
+                @"mac": serialNumber,
+                @"name": displayName,
+                @"type": @"BG5S",
+                @"rssi": RSSI,
+                @"source": @"CoreBluetooth"
+            }];
+        });
+        
+        // If this is our target device, connect via CoreBluetooth (SDK scan doesn't work for BG5S)
+        if (self->_targetMAC && [[serialNumber uppercaseString] containsString:[self->_targetMAC uppercaseString]]) {
+            [self sendDebugLog:@"🎯 TARGET BG5S FOUND - initiating CoreBluetooth connection..."];
+            [self connectBG5SPeripheral:peripheral serial:serialNumber];
+        }
+    }
+}
+
+- (void)startCoreBluetoothScanForBG5S {
+    [self sendDebugLog:[NSString stringWithFormat:@"📡 CoreBluetooth scan requested. Manager state: %ld", (long)_centralManager.state]];
+    
+    if (_centralManager.state != CBManagerStatePoweredOn) {
+        [self sendDebugLog:@"📱 CoreBluetooth not ready (state != PoweredOn), will scan when powered on"];
+        _scanningForBG5S = YES;
+        return;
+    }
+    
+    [self sendDebugLog:@"📡📡📡 STARTING CoreBluetooth scan for ALL peripherals 📡📡📡"];
+    
+    // Clear previous discoveries
+    [_discoveredBG5SDevices removeAllObjects];
+    
+    // Scan for ALL devices - no service filter, no duplicates filter
+    // This should find everything that's advertising
+    [_centralManager scanForPeripheralsWithServices:nil
+                                            options:@{
+        CBCentralManagerScanOptionAllowDuplicatesKey: @YES  // Allow duplicates to see everything
+    }];
+    
+    _isScanning = YES;
+    [self sendDebugLog:@"📡 CoreBluetooth scanForPeripheralsWithServices called - listening for discoveries..."];
+    
+    // Auto-stop after 20 seconds (longer timeout)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self->_isScanning && self->_scanningForBG5S) {
+            [self sendDebugLog:@"📡 CoreBluetooth BG5S scan timeout - stopping"];
+            [self stopCoreBluetoothScan];
+        }
+    });
+}
+
+- (void)stopCoreBluetoothScan {
+    if (_centralManager.isScanning) {
+        [_centralManager stopScan];
+        [self sendDebugLog:@"📡 CoreBluetooth scan stopped"];
+    }
+    _isScanning = NO;
+    _scanningForBG5S = NO;
+}
+
+#pragma mark - CoreBluetooth Connection for BG5S
+
+- (void)connectBG5SPeripheral:(CBPeripheral *)peripheral serial:(NSString *)serial {
+    [self sendDebugLog:[NSString stringWithFormat:@"🔌 BG5S: Connecting via CoreBluetooth to %@...", serial]];
+    
+    _connectedBG5SSerial = serial;
+    peripheral.delegate = self;
+    [_centralManager connectPeripheral:peripheral options:nil];
+}
+
+- (CBPeripheral *)findBG5SPeripheralBySerial:(NSString *)serial {
+    // First check direct lookup
+    CBPeripheral *peripheral = _bg5sPeripherals[serial];
+    if (peripheral) {
+        return peripheral;
+    }
+    
+    // Search through discovered devices
+    for (NSString *identifier in _discoveredBG5SDevices) {
+        NSDictionary *info = _discoveredBG5SDevices[identifier];
+        NSString *deviceSerial = info[@"serial"];
+        if ([deviceSerial isEqualToString:serial] || 
+            [serial containsString:deviceSerial] ||
+            [deviceSerial containsString:serial]) {
+            return info[@"peripheral"];
+        }
+    }
+    
+    return nil;
+}
+
+- (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral {
+    [self sendDebugLog:[NSString stringWithFormat:@"🔗 CoreBluetooth CONNECTED: %@", peripheral.name]];
+    
+    _connectedBG5SPeripheral = peripheral;
+    
+    // Stop scanning once connected
+    [self stopCoreBluetoothScan];
+    
+    // Discover services
+    [self sendDebugLog:@"🔍 Discovering BG5S services..."];
+    [peripheral discoverServices:nil];
+    
+    // Also try to let the SDK know about this connection
+    // The SDK might pick up the device now that it's connected
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *serial = self->_connectedBG5SSerial ?: @"";
+        
+        // Store in connected devices
+        self->_connectedDevices[serial] = @{@"type": @"BG5S", @"mac": serial};
+        
+        // Notify JS layer
+        [self sendEventSafe:@"onConnectionStateChanged" body:@{
+            @"mac": serial,
+            @"type": @"BG5S",
+            @"connected": @YES,
+            @"source": @"CoreBluetooth"
+        }];
+        
+        // Try SDK connection after CoreBluetooth connects
+        // Sometimes the SDK recognizes the device once it's already connected
+        ConnectDeviceController *connector = [ConnectDeviceController commandGetInstance];
+        int result = [connector commandContectDeviceWithDeviceType:HealthDeviceType_BG5S andSerialNub:serial];
+        [self sendDebugLog:[NSString stringWithFormat:@"🔌 SDK connect attempt after CB connect: %d", result]];
+    });
+}
+
+- (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
+    [self sendDebugLog:[NSString stringWithFormat:@"❌ CoreBluetooth connection FAILED: %@", error.localizedDescription]];
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self sendEventSafe:@"onError" body:@{
+            @"mac": self->_connectedBG5SSerial ?: @"",
+            @"type": @"BG5S",
+            @"error": @(-1),
+            @"message": error.localizedDescription ?: @"Connection failed"
+        }];
+    });
+}
+
+- (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
+    [self sendDebugLog:[NSString stringWithFormat:@"🔌 CoreBluetooth DISCONNECTED: %@ (error: %@)", 
+                       peripheral.name, error.localizedDescription ?: @"none"]];
+    
+    NSString *serial = _connectedBG5SSerial ?: @"";
+    [_connectedDevices removeObjectForKey:serial];
+    _connectedBG5SPeripheral = nil;
+    _connectedBG5SSerial = nil;
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self sendEventSafe:@"onConnectionStateChanged" body:@{
+            @"mac": serial,
+            @"type": @"BG5S",
+            @"connected": @NO
+        }];
+    });
+}
+
+#pragma mark - CBPeripheralDelegate (BG5S Service Discovery)
+
+- (void)peripheral:(CBPeripheral *)peripheral didDiscoverServices:(NSError *)error {
+    if (error) {
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ BG5S service discovery error: %@", error.localizedDescription]];
+        return;
+    }
+    
+    [self sendDebugLog:[NSString stringWithFormat:@"🔍 BG5S discovered %lu services", (unsigned long)peripheral.services.count]];
+    
+    for (CBService *service in peripheral.services) {
+        [self sendDebugLog:[NSString stringWithFormat:@"   Service: %@", service.UUID]];
+        [peripheral discoverCharacteristics:nil forService:service];
+    }
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral didDiscoverCharacteristicsForService:(CBService *)service error:(NSError *)error {
+    if (error) {
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ BG5S characteristic discovery error: %@", error.localizedDescription]];
+        return;
+    }
+    
+    [self sendDebugLog:[NSString stringWithFormat:@"🔍 BG5S service %@ has %lu characteristics", 
+                       service.UUID, (unsigned long)service.characteristics.count]];
+    
+    for (CBCharacteristic *characteristic in service.characteristics) {
+        NSString *uuidStr = [characteristic.UUID.UUIDString uppercaseString];
+        [self sendDebugLog:[NSString stringWithFormat:@"   Characteristic: %@ (props: %lu)", 
+                           characteristic.UUID, (unsigned long)characteristic.properties]];
+        
+        // Check if this is the BG5S notify characteristic
+        NSString *notifyUUID = [kBG5SNotifyCharUUID uppercaseString];
+        NSString *writeUUID = [kBG5SWriteCharUUID uppercaseString];
+        
+        if ([uuidStr isEqualToString:notifyUUID]) {
+            _bg5sNotifyChar = characteristic;
+            [self sendDebugLog:@"   ✅ Found BG5S NOTIFY characteristic"];
+            [peripheral setNotifyValue:YES forCharacteristic:characteristic];
+        }
+        // Check if this is the BG5S write characteristic  
+        else if ([uuidStr isEqualToString:writeUUID]) {
+            _bg5sWriteChar = characteristic;
+            [self sendDebugLog:@"   ✅ Found BG5S WRITE characteristic"];
+        }
+        // Also check by properties - props:4 = WriteWithoutResponse
+        else if ((characteristic.properties & CBCharacteristicPropertyWrite) || 
+                 (characteristic.properties & CBCharacteristicPropertyWriteWithoutResponse)) {
+            if (!_bg5sWriteChar) {
+                _bg5sWriteChar = characteristic;
+                [self sendDebugLog:@"   ✅ Found WRITABLE characteristic (fallback)"];
+            }
+        }
+        
+        // Subscribe to ALL notifiable/indicatable characteristics
+        if (characteristic.properties & (CBCharacteristicPropertyNotify | CBCharacteristicPropertyIndicate)) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   📡 Subscribing to %@", characteristic.UUID]];
+            [peripheral setNotifyValue:YES forCharacteristic:characteristic];
+        }
+        
+        // Read ALL readable characteristics (may trigger handshake)
+        if (characteristic.properties & CBCharacteristicPropertyRead) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   📖 Reading %@", characteristic.UUID]];
+            [peripheral readValueForCharacteristic:characteristic];
+        }
+    }
+    
+    // Log final state
+    [self sendDebugLog:[NSString stringWithFormat:@"   📋 Summary: NotifyChar=%@, WriteChar=%@",
+                       _bg5sNotifyChar ? @"YES" : @"NO",
+                       _bg5sWriteChar ? @"YES" : @"NO"]];
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
+    if (error) {
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ Char read/update error: %@", error.localizedDescription]];
+        return;
+    }
+    
+    NSData *data = characteristic.value;
+    NSString *charUUID = characteristic.UUID.UUIDString;
+    
+    // Log ALL characteristic updates, not just main one
+    if (data && data.length > 0) {
+        // Convert to hex string
+        NSMutableString *hexString = [NSMutableString stringWithCapacity:data.length * 3];
+        const uint8_t *bytes = data.bytes;
+        for (int i = 0; i < data.length; i++) {
+            [hexString appendFormat:@"%02X ", bytes[i]];
+        }
+        
+        // Try to convert to string if it's readable text
+        NSString *textValue = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        
+        [self sendDebugLog:[NSString stringWithFormat:@"📨 DATA from %@:", charUUID]];
+        [self sendDebugLog:[NSString stringWithFormat:@"   HEX: %@", hexString]];
+        if (textValue && textValue.length > 0 && textValue.length < 50) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   TXT: %@", textValue]];
+        }
+        
+        // Parse if it's from our main notify characteristic
+        if ([charUUID.uppercaseString containsString:@"7365"]) {
+            [self parseBG5SData:data];
+        }
+    } else {
+        [self sendDebugLog:[NSString stringWithFormat:@"📨 Empty data from %@", charUUID]];
+    }
+}
+
+#pragma mark - BG5S BLE Protocol Parsing
+
+- (void)parseBG5SData:(NSData *)data {
+    if (data.length < 2) {
+        return;
+    }
+    
+    const uint8_t *bytes = data.bytes;
+    uint8_t commandType = bytes[0];
+    
+    [self sendDebugLog:[NSString stringWithFormat:@"🔬 BG5S parsing - command type: 0x%02X, length: %lu", 
+                       commandType, (unsigned long)data.length]];
+    
+    // Log all bytes for analysis
+    NSMutableString *hexString = [NSMutableString stringWithCapacity:data.length * 3];
+    for (int i = 0; i < data.length; i++) {
+        [hexString appendFormat:@"%02X ", bytes[i]];
+    }
+    [self sendDebugLog:[NSString stringWithFormat:@"   Bytes: %@", hexString]];
+    
+    // Common BG5S protocol patterns (based on reverse engineering):
+    // These are approximate - actual protocol may differ
+    
+    // Strip state notifications
+    if (commandType == 0x31 || commandType == 0x32) {
+        // Strip inserted/removed
+        BOOL stripIn = (commandType == 0x31 || (data.length > 1 && bytes[1] == 0x01));
+        [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S: Strip %@", stripIn ? @"INSERTED" : @"REMOVED"]];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
+                @"mac": self->_connectedBG5SSerial ?: @"",
+                @"type": @"BG5S",
+                @"status": stripIn ? @"stripIn" : @"stripOut"
+            }];
+        });
+    }
+    // Blood detected
+    else if (commandType == 0x33 || commandType == 0x34) {
+        [self sendDebugLog:@"🩸 BG5S: Blood detected - measuring..."];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
+                @"mac": self->_connectedBG5SSerial ?: @"",
+                @"type": @"BG5S",
+                @"status": @"bloodDetected"
+            }];
+        });
+    }
+    // Glucose result - typically starts with specific command byte
+    else if (commandType == 0x35 || commandType == 0x36 || commandType == 0x40) {
+        // Result packet - extract glucose value
+        // Format varies by device, but typically:
+        // [cmd] [high byte] [low byte] or similar
+        
+        int glucoseValue = 0;
+        if (data.length >= 3) {
+            // Try common formats
+            glucoseValue = (bytes[1] << 8) | bytes[2];  // Big endian
+            if (glucoseValue > 600 || glucoseValue < 10) {
+                // Try little endian
+                glucoseValue = (bytes[2] << 8) | bytes[1];
+            }
+            if (glucoseValue > 600 || glucoseValue < 10) {
+                // Try just byte 1 or 2
+                glucoseValue = bytes[1] > 10 && bytes[1] < 600 ? bytes[1] : bytes[2];
+            }
+        }
+        
+        [self sendDebugLog:[NSString stringWithFormat:@"🎉 BG5S GLUCOSE RESULT: %d mg/dL", glucoseValue]];
+        
+        if (glucoseValue >= 10 && glucoseValue <= 600) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self sendEventSafe:@"onBloodGlucoseReading" body:@{
+                    @"mac": self->_connectedBG5SSerial ?: @"",
+                    @"type": @"BG5S",
+                    @"value": @(glucoseValue),
+                    @"unit": @"mg/dL",
+                    @"dataID": [[NSUUID UUID] UUIDString],
+                    @"source": @"live_ble",
+                    @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+                }];
+            });
+        }
+    }
+    // Error codes
+    else if (commandType == 0xF0 || commandType == 0xFF || commandType == 0xE0) {
+        int errorCode = data.length > 1 ? bytes[1] : 0;
+        NSString *errorMsg = [self bg5sBleErrorMessage:errorCode];
+        
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BG5S ERROR: code=%d (%@)", errorCode, errorMsg]];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendEventSafe:@"onError" body:@{
+                @"mac": self->_connectedBG5SSerial ?: @"",
+                @"type": @"BG5S",
+                @"error": @(errorCode),
+                @"message": errorMsg
+            }];
+        });
+    }
+    else {
+        // Unknown command - log for analysis
+        [self sendDebugLog:[NSString stringWithFormat:@"❓ BG5S unknown command: 0x%02X", commandType]];
+    }
+}
+
+- (NSString *)bg5sBleErrorMessage:(int)errorCode {
+    switch (errorCode) {
+        case 0x01: return @"Low battery";
+        case 0x02: return @"Temperature error";
+        case 0x03: return @"Strip error";
+        case 0x04: return @"Blood sample error";
+        case 0x05: return @"Strip used";
+        case 0x06: return @"Calibration error";
+        case 0x07: return @"Result out of range";
+        case 0x08: return @"Communication error";
+        default: return [NSString stringWithFormat:@"Unknown error (0x%02X)", errorCode];
+    }
+}
+
+- (void)sendBG5SCommand:(NSData *)command {
+    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) {
+        [self sendDebugLog:@"❌ Cannot send BG5S command - not connected or no write characteristic"];
+        return;
+    }
+    
+    [self sendDebugLog:[NSString stringWithFormat:@"📤 Sending BG5S command: %@", command]];
+    
+    CBCharacteristicWriteType writeType = (_bg5sWriteChar.properties & CBCharacteristicPropertyWriteWithoutResponse) 
+        ? CBCharacteristicWriteWithoutResponse 
+        : CBCharacteristicWriteWithResponse;
+    
+    [_connectedBG5SPeripheral writeValue:command forCharacteristic:_bg5sWriteChar type:writeType];
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
+    if (error) {
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ BG5S notification error: %@", error.localizedDescription]];
+        return;
+    }
+    
+    [self sendDebugLog:[NSString stringWithFormat:@"📡 Notification %@ for %@", 
+                       characteristic.isNotifying ? @"ON" : @"OFF", characteristic.UUID]];
+    
+    if (characteristic.isNotifying) {
+        _bg5sMeasurementActive = YES;
+        [self sendDebugLog:@"✅ BG5S READY - Insert test strip now"];
+        [self sendDebugLog:@"👀 Watching for ANY data from device..."];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
+                @"mac": self->_connectedBG5SSerial ?: @"",
+                @"type": @"BG5S",
+                @"status": @"ready"
+            }];
+        });
+    }
+}
+
+// Keep these methods but they won't be called - available for future use
+- (void)attemptBG5SMeasurementStart {
+    // DISABLED - causes crashes
+    [self sendDebugLog:@"⚠️ attemptBG5SMeasurementStart disabled"];
+}
+
+- (void)trySDKStartMeasure:(NSString *)mac {
+    // DISABLED - causes crashes  
+    [self sendDebugLog:@"⚠️ trySDKStartMeasure disabled"];
+}
+
+- (void)sendBG5SInitCommands {
+    // DISABLED - causes crashes
+    [self sendDebugLog:@"⚠️ sendBG5SInitCommands disabled"];
+}
+
+// Exposed to React Native - manual init trigger
+RCT_EXPORT_METHOD(sendBG5SInit:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) {
+        [self sendDebugLog:@"❌ Cannot send init - not connected or no write char"];
+        reject(@"not_connected", @"BG5S not connected", nil);
+        return;
+    }
+    
+    [self sendDebugLog:@"🚀 PROTOCOL FIX: Using 0xA0 header (from Android SDK analysis)"];
+    
+    // ============================================
+    // BG5S PROTOCOL (from Android SDK decompilation):
+    // Header: 0xA0 (NOT 0xA5!)
+    // Format: [0xA0] [seq] [cmd] [len] [data...] [checksum]
+    // Checksum: Sum of bytes from index 2 to end-1
+    // ============================================
+    
+    // Commands:
+    // 0xFA = Identify/Verify (handshake - MUST BE FIRST!)
+    // 0x26 = GetStatusInfo
+    // 0x31 = StartMeasure (data: 0x01 = blood mode)
+    
+    // Try 1: Identify command (0xFA) - required handshake
+    uint8_t cmd1[] = {0xA0, 0x00, 0xFA, 0x00};  // header, seq, cmd, len
+    uint8_t checksum1 = 0xFA;  // sum of cmd + len bytes
+    uint8_t fullCmd1[] = {0xA0, 0x00, 0xFA, 0x00, checksum1};
+    [self writeBG5SBytes:fullCmd1 length:5 label:@"IDENTIFY (0xA0 header, 0xFA cmd)"];
+    
+    // Try 2: GetStatusInfo (0x26)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        uint8_t cmd2[] = {0xA0, 0x00, 0x26, 0x00};
+        uint8_t checksum2 = 0x26;  // just cmd since len is 0
+        uint8_t fullCmd2[] = {0xA0, 0x00, 0x26, 0x00, checksum2};
+        [self writeBG5SBytes:fullCmd2 length:5 label:@"GET_STATUS (0xA0 0x26)"];
+    });
+    
+    // Try 3: StartMeasure blood mode (0x31 + mode 0x01)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        uint8_t cmd3[] = {0xA0, 0x00, 0x31, 0x01, 0x01};  // cmd, len=1, data=blood mode
+        uint8_t checksum3 = 0x31 + 0x01 + 0x01;  // sum of bytes 2-4
+        uint8_t fullCmd3[] = {0xA0, 0x00, 0x31, 0x01, 0x01, checksum3};
+        [self writeBG5SBytes:fullCmd3 length:6 label:@"START_MEASURE blood (0xA0 0x31 0x01)"];
+    });
+    
+    // Try 4: Just the command byte alone (no framing)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        uint8_t cmd4[] = {0xFA};  // Just identify command
+        [self writeBG5SBytes:cmd4 length:1 label:@"RAW 0xFA"];
+    });
+    
+    // Try 5: Alternative - A0 might be in sequence position
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        // What if format is: [seq:A0] [cmd] [len] [data] [checksum]
+        uint8_t cmd5[] = {0xA0, 0xFA, 0x00, 0xFA};  // seq, cmd, len, checksum
+        [self writeBG5SBytes:cmd5 length:4 label:@"ALT: A0 as seq"];
+    });
+    
+    // Try 6: Response codes as commands (device might echo these)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        uint8_t cmd6[] = {0xA0, 0x00, 0xFB, 0x00, 0xFB};  // Verification_Feedback
+        [self writeBG5SBytes:cmd6 length:5 label:@"VERIFY_FEEDBACK (0xFB)"];
+    });
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self sendDebugLog:@"✅ All A0-protocol commands sent"];
+        [self sendDebugLog:@"👀 Watch for responses with 0xFB, 0xFD, 0x33, 0x36..."];
+    });
+    
+    resolve(@"Protocol commands sent with 0xA0 header");
+}
+
+- (void)writeBG5SBytes:(uint8_t *)bytes length:(NSUInteger)length label:(NSString *)label {
+    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) return;
+    
+    NSData *data = [NSData dataWithBytes:bytes length:length];
+    [self sendDebugLog:[NSString stringWithFormat:@"📤 TX: %@ → %@", label, data]];
+    
+    CBCharacteristicWriteType writeType = CBCharacteristicWriteWithoutResponse;
+    if (_bg5sWriteChar.properties & CBCharacteristicPropertyWrite) {
+        writeType = CBCharacteristicWriteWithResponse;
+    }
+    
+    [_connectedBG5SPeripheral writeValue:data forCharacteristic:_bg5sWriteChar type:writeType];
+}
+
+- (void)sendBG5SCommandBytes:(uint8_t *)bytes length:(NSUInteger)length {
+    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) return;
+    
+    NSData *data = [NSData dataWithBytes:bytes length:length];
+    
+    CBCharacteristicWriteType writeType = (_bg5sWriteChar.properties & CBCharacteristicPropertyWriteWithoutResponse) 
+        ? CBCharacteristicWriteWithoutResponse 
+        : CBCharacteristicWriteWithResponse;
+    
+    [_connectedBG5SPeripheral writeValue:data forCharacteristic:_bg5sWriteChar type:writeType];
+}
+
+- (void)peripheral:(CBPeripheral *)peripheral didWriteValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
+    if (error) {
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ BG5S write error: %@", error.localizedDescription]];
+    } else {
+        [self sendDebugLog:[NSString stringWithFormat:@"✅ BG5S write success for %@", characteristic.UUID]];
     }
 }
 
@@ -268,7 +975,7 @@ RCT_EXPORT_MODULE();
     [center addObserver:self selector:@selector(onConnected:) name:@"BG5ConnectNoti" object:nil];
     [center addObserver:self selector:@selector(onDisconnected:) name:@"BG5DisConnectNoti" object:nil];
     
-    // BG5S
+    // BG5S - keep these for when SDK eventually does work or for connection notifications
     [center addObserver:self selector:@selector(onDiscover:) name:@"BG5SDiscover" object:nil];
     [center addObserver:self selector:@selector(onConnected:) name:@"BG5SConnectNoti" object:nil];
     [center addObserver:self selector:@selector(onDisconnected:) name:@"BG5SDisConnectNoti" object:nil];
@@ -315,7 +1022,8 @@ RCT_EXPORT_MODULE();
         @"mac": mac,
         @"name": info[@"DeviceName"] ?: type,
         @"type": type,
-        @"rssi": info[@"RSSI"] ?: @(-50)
+        @"rssi": info[@"RSSI"] ?: @(-50),
+        @"source": @"iHealthSDK"
     }];
 
     // Auto-connect if this is our target (set before scan started)
@@ -983,7 +1691,10 @@ RCT_EXPORT_METHOD(setBottleCode:(NSString *)mac
 #pragma mark - BG5S Handling
 
 - (void)handleBG5SConnected:(BG5S *)bg mac:(NSString *)mac {
-    [self sendDebugLog:@"🩸 BG5S: Connected - querying status..."];
+    [self sendDebugLog:@"🩸 BG5S: Connected - setting up delegate and querying status..."];
+    
+    // CRITICAL: Set delegate so we receive measurement callbacks
+    bg.delegate = self;
     
     [bg queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
         [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S status - battery: %d%%, strips used: %d, offline: %d",
@@ -991,20 +1702,35 @@ RCT_EXPORT_METHOD(setBottleCode:(NSString *)mac
                            (int)stateInfo.stripUsedValue,
                            (int)stateInfo.offlineDataQuantity]];
         
+        // Sync time
         [bg setTimeWithDate:[NSDate date] timezone:[[NSTimeZone localTimeZone] secondsFromGMT] / 3600.0 successBlock:^{
             [self sendDebugLog:@"🩸 BG5S time synced"];
         } errorBlock:^(BG5SError error, NSString *detailInfo) {
             [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S time sync error: %d", (int)error]];
         }];
         
+        // Fetch offline data if any
         if (stateInfo.offlineDataQuantity > 0) {
             [self fetchBG5SOfflineData:bg mac:mac];
         }
         
-        [self sendDebugLog:@"🩸 BG5S: Ready - insert test strip to begin measurement"];
+        // CRITICAL: Start measurement mode so device sends strip/blood/result events
+        [self sendDebugLog:@"🩸 BG5S: Starting measurement mode..."];
+        [bg startMeasure:BGMeasureMode_Blood withSuccessBlock:^{
+            [self sendDebugLog:@"🩸 BG5S: Measurement mode started - INSERT TEST STRIP to begin"];
+        } errorBlock:^(BG5SError error, NSString *detailInfo) {
+            [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S startMeasure error: %d - %@", (int)error, detailInfo]];
+        }];
         
     } errorBlock:^(BG5SError error, NSString *detailInfo) {
         [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S status error: %d - %@", (int)error, detailInfo]];
+        
+        // Still try to start measurement even if status query failed
+        [bg startMeasure:BGMeasureMode_Blood withSuccessBlock:^{
+            [self sendDebugLog:@"🩸 BG5S: Measurement mode started after status error"];
+        } errorBlock:^(BG5SError error2, NSString *detailInfo2) {
+            [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S startMeasure error: %d", (int)error2]];
+        }];
     }];
 }
 
@@ -1044,15 +1770,32 @@ RCT_EXPORT_METHOD(setBottleCode:(NSString *)mac
 }
 
 - (void)device:(BG5S *)device stripStateDidUpdate:(BG5SStripState)state {
+    NSString *mac = device.serialNumber;
     if (state == BG5SStripState_Insert) {
         [self sendDebugLog:@"🩸 BG5S: Strip INSERTED - apply blood sample"];
+        [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
+            @"mac": mac ?: @"",
+            @"type": @"BG5S",
+            @"status": @"stripIn"
+        }];
     } else {
         [self sendDebugLog:@"🩸 BG5S: Strip REMOVED"];
+        [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
+            @"mac": mac ?: @"",
+            @"type": @"BG5S",
+            @"status": @"stripOut"
+        }];
     }
 }
 
 - (void)deviceDropBlood:(BG5S *)device {
+    NSString *mac = device.serialNumber;
     [self sendDebugLog:@"🩸 BG5S: Blood detected - measuring..."];
+    [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
+        @"mac": mac ?: @"",
+        @"type": @"BG5S",
+        @"status": @"bloodDetected"
+    }];
 }
 
 - (void)device:(BG5S *)device dataID:(NSString *)dataID measureReult:(NSInteger)result {
@@ -1162,8 +1905,16 @@ RCT_EXPORT_METHOD(startScan:(NSArray *)deviceTypes
     ScanDeviceController *scanner = [ScanDeviceController commandGetInstance];
 
     for (NSString *type in deviceTypes) {
+        // Special handling for BG5S - use CoreBluetooth instead of broken SDK scan
+        if ([type isEqualToString:@"BG5S"]) {
+            [self sendDebugLog:@"📶 Scan: Using CoreBluetooth for BG5S discovery (SDK scan is broken)"];
+            _scanningForBG5S = YES;
+            [self startCoreBluetoothScanForBG5S];
+            continue;
+        }
+        
         HealthDeviceType dt = [self deviceTypeFromString:type];
-        [self sendDebugLog:[NSString stringWithFormat:@"📶 Scan: Starting scan for %@ (enum=%d)", type, (int)dt]];
+        [self sendDebugLog:[NSString stringWithFormat:@"📶 Scan: Starting SDK scan for %@ (enum=%d)", type, (int)dt]];
         int result = [scanner commandScanDeviceType:dt];
         [self sendDebugLog:[NSString stringWithFormat:@"📶 Scan: result=%d (1=success)", result]];
     }
@@ -1175,6 +1926,11 @@ RCT_EXPORT_METHOD(startScan:(NSArray *)deviceTypes
 RCT_EXPORT_METHOD(stopScan:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject) {
     [self sendDebugLog:@"📶 Scan: Stopping all scans"];
+    
+    // Stop CoreBluetooth scan for BG5S
+    [self stopCoreBluetoothScan];
+    
+    // Stop iHealth SDK scans
     ScanDeviceController *scanner = [ScanDeviceController commandGetInstance];
     
     [scanner commandStopScanDeviceType:HealthDeviceType_BP3L];
@@ -1201,7 +1957,28 @@ RCT_EXPORT_METHOD(connectDevice:(NSString *)mac
     _targetMAC = mac;
     _targetType = deviceType;
 
-    // ACTUALLY initiate the connection - don't just set targets!
+    // BG5S needs CoreBluetooth connection since SDK scan doesn't discover it
+    if ([deviceType isEqualToString:@"BG5S"]) {
+        [self sendDebugLog:@"🔌 BG5S: Using CoreBluetooth connection path"];
+        
+        CBPeripheral *peripheral = [self findBG5SPeripheralBySerial:mac];
+        if (peripheral) {
+            [self connectBG5SPeripheral:peripheral serial:mac];
+            resolve(@YES);
+        } else {
+            [self sendDebugLog:@"🔌 BG5S: Peripheral not found - need to scan first"];
+            
+            // Start scanning to find the device
+            _scanningForBG5S = YES;
+            [self startCoreBluetoothScanForBG5S];
+            
+            // Return success - the scan will find and connect when device is discovered
+            resolve(@YES);
+        }
+        return;
+    }
+
+    // For other devices, use SDK connection
     ConnectDeviceController *connector = [ConnectDeviceController commandGetInstance];
     HealthDeviceType dt = [self deviceTypeFromString:deviceType];
     int result = [connector commandContectDeviceWithDeviceType:dt andSerialNub:mac];
@@ -1233,8 +2010,17 @@ RCT_EXPORT_METHOD(disconnectDevice:(NSString *)mac
         if (device) [device commandDisconnectDevice];
     }
     else if ([type isEqualToString:@"BG5S"]) {
+        // Try SDK disconnect first
         BG5S *device = [self getBG5SWithMac:mac];
-        if (device) [device disconnectDevice];
+        if (device) {
+            [device disconnectDevice];
+        }
+        // Also disconnect CoreBluetooth peripheral
+        if (_connectedBG5SPeripheral) {
+            [_centralManager cancelPeripheralConnection:_connectedBG5SPeripheral];
+            _connectedBG5SPeripheral = nil;
+            _connectedBG5SSerial = nil;
+        }
     }
     else if ([type isEqualToString:@"HS2"]) {
         HS2 *device = [self getHS2WithMac:mac];
@@ -1269,6 +2055,13 @@ RCT_EXPORT_METHOD(disconnectAll:(RCTPromiseResolveBlock)resolve
             HS2 *device = [self getHS2WithMac:mac];
             if (device) [device commandDisconnectDevice];
         }
+    }
+    
+    // Also disconnect CoreBluetooth BG5S peripheral
+    if (_connectedBG5SPeripheral) {
+        [_centralManager cancelPeripheralConnection:_connectedBG5SPeripheral];
+        _connectedBG5SPeripheral = nil;
+        _connectedBG5SSerial = nil;
     }
     
     [_connectedDevices removeAllObjects];
@@ -1310,6 +2103,17 @@ RCT_EXPORT_METHOD(startMeasurement:(NSString *)mac
     else if ([type isEqualToString:@"HS4S"]) {
         HS4 *device = [self getHS4WithMac:mac];
         if (device) [self handleHS4Connected:device mac:mac];
+    }
+    else if ([type isEqualToString:@"BG5S"]) {
+        BG5S *device = [self getBG5SWithMac:mac];
+        if (device) {
+            // Re-start measurement mode
+            [device startMeasure:BGMeasureMode_Blood withSuccessBlock:^{
+                [self sendDebugLog:@"🩸 BG5S: Measurement mode re-started"];
+            } errorBlock:^(BG5SError error, NSString *detailInfo) {
+                [self sendDebugLog:[NSString stringWithFormat:@"🩸 BG5S startMeasure error: %d", (int)error]];
+            }];
+        }
     }
     
     resolve(nil);
@@ -1471,6 +2275,17 @@ RCT_EXPORT_METHOD(getBatteryLevel:(NSString *)mac
             [device commandQueryBattery:^(NSNumber *energy) {
                 resolve(energy);
             } DisposeErrorBlock:^(NSNumber *errorID) {
+                resolve(@(-1));
+            }];
+            return;
+        }
+    }
+    else if ([type isEqualToString:@"BG5S"]) {
+        BG5S *device = [self getBG5SWithMac:mac];
+        if (device) {
+            [device queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
+                resolve(@(stateInfo.batteryValue));
+            } errorBlock:^(BG5SError error, NSString *detailInfo) {
                 resolve(@(-1));
             }];
             return;
