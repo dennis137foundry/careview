@@ -227,13 +227,6 @@ export default function DevicesScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      {/* Swipe hint */}
-      {devices.length > 0 && (
-        <Text style={styles.swipeHint}>
-          <MaterialIcons name="swipe" size={12} color="#aaa" /> Swipe left or tap ⋮ to delete
-        </Text>
-      )}
-
       {/* Device List or Empty State */}
       {devices.length === 0 ? (
         <View style={styles.emptyState}>
@@ -242,7 +235,7 @@ export default function DevicesScreen({ navigation }: any) {
           </View>
           <Text style={styles.emptyTitle}>No Devices Yet</Text>
           <Text style={styles.emptySubtitle}>
-            Add your iHealth devices to start tracking your health metrics.
+            Add your devices to start tracking your health.
           </Text>
           <TouchableOpacity
             style={styles.emptyAddButton}

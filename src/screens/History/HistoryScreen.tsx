@@ -1,3 +1,4 @@
+/* eslint-disable react-native/no-inline-styles */
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   View,
@@ -24,7 +25,7 @@ import { LineChart } from "react-native-gifted-charts";
 import {
   onSyncStateChange,
   forceSyncAll,
-} from "../../services/VitalsSyncService";
+} from "../../services/vitalsSyncService";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { SavedReading } from "../../services/sqliteService";
 
@@ -89,11 +90,18 @@ export default function HistoryScreen() {
     dispatch(loadReadings());
   }, [dispatch]);
 
+  // Group by deviceId - but use a composite key if deviceId is missing
+  // This ensures different device types don't get mixed together
   const grouped = useMemo(() => {
     return items.reduce(
       (acc: Record<string, SavedReading[]>, r: SavedReading) => {
-        if (!acc[r.deviceId]) acc[r.deviceId] = [];
-        acc[r.deviceId].push(r);
+        // Create a unique key using deviceId, fallback to type-based grouping if deviceId is empty
+        const groupKey = r.deviceId && r.deviceId.trim() !== "" 
+          ? r.deviceId 
+          : `${r.type}_unknown`;
+        
+        if (!acc[groupKey]) acc[groupKey] = [];
+        acc[groupKey].push(r);
         return acc;
       },
       {}
@@ -101,10 +109,23 @@ export default function HistoryScreen() {
   }, [items]);
 
   useEffect(() => {
-    const newRoutes: TabRoute[] = Object.keys(grouped).map((id, i) => ({
-      key: id,
-      title: grouped[id][0]?.deviceName || `Device ${i + 1}`,
-    }));
+    const newRoutes: TabRoute[] = Object.keys(grouped).map((id, i) => {
+      const firstReading = grouped[id][0];
+      // Build a descriptive title
+      let title = firstReading?.deviceName;
+      if (!title || title.trim() === "") {
+        // Fallback to type-based name
+        const type = firstReading?.type;
+        if (type === "BP") title = "Blood Pressure";
+        else if (type === "BG") title = "Glucose";
+        else if (type === "SCALE") title = "Weight";
+        else title = `Device ${i + 1}`;
+      }
+      return {
+        key: id,
+        title: title,
+      };
+    });
     setRoutes(
       newRoutes.length ? newRoutes : [{ key: "empty", title: "No Devices" }]
     );
@@ -258,8 +279,8 @@ export default function HistoryScreen() {
                 {isSyncing
                   ? "Syncing..."
                   : isOffline
-                  ? "Offline"
-                  : `Sync ${pendingCount}`}
+                    ? "Offline"
+                    : `Sync ${pendingCount}`}
               </Text>
             </TouchableOpacity>
           )}
@@ -754,14 +775,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   tabBar: {
-    backgroundColor: "#fff",
+    backgroundColor: "#002040",
     elevation: 0,
     shadowOpacity: 0,
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    borderBottomColor: "#001530",
   },
   tabIndicator: {
-    backgroundColor: "#002040",
+    backgroundColor: "#fff",
     height: 3,
   },
   scene: {

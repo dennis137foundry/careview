@@ -17,11 +17,13 @@ import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFocusEffect } from "@react-navigation/native";
 import { addReadingAndPersist } from "../../redux/readingSlice";
-import { syncPendingReadings } from "../../services/VitalsSyncService";
+import { syncPendingReadings } from "../../services/vitalsSyncService";
 import { NativeModules, NativeEventEmitter } from "react-native";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
+
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -98,22 +100,65 @@ export default function CaptureScreen({ route, navigation }: any) {
     console.log(`[Capture] ${msg}`);
   }, []);
 
-  // Entry animation
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 8,
-        tension: 40,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fadeAnim, scaleAnim]);
+  // Reset all state to initial values
+  const resetState = useCallback(() => {
+    // Clear any pending timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    
+    // Stop any ongoing scan/connection
+    IHealthDevices?.stopScan?.().catch(() => {});
+    IHealthDevices?.disconnectAll?.().catch(() => {});
+    
+    // Reset all state
+    setBusy(false);
+    setPhase("idle");
+    setStatusText("");
+    setDebugLogs([]);
+    setLastReading(null);
+    setSyncStatus("");
+    targetMacRef.current = "";
+    
+    // Reset animations
+    pulseAnim.setValue(1);
+    ringRotate.setValue(0);
+    fadeAnim.setValue(0);
+    scaleAnim.setValue(0.8);
+    waveAnim.setValue(0);
+    successScale.setValue(0);
+    progressAnim.setValue(0);
+  }, [pulseAnim, ringRotate, fadeAnim, scaleAnim, waveAnim, successScale, progressAnim]);
+
+  // Reset state when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      // Reset state when screen gains focus
+      resetState();
+      
+      // Play entry animation after reset
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 8,
+          tension: 40,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      // Cleanup when screen loses focus
+      return () => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        IHealthDevices?.stopScan?.().catch(() => {});
+      };
+    }, [resetState, fadeAnim, scaleAnim])
+  );
 
   // Pulse animation when busy
   useEffect(() => {
@@ -199,14 +244,6 @@ export default function CaptureScreen({ route, navigation }: any) {
       useNativeDriver: true,
     }).start();
   }, [successScale]);
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      IHealthDevices?.stopScan?.().catch(() => {});
-    };
-  }, []);
 
   // Listen for native debug logs
   useEffect(() => {

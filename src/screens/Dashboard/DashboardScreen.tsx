@@ -162,7 +162,7 @@ export default function DashboardScreen() {
                   })}
                 </View>
                 <Text style={styles.deviceLabel}>
-                  {deviceCount} {deviceCount === 1 ? "Device" : "Devices"} Added
+                  {deviceCount} {deviceCount === 1 ? "Device" : "Devices"} Saved
                 </Text>
                 {deviceCount > 4 && (
                   <Text style={styles.moreDevices}>

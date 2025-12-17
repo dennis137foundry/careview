@@ -63,6 +63,8 @@ static NSString * const kBG5SWriteCharUUID = @"7265632E-6A69-7561-6E2E-646576000
     CBCharacteristic *_bg5sNotifyChar;
     CBCharacteristic *_bg5sWriteChar;
     BOOL _bg5sMeasurementActive;
+    NSMutableArray *_bg5sRxLog;
+    BOOL _bg5sNotificationsEnabled;
 }
 
 RCT_EXPORT_MODULE();
@@ -82,6 +84,8 @@ RCT_EXPORT_MODULE();
         _bg5sNotifyChar = nil;
         _bg5sWriteChar = nil;
         _bg5sMeasurementActive = NO;
+        _bg5sRxLog = [NSMutableArray new];
+        _bg5sNotificationsEnabled = NO;
         [self registerNotifications];
         
         // Initialize CoreBluetooth manager for BG5S scanning
@@ -102,8 +106,8 @@ RCT_EXPORT_MODULE();
 
 - (NSArray<NSString *> *)supportedEvents {
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
-             @"onBloodPressureReading", @"onBloodGlucoseReading", @"onBloodGlucoseStatus",
-             @"onWeightReading", @"onError", @"onDebugLog"];
+         @"onBloodPressureReading", @"onBloodGlucoseReading", @"onBloodGlucoseStatus",
+         @"onWeightReading", @"onError", @"onDebugLog", @"onBG5SProtocolData"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -129,6 +133,43 @@ RCT_EXPORT_MODULE();
     if (_hasListeners) {
         [self sendEventWithName:name body:body];
     }
+}
+
+- (NSString *)hexStringFromData:(NSData *)data {
+    if (!data || data.length == 0) return @"(empty)";
+    const uint8_t *bytes = data.bytes;
+    NSMutableString *hex = [NSMutableString stringWithCapacity:data.length * 3];
+    for (NSUInteger i = 0; i < data.length; i++) {
+        [hex appendFormat:@"%02X ", bytes[i]];
+    }
+    return [hex stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+}
+
+- (NSString *)asciiStringFromData:(NSData *)data {
+    if (!data || data.length == 0) return @"";
+    const uint8_t *bytes = data.bytes;
+    NSMutableString *ascii = [NSMutableString new];
+    for (NSUInteger i = 0; i < data.length; i++) {
+        if (bytes[i] >= 32 && bytes[i] < 127) {
+            [ascii appendFormat:@"%c", bytes[i]];
+        } else {
+            [ascii appendString:@"."];
+        }
+    }
+    return ascii;
+}
+
+- (NSData *)dataFromHexString:(NSString *)hexString {
+    NSString *hex = [[hexString stringByReplacingOccurrencesOfString:@" " withString:@""] uppercaseString];
+    NSMutableData *data = [NSMutableData new];
+    for (NSUInteger i = 0; i + 1 < hex.length; i += 2) {
+        NSString *byteStr = [hex substringWithRange:NSMakeRange(i, 2)];
+        unsigned int byte;
+        [[NSScanner scannerWithString:byteStr] scanHexInt:&byte];
+        uint8_t b = (uint8_t)byte;
+        [data appendBytes:&b length:1];
+    }
+    return data;
 }
 
 #pragma mark - CoreBluetooth Delegate (BG5S Discovery)
@@ -480,7 +521,6 @@ RCT_EXPORT_MODULE();
                        _bg5sNotifyChar ? @"YES" : @"NO",
                        _bg5sWriteChar ? @"YES" : @"NO"]];
 }
-
 - (void)peripheral:(CBPeripheral *)peripheral didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
     if (error) {
         [self sendDebugLog:[NSString stringWithFormat:@"❌ Char read/update error: %@", error.localizedDescription]];
@@ -502,20 +542,56 @@ RCT_EXPORT_MODULE();
         // Try to convert to string if it's readable text
         NSString *textValue = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         
-        [self sendDebugLog:[NSString stringWithFormat:@"📨 DATA from %@:", charUUID]];
-        [self sendDebugLog:[NSString stringWithFormat:@"   HEX: %@", hexString]];
+        [self sendDebugLog:@"───────────────────────────────────────────"];
+        [self sendDebugLog:[NSString stringWithFormat:@"📨 RX from %@:", charUUID]];
+        [self sendDebugLog:[NSString stringWithFormat:@"   HEX:   %@", hexString]];
         if (textValue && textValue.length > 0 && textValue.length < 50) {
-            [self sendDebugLog:[NSString stringWithFormat:@"   TXT: %@", textValue]];
+            [self sendDebugLog:[NSString stringWithFormat:@"   ASCII: %@", textValue]];
         }
+        [self sendDebugLog:[NSString stringWithFormat:@"   LEN:   %lu bytes", (unsigned long)data.length]];
+        
+        // Store in protocol log for analysis
+        NSDictionary *logEntry = @{
+            @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000),
+            @"characteristic": charUUID,
+            @"hex": hexString,
+            @"length": @(data.length)
+        };
+        [_bg5sRxLog addObject:logEntry];
+        
+        // Send to JS for real-time viewing
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self sendEventSafe:@"onBG5SProtocolData" body:@{
+                @"direction": @"RX",
+                @"characteristic": charUUID,
+                @"hex": hexString,
+                @"length": @(data.length),
+                @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+            }];
+        });
         
         // Parse if it's from our main notify characteristic
         if ([charUUID.uppercaseString containsString:@"7365"]) {
             [self parseBG5SData:data];
         }
+        
+        // Log known Device Info characteristics
+        if ([charUUID isEqualToString:@"2A24"]) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   → Model Number: %@", textValue]];
+        } else if ([charUUID isEqualToString:@"2A25"]) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   → Serial Number: %@", textValue]];
+        } else if ([charUUID isEqualToString:@"2A29"]) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   → Manufacturer: %@", textValue]];
+        } else if ([charUUID.uppercaseString isEqualToString:@"FF01"]) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   → Protocol ID: %@", textValue]];
+        } else if ([charUUID.uppercaseString isEqualToString:@"FF02"]) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   → Device Type: %@", textValue]];
+        }
     } else {
         [self sendDebugLog:[NSString stringWithFormat:@"📨 Empty data from %@", charUUID]];
     }
 }
+
 
 #pragma mark - BG5S BLE Protocol Parsing
 
@@ -2297,6 +2373,8 @@ RCT_EXPORT_METHOD(getBatteryLevel:(NSString *)mac
 
 #pragma mark - Helpers
 
+
+
 - (HealthDeviceType)deviceTypeFromString:(NSString *)type {
     if ([type isEqualToString:@"BP3L"]) return HealthDeviceType_BP3L;
     if ([type isEqualToString:@"BP5"]) return HealthDeviceType_BP5;
@@ -2307,6 +2385,38 @@ RCT_EXPORT_METHOD(getBatteryLevel:(NSString *)mac
     if ([type isEqualToString:@"BG5"]) return HealthDeviceType_BG5;
     if ([type isEqualToString:@"BG5S"]) return HealthDeviceType_BG5S;
     return HealthDeviceType_BP3L;
+}
+
+// Send arbitrary hex command to BG5S
+RCT_EXPORT_METHOD(sendBG5SCommand:(NSString *)hexCommand
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) {
+        reject(@"not_connected", @"BG5S not connected or no write characteristic", nil);
+        return;
+    }
+    
+    NSData *data = [self dataFromHexString:hexCommand];
+    if (!data || data.length == 0) {
+        reject(@"invalid_hex", @"Invalid hex string", nil);
+        return;
+    }
+    
+    [self sendBG5SCommand:data];
+    resolve(@YES);
+}
+
+// Get protocol log for analysis
+RCT_EXPORT_METHOD(getBG5SProtocolLog:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve(_bg5sRxLog ?: @[]);
+}
+
+// Clear protocol log
+RCT_EXPORT_METHOD(clearBG5SProtocolLog:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    [_bg5sRxLog removeAllObjects];
+    resolve(@YES);
 }
 
 @end

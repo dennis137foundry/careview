@@ -9,6 +9,7 @@ import {
   Animated,
   StatusBar,
   ScrollView,
+  Linking,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
@@ -86,6 +87,12 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
     ]);
   };
 
+  const handleHelpSupport = () => {
+    Linking.openURL("https://www.trinityhhs.com/patients-home").catch(() => {
+      Alert.alert("Error", "Unable to open the support page.");
+    });
+  };
+
   const initials =
     (user.firstName?.charAt(0) ?? "") + (user.lastName?.charAt(0) ?? "");
 
@@ -99,17 +106,7 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
         style={styles.backgroundGradient}
       />
 
-      {/* Top Decorative Shape */}
-      <View style={[styles.topShape, { paddingTop: insets.top }]}>
-        <LinearGradient
-          colors={["#0050A0", "#003870"]}
-          style={styles.topShapeGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        />
-      </View>
-
-      <ScrollView
+       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
           { paddingTop: insets.top + 40 },
@@ -197,27 +194,19 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
             },
           ]}
         >
-          <TouchableOpacity style={styles.actionButton}>
-            <MaterialIcons name="edit" size={20} color="#0066CC" />
-            <Text style={styles.actionButtonText}>Edit Profile</Text>
-          </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity style={styles.actionButton} onPress={handleLogout}>
             <MaterialIcons name="settings" size={20} color="#0066CC" />
-            <Text style={styles.actionButtonText}>Settings</Text>
+            <Text style={styles.actionButtonText}>Sign Out</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton}>
+          <TouchableOpacity style={styles.actionButton} onPress={handleHelpSupport}>
             <MaterialIcons name="help-outline" size={20} color="#0066CC" />
             <Text style={styles.actionButtonText}>Help & Support</Text>
           </TouchableOpacity>
         </Animated.View>
 
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <MaterialIcons name="logout" size={20} color="#DC3545" />
-          <Text style={styles.logoutText}>Log Out</Text>
-        </TouchableOpacity>
+       
 
         {/* Version */}
         <Text style={styles.versionText}>CareView v1.0.0</Text>
