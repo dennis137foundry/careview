@@ -12,7 +12,9 @@ import {
   Easing,
   Dimensions,
   StatusBar,
+  Share,
 } from "react-native";
+import Clipboard from "@react-native-clipboard/clipboard";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useSelector, useDispatch } from "react-redux";
@@ -23,7 +25,6 @@ import { syncPendingReadings } from "../../services/vitalsSyncService";
 import { NativeModules, NativeEventEmitter } from "react-native";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
-
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -906,9 +907,29 @@ export default function CaptureScreen({ route, navigation }: any) {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.debugBtn}
-              onPress={() => Alert.alert("Log", debugLogs.join("\n"))}
+              onPress={() => {
+                const logText = debugLogs.join("\n");
+                Clipboard.setString(logText);
+                Alert.alert("Copied!", `${debugLogs.length} log lines copied to clipboard.`);
+              }}
             >
-              <Text style={styles.debugBtnText}>Copy Log</Text>
+              <Text style={styles.debugBtnText}>Copy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.debugBtn, styles.debugBtnGreen]}
+              onPress={async () => {
+                const logText = debugLogs.join("\n");
+                try {
+                  await Share.share({
+                    message: `CareView Debug Log (${new Date().toLocaleString()})\n\n${logText}`,
+                    title: "Debug Log",
+                  });
+                } catch (e) {
+                  // User cancelled
+                }
+              }}
+            >
+              <Text style={styles.debugBtnText}>Share</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1220,6 +1241,9 @@ const styles = StyleSheet.create({
   },
   debugBtnBlue: {
     backgroundColor: "#1976d2",
+  },
+  debugBtnGreen: {
+    backgroundColor: "#388e3c",
   },
   debugBtnText: {
     color: "#fff",

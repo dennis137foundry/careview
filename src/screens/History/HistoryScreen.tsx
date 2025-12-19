@@ -90,15 +90,13 @@ export default function HistoryScreen() {
     dispatch(loadReadings());
   }, [dispatch]);
 
-  // Group by deviceId - but use a composite key if deviceId is missing
-  // This ensures different device types don't get mixed together
+  // ✅ FIX: Group by TYPE (BP, SCALE, BG) instead of deviceId
+  // This ensures BP readings only appear in BP tab, weight in weight tab, etc.
   const grouped = useMemo(() => {
     return items.reduce(
       (acc: Record<string, SavedReading[]>, r: SavedReading) => {
-        // Create a unique key using deviceId, fallback to type-based grouping if deviceId is empty
-        const groupKey = r.deviceId && r.deviceId.trim() !== "" 
-          ? r.deviceId 
-          : `${r.type}_unknown`;
+        // Use the reading TYPE as the group key - this is always set correctly
+        const groupKey = r.type; // "BP" | "SCALE" | "BG"
         
         if (!acc[groupKey]) acc[groupKey] = [];
         acc[groupKey].push(r);
@@ -108,24 +106,34 @@ export default function HistoryScreen() {
     );
   }, [items]);
 
+  // ✅ FIX: Create tabs based on type, use deviceName for display
   useEffect(() => {
-    const newRoutes: TabRoute[] = Object.keys(grouped).map((id, i) => {
-      const firstReading = grouped[id][0];
-      // Build a descriptive title
-      let title = firstReading?.deviceName;
-      if (!title || title.trim() === "") {
-        // Fallback to type-based name
-        const type = firstReading?.type;
-        if (type === "BP") title = "Blood Pressure";
-        else if (type === "BG") title = "Glucose";
-        else if (type === "SCALE") title = "Weight";
-        else title = `Device ${i + 1}`;
+    const typeOrder = ["BP", "SCALE", "BG"]; // Consistent tab order
+    const newRoutes: TabRoute[] = [];
+    
+    for (const type of typeOrder) {
+      if (grouped[type] && grouped[type].length > 0) {
+        const readings = grouped[type];
+        // Get the most recent device name for this type
+        const sortedByTime = [...readings].sort((a, b) => b.ts - a.ts);
+        const deviceName = sortedByTime[0]?.deviceName;
+        
+        // Use device name if available, otherwise use friendly type name
+        let title = deviceName;
+        if (!title || title.trim() === "") {
+          if (type === "BP") title = "Blood Pressure";
+          else if (type === "SCALE") title = "Weight";
+          else if (type === "BG") title = "Glucose";
+          else title = type;
+        }
+        
+        newRoutes.push({
+          key: type,
+          title: title,
+        });
       }
-      return {
-        key: id,
-        title: title,
-      };
-    });
+    }
+    
     setRoutes(
       newRoutes.length ? newRoutes : [{ key: "empty", title: "No Devices" }]
     );
@@ -214,9 +222,9 @@ export default function HistoryScreen() {
     }
   };
 
-  const toggleSort = useCallback((deviceId: string) => {
+  const toggleSort = useCallback((typeKey: string) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setSortDirections((prev) => ({ ...prev, [deviceId]: !prev[deviceId] }));
+    setSortDirections((prev) => ({ ...prev, [typeKey]: !prev[typeKey] }));
   }, []);
 
   const renderScene = ({ route }: { route: TabRoute }) => {
@@ -232,12 +240,13 @@ export default function HistoryScreen() {
       );
     }
 
-    const deviceReadings = grouped[route.key] || [];
+    // route.key is now the TYPE (BP, SCALE, BG)
+    const typeReadings = grouped[route.key] || [];
     const sortAsc = sortDirections[route.key] ?? false;
 
     return (
       <DeviceHistoryTab
-        data={deviceReadings}
+        data={typeReadings}
         sortAsc={sortAsc}
         onToggleSort={() => toggleSort(route.key)}
         refreshing={refreshing}

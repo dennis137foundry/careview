@@ -396,7 +396,6 @@ RCT_EXPORT_MODULE();
     [peripheral discoverServices:nil];
     
     // Also try to let the SDK know about this connection
-    // The SDK might pick up the device now that it's connected
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *serial = self->_connectedBG5SSerial ?: @"";
         
@@ -412,7 +411,6 @@ RCT_EXPORT_MODULE();
         }];
         
         // Try SDK connection after CoreBluetooth connects
-        // Sometimes the SDK recognizes the device once it's already connected
         ConnectDeviceController *connector = [ConnectDeviceController commandGetInstance];
         int result = [connector commandContectDeviceWithDeviceType:HealthDeviceType_BG5S andSerialNub:serial];
         [self sendDebugLog:[NSString stringWithFormat:@"🔌 SDK connect attempt after CB connect: %d", result]];
@@ -432,23 +430,6 @@ RCT_EXPORT_MODULE();
     });
 }
 
-- (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
-    [self sendDebugLog:[NSString stringWithFormat:@"🔌 CoreBluetooth DISCONNECTED: %@ (error: %@)", 
-                       peripheral.name, error.localizedDescription ?: @"none"]];
-    
-    NSString *serial = _connectedBG5SSerial ?: @"";
-    [_connectedDevices removeObjectForKey:serial];
-    _connectedBG5SPeripheral = nil;
-    _connectedBG5SSerial = nil;
-    
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self sendEventSafe:@"onConnectionStateChanged" body:@{
-            @"mac": serial,
-            @"type": @"BG5S",
-            @"connected": @NO
-        }];
-    });
-}
 
 #pragma mark - CBPeripheralDelegate (BG5S Service Discovery)
 
@@ -735,13 +716,22 @@ RCT_EXPORT_MODULE();
         return;
     }
     
+    NSString *charUUID = [characteristic.UUID.UUIDString uppercaseString];
     [self sendDebugLog:[NSString stringWithFormat:@"📡 Notification %@ for %@", 
                        characteristic.isNotifying ? @"ON" : @"OFF", characteristic.UUID]];
     
-    if (characteristic.isNotifying) {
+    // Check if this is our main notify characteristic (7365... = sed.jiuan.dev)
+    if (characteristic.isNotifying && [charUUID containsString:@"7365"]) {
+        _bg5sNotificationsEnabled = YES;
         _bg5sMeasurementActive = YES;
         [self sendDebugLog:@"✅ BG5S READY - Insert test strip now"];
         [self sendDebugLog:@"👀 Watching for ANY data from device..."];
+        
+        // AUTO-SEND INIT to keep connection alive!
+        [self sendDebugLog:@"🚀 AUTO-SENDING init sequence in 500ms..."];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self sendBG5SInitSequence];
+        });
         
         dispatch_async(dispatch_get_main_queue(), ^{
             [self sendEventSafe:@"onBloodGlucoseStatus" body:@{
@@ -751,6 +741,69 @@ RCT_EXPORT_MODULE();
             }];
         });
     }
+}
+
+- (void)sendBG5SInitSequence {
+    [self sendDebugLog:@"═══════════════════════════════════════════"];
+    [self sendDebugLog:@"🚀 sendBG5SInitSequence CALLED"];
+    [self sendDebugLog:[NSString stringWithFormat:@"   peripheral: %@", _connectedBG5SPeripheral ? @"YES" : @"NO"]];
+    [self sendDebugLog:[NSString stringWithFormat:@"   writeChar: %@", _bg5sWriteChar ? @"YES" : @"NO"]];
+    
+    if (!_connectedBG5SPeripheral) {
+        [self sendDebugLog:@"❌ ABORT: No peripheral"];
+        return;
+    }
+    if (!_bg5sWriteChar) {
+        [self sendDebugLog:@"❌ ABORT: No write characteristic"];
+        return;
+    }
+    
+    [self sendDebugLog:@"✅ All checks passed - sending commands..."];
+    
+    // Command 1: Identify/Handshake
+    uint8_t cmd1[] = {0xA0, 0x00, 0xFA, 0x00, 0xFA};
+    [self writeBG5SBytes:cmd1 length:5 label:@"CMD1: IDENTIFY"];
+    
+    // Command 2: Get Status (after delay)
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!self->_connectedBG5SPeripheral || !self->_bg5sWriteChar) {
+            [self sendDebugLog:@"❌ CMD2 aborted - disconnected"];
+            return;
+        }
+        uint8_t cmd2[] = {0xA0, 0x00, 0x26, 0x00, 0x26};
+        [self writeBG5SBytes:cmd2 length:5 label:@"CMD2: GET_STATUS"];
+    });
+    
+    // Command 3: Start Measure
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (!self->_connectedBG5SPeripheral || !self->_bg5sWriteChar) {
+            [self sendDebugLog:@"❌ CMD3 aborted - disconnected"];
+            return;
+        }
+        uint8_t cmd3[] = {0xA0, 0x00, 0x31, 0x01, 0x01, 0x33};
+        [self writeBG5SBytes:cmd3 length:6 label:@"CMD3: START_MEASURE"];
+    });
+    
+    // Schedule keep-alive
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self startBG5SKeepAlive];
+    });
+}
+
+- (void)startBG5SKeepAlive {
+    if (!_connectedBG5SPeripheral || !_bg5sWriteChar || !_bg5sMeasurementActive) {
+        [self sendDebugLog:@"💔 Keep-alive stopped - not connected"];
+        return;
+    }
+    
+    [self sendDebugLog:@"💓 Sending keep-alive ping..."];
+    uint8_t ping[] = {0xA0, 0x00, 0x26, 0x00, 0x26};
+    [self writeBG5SBytes:ping length:5 label:@"KEEP_ALIVE"];
+    
+    // Schedule next keep-alive in 8 seconds
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self startBG5SKeepAlive];
+    });
 }
 
 // Keep these methods but they won't be called - available for future use
@@ -769,89 +822,61 @@ RCT_EXPORT_MODULE();
     [self sendDebugLog:@"⚠️ sendBG5SInitCommands disabled"];
 }
 
-// Exposed to React Native - manual init trigger
 RCT_EXPORT_METHOD(sendBG5SInit:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
-    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) {
-        [self sendDebugLog:@"❌ Cannot send init - not connected or no write char"];
-        reject(@"not_connected", @"BG5S not connected", nil);
+    [self sendDebugLog:@"═══════════════════════════════════════════"];
+    [self sendDebugLog:@"🔘 sendBG5SInit BUTTON PRESSED"];
+    [self sendDebugLog:[NSString stringWithFormat:@"   peripheral: %@", _connectedBG5SPeripheral ? _connectedBG5SPeripheral.name : @"nil"]];
+    [self sendDebugLog:[NSString stringWithFormat:@"   writeChar: %@", _bg5sWriteChar ? _bg5sWriteChar.UUID.UUIDString : @"nil"]];
+    [self sendDebugLog:[NSString stringWithFormat:@"   notifyChar: %@", _bg5sNotifyChar ? _bg5sNotifyChar.UUID.UUIDString : @"nil"]];
+    [self sendDebugLog:[NSString stringWithFormat:@"   serial: %@", _connectedBG5SSerial ?: @"nil"]];
+    
+    if (!_connectedBG5SPeripheral) {
+        [self sendDebugLog:@"❌ REJECTED: No peripheral connected"];
+        reject(@"not_connected", @"BG5S peripheral not connected", nil);
+        return;
+    }
+    if (!_bg5sWriteChar) {
+        [self sendDebugLog:@"❌ REJECTED: No write characteristic"];
+        reject(@"no_write_char", @"BG5S write characteristic not found", nil);
         return;
     }
     
-    [self sendDebugLog:@"🚀 PROTOCOL FIX: Using 0xA0 header (from Android SDK analysis)"];
+    [self sendDebugLog:@"✅ Calling sendBG5SInitSequence..."];
+    [self sendBG5SInitSequence];
     
-    // ============================================
-    // BG5S PROTOCOL (from Android SDK decompilation):
-    // Header: 0xA0 (NOT 0xA5!)
-    // Format: [0xA0] [seq] [cmd] [len] [data...] [checksum]
-    // Checksum: Sum of bytes from index 2 to end-1
-    // ============================================
-    
-    // Commands:
-    // 0xFA = Identify/Verify (handshake - MUST BE FIRST!)
-    // 0x26 = GetStatusInfo
-    // 0x31 = StartMeasure (data: 0x01 = blood mode)
-    
-    // Try 1: Identify command (0xFA) - required handshake
-    uint8_t cmd1[] = {0xA0, 0x00, 0xFA, 0x00};  // header, seq, cmd, len
-    uint8_t checksum1 = 0xFA;  // sum of cmd + len bytes
-    uint8_t fullCmd1[] = {0xA0, 0x00, 0xFA, 0x00, checksum1};
-    [self writeBG5SBytes:fullCmd1 length:5 label:@"IDENTIFY (0xA0 header, 0xFA cmd)"];
-    
-    // Try 2: GetStatusInfo (0x26)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        uint8_t cmd2[] = {0xA0, 0x00, 0x26, 0x00};
-        uint8_t checksum2 = 0x26;  // just cmd since len is 0
-        uint8_t fullCmd2[] = {0xA0, 0x00, 0x26, 0x00, checksum2};
-        [self writeBG5SBytes:fullCmd2 length:5 label:@"GET_STATUS (0xA0 0x26)"];
-    });
-    
-    // Try 3: StartMeasure blood mode (0x31 + mode 0x01)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        uint8_t cmd3[] = {0xA0, 0x00, 0x31, 0x01, 0x01};  // cmd, len=1, data=blood mode
-        uint8_t checksum3 = 0x31 + 0x01 + 0x01;  // sum of bytes 2-4
-        uint8_t fullCmd3[] = {0xA0, 0x00, 0x31, 0x01, 0x01, checksum3};
-        [self writeBG5SBytes:fullCmd3 length:6 label:@"START_MEASURE blood (0xA0 0x31 0x01)"];
-    });
-    
-    // Try 4: Just the command byte alone (no framing)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        uint8_t cmd4[] = {0xFA};  // Just identify command
-        [self writeBG5SBytes:cmd4 length:1 label:@"RAW 0xFA"];
-    });
-    
-    // Try 5: Alternative - A0 might be in sequence position
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        // What if format is: [seq:A0] [cmd] [len] [data] [checksum]
-        uint8_t cmd5[] = {0xA0, 0xFA, 0x00, 0xFA};  // seq, cmd, len, checksum
-        [self writeBG5SBytes:cmd5 length:4 label:@"ALT: A0 as seq"];
-    });
-    
-    // Try 6: Response codes as commands (device might echo these)
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        uint8_t cmd6[] = {0xA0, 0x00, 0xFB, 0x00, 0xFB};  // Verification_Feedback
-        [self writeBG5SBytes:cmd6 length:5 label:@"VERIFY_FEEDBACK (0xFB)"];
-    });
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self sendDebugLog:@"✅ All A0-protocol commands sent"];
-        [self sendDebugLog:@"👀 Watch for responses with 0xFB, 0xFD, 0x33, 0x36..."];
-    });
-    
-    resolve(@"Protocol commands sent with 0xA0 header");
+    resolve(@"Init sequence started");
 }
 
 - (void)writeBG5SBytes:(uint8_t *)bytes length:(NSUInteger)length label:(NSString *)label {
-    if (!_connectedBG5SPeripheral || !_bg5sWriteChar) return;
+    [self sendDebugLog:[NSString stringWithFormat:@"📤 writeBG5SBytes: %@", label]];
+    
+    if (!_connectedBG5SPeripheral) {
+        [self sendDebugLog:@"   ❌ FAILED: No peripheral"];
+        return;
+    }
+    if (!_bg5sWriteChar) {
+        [self sendDebugLog:@"   ❌ FAILED: No write characteristic"];
+        return;
+    }
     
     NSData *data = [NSData dataWithBytes:bytes length:length];
-    [self sendDebugLog:[NSString stringWithFormat:@"📤 TX: %@ → %@", label, data]];
+    NSString *hex = [self hexStringFromData:data];
+    [self sendDebugLog:[NSString stringWithFormat:@"   📤 TX: %@", hex]];
     
     CBCharacteristicWriteType writeType = CBCharacteristicWriteWithoutResponse;
     if (_bg5sWriteChar.properties & CBCharacteristicPropertyWrite) {
         writeType = CBCharacteristicWriteWithResponse;
+        [self sendDebugLog:@"   Using WriteWithResponse"];
+    } else {
+        [self sendDebugLog:@"   Using WriteWithoutResponse"];
     }
     
-    [_connectedBG5SPeripheral writeValue:data forCharacteristic:_bg5sWriteChar type:writeType];
+    @try {
+        [_connectedBG5SPeripheral writeValue:data forCharacteristic:_bg5sWriteChar type:writeType];
+        [self sendDebugLog:@"   ✅ Write dispatched"];
+    } @catch (NSException *exception) {
+        [self sendDebugLog:[NSString stringWithFormat:@"   ❌ Write EXCEPTION: %@", exception.reason]];
+    }
 }
 
 - (void)sendBG5SCommandBytes:(uint8_t *)bytes length:(NSUInteger)length {
@@ -872,6 +897,30 @@ RCT_EXPORT_METHOD(sendBG5SInit:(RCTPromiseResolveBlock)resolve rejecter:(RCTProm
     } else {
         [self sendDebugLog:[NSString stringWithFormat:@"✅ BG5S write success for %@", characteristic.UUID]];
     }
+}
+
+- (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
+    [self sendDebugLog:[NSString stringWithFormat:@"🔌 CoreBluetooth DISCONNECTED: %@ (error: %@)", 
+                       peripheral.name, error.localizedDescription ?: @"none"]];
+    
+    NSString *serial = _connectedBG5SSerial ?: @"";
+    [_connectedDevices removeObjectForKey:serial];
+    
+    // Clear all BG5S state
+    _connectedBG5SPeripheral = nil;
+    _connectedBG5SSerial = nil;
+    _bg5sNotifyChar = nil;
+    _bg5sWriteChar = nil;
+    _bg5sMeasurementActive = NO;  // This stops keep-alive
+    _bg5sNotificationsEnabled = NO;
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self sendEventSafe:@"onConnectionStateChanged" body:@{
+            @"mac": serial,
+            @"type": @"BG5S",
+            @"connected": @NO
+        }];
+    });
 }
 
 #pragma mark - Controller Initialization (CRITICAL - Must happen AFTER authentication!)
