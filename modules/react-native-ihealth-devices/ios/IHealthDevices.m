@@ -200,46 +200,41 @@ RCT_EXPORT_MODULE();
     NSString *displayName = localName.length > 0 ? localName : peripheralName;
     
     // Check if this is a BG5S device
-    BOOL isBG5S = [localName containsString:@"BG5S"] || 
-                  [localName containsString:@"bg5s"] ||
-                  [peripheralName containsString:@"BG5S"] ||
-                  [peripheralName containsString:@"bg5s"];
+    BOOL isBG5S = [localName.uppercaseString containsString:@"BG5S"] || 
+                  [peripheralName.uppercaseString containsString:@"BG5S"];
     
     if (isBG5S) {
         NSString *identifier = peripheral.identifier.UUIDString;
         NSString *serialNumber = @"";
         
-        // Try to extract from manufacturer data
-        NSData *manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey];
-        if (manufacturerData && manufacturerData.length >= 8) {
-            const unsigned char *bytes = manufacturerData.bytes;
-            serialNumber = [NSString stringWithFormat:@"%02X%02X%02X%02X%02X%02X",
-                           bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]];
-        }
-        
-        // Fallback: extract from LocalName
-        if (serialNumber.length == 0 || [serialNumber isEqualToString:@"000000000000"]) {
-            NSArray *parts = [localName componentsSeparatedByString:@" "];
-            if (parts.count > 1) {
-                serialNumber = [NSString stringWithFormat:@"BG5S%@", parts[1]];
-            } else {
-                serialNumber = [NSString stringWithFormat:@"BG5S_%@", [[identifier substringToIndex:8] uppercaseString]];
-            }
+        // Extract serial from device name: "BG5S 11070" -> "11070"
+        NSString *nameToCheck = localName.length > 0 ? localName : peripheralName;
+        NSArray *parts = [nameToCheck componentsSeparatedByString:@" "];
+        if (parts.count >= 2) {
+            serialNumber = parts[1];
+            [self sendDebugLog:[NSString stringWithFormat:@"📡 BG5S serial from name: %@", serialNumber]];
+        } else {
+            // Fallback to UUID prefix
+            serialNumber = [[identifier substringToIndex:8] uppercaseString];
         }
         
         // Avoid duplicate notifications
         if (_discoveredBG5SDevices[identifier]) {
             return;
         }
+        
         _discoveredBG5SDevices[identifier] = @{
             @"peripheral": peripheral,
             @"serial": serialNumber,
-            @"name": displayName
+            @"name": displayName,
+            @"uuid": identifier
         };
+        // Store by multiple keys for lookup flexibility
         _bg5sPeripherals[serialNumber] = peripheral;
+        _bg5sPeripherals[identifier] = peripheral;
+        _bg5sPeripherals[displayName] = peripheral;
         
-        [self sendDebugLog:[NSString stringWithFormat:@"📡 BG5S DISCOVERED via CoreBluetooth fallback: %@ (RSSI: %@)", displayName, RSSI]];
-        [self sendDebugLog:[NSString stringWithFormat:@"   Serial: %@", serialNumber]];
+        [self sendDebugLog:[NSString stringWithFormat:@"📡 BG5S DISCOVERED: %@ (serial: %@)", displayName, serialNumber]];
         
         dispatch_async(dispatch_get_main_queue(), ^{
             [self sendEventSafe:@"onDeviceFound" body:@{
@@ -247,13 +242,14 @@ RCT_EXPORT_MODULE();
                 @"name": displayName,
                 @"type": @"BG5S",
                 @"rssi": RSSI,
+                @"uuid": identifier,
                 @"source": @"CoreBluetooth"
             }];
         });
         
-        // Auto-connect if this is our target device
-        if (self->_targetMAC && [[serialNumber uppercaseString] containsString:[self->_targetMAC uppercaseString]]) {
-            [self sendDebugLog:@"🎯 TARGET BG5S FOUND via CoreBluetooth - connecting..."];
+        // Auto-connect to ANY BG5S if we're looking for one
+        if (self->_targetMAC && [self->_targetType isEqualToString:@"BG5S"]) {
+            [self sendDebugLog:@"🎯 BG5S FOUND - auto-connecting via CoreBluetooth..."];
             [self connectBG5SPeripheral:peripheral serial:serialNumber];
         }
     }
