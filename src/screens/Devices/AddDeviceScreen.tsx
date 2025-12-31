@@ -506,6 +506,33 @@ export default function AddDeviceScreen({ navigation }: any) {
             )}
           </ScrollView>
 
+          {/* Debug Action Buttons */}
+          <View style={styles.logButtonRow}>
+            <TouchableOpacity
+              style={[styles.logBtn, styles.logBtnYellow]}
+              onPress={async () => {
+                addLog("🔧 Direct connect to BG5S MAC: 004D3229FEE0");
+                try {
+                  await IHealthDevices.authenticate("license.pem");
+                  addLog("✅ Authenticated");
+                  const result = await IHealthDevices.connectDevice("004D3229FEE0", "BG5S");
+                  addLog(`✅ Connect result: ${JSON.stringify(result)}`);
+                } catch (e: any) {
+                  addLog(`❌ Direct connect error: ${e.message}`);
+                }
+              }}
+            >
+              <Text style={styles.logBtnText}>BG5S Direct</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.logBtn}
+              onPress={clearLogs}
+            >
+              <Text style={styles.logBtnText}>Clear</Text>
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.logFooter}>
             <Text style={styles.logHint}>
               💡 Look for "BG5S" in logs to see if it's being discovered
@@ -817,5 +844,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#888",
     textAlign: "center",
+  },logButtonRow: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: "#252540",
+  },
+  logBtn: {
+    flex: 1,
+    backgroundColor: "#333",
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+  logBtnYellow: {
+    backgroundColor: "#f9a825",
+  },
+  logBtnText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 14,
   },
 });
