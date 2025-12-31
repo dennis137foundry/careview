@@ -887,6 +887,26 @@ export default function CaptureScreen({ route, navigation }: any) {
             )}
           </ScrollView>
           <View style={styles.debugButtons}>
+
+          <TouchableOpacity
+    style={[styles.debugBtn, styles.debugBtnYellow]}
+    onPress={async () => {
+      addLog("🔧 Direct connect to BG5S MAC: 004D3229FEE0");
+      try {
+        // Make sure BG5S controller is ready
+        await IHealthDevices.authenticate("license.pem");
+        addLog("✅ Authenticated");
+        
+        // Try direct connect without scan
+        const result = await IHealthDevices.connectDevice("004D3229FEE0", "BG5S");
+        addLog(`✅ Connect result: ${JSON.stringify(result)}`);
+      } catch (e: any) {
+        addLog(`❌ Direct connect error: ${e.message}`);
+      }
+    }}
+  >
+    <Text style={styles.debugBtnText}>BG5S Direct</Text>
+  </TouchableOpacity>
             <TouchableOpacity
               style={[styles.debugBtn, styles.debugBtnBlue]}
               onPress={async () => {
@@ -1264,5 +1284,8 @@ const styles = StyleSheet.create({
   backButtonText: {
     color: "#fff",
     fontSize: 16,
+  },
+  debugBtnYellow: {
+    backgroundColor: "#f9a825",
   },
 });
