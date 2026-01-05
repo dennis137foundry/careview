@@ -80,31 +80,31 @@ const MEAL_TIMING_OPTIONS = [
  */
 function getDefaultMealTiming(): string {
   const hour = new Date().getHours();
-  
+
   // 5am-7am: Fasting (early morning, likely before eating)
   if (hour >= 5 && hour < 7) return "fasting";
-  
+
   // 7am-8am: Before breakfast
   if (hour >= 7 && hour < 8) return "pre_breakfast";
-  
+
   // 8am-10am: After breakfast
   if (hour >= 8 && hour < 10) return "post_breakfast";
-  
+
   // 10am-12pm: Before lunch
   if (hour >= 10 && hour < 12) return "pre_lunch";
-  
+
   // 12pm-2pm: After lunch
   if (hour >= 12 && hour < 14) return "post_lunch";
-  
+
   // 2pm-5pm: Before dinner (afternoon)
   if (hour >= 14 && hour < 17) return "pre_dinner";
-  
+
   // 5pm-8pm: After dinner
   if (hour >= 17 && hour < 20) return "post_dinner";
-  
+
   // 8pm-10pm: Bedtime
   if (hour >= 20 && hour < 22) return "bedtime";
-  
+
   // 10pm-5am: Fasting (night/early morning)
   return "fasting";
 }
@@ -113,7 +113,7 @@ function getDefaultMealTiming(): string {
  * Get display label for meal timing
  */
 function getMealTimingLabel(id: string): string {
-  const option = MEAL_TIMING_OPTIONS.find(o => o.id === id);
+  const option = MEAL_TIMING_OPTIONS.find((o) => o.id === id);
   return option?.label || id;
 }
 
@@ -130,14 +130,18 @@ export default function CaptureScreen({ route, navigation }: any) {
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [showDebug, setShowDebug] = useState(false);
   const [lastReading, setLastReading] = useState<any>(null);
-  const [syncStatus, setSyncStatus] = useState<"" | "syncing" | "synced" | "pending">("");
+  const [syncStatus, setSyncStatus] = useState<
+    "" | "syncing" | "synced" | "pending"
+  >("");
   const scrollRef = useRef<ScrollView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetMacRef = useRef<string>("");
 
   // BG Meal Timing Modal State
   const [showMealTimingModal, setShowMealTimingModal] = useState(false);
-  const [selectedMealTiming, setSelectedMealTiming] = useState<string>(getDefaultMealTiming());
+  const [selectedMealTiming, setSelectedMealTiming] = useState<string>(
+    getDefaultMealTiming()
+  );
   const [pendingGlucoseReading, setPendingGlucoseReading] = useState<any>(null);
 
   // Animations
@@ -170,11 +174,11 @@ export default function CaptureScreen({ route, navigation }: any) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
-    
+
     // Stop any ongoing scan/connection
     IHealthDevices?.stopScan?.().catch(() => {});
     IHealthDevices?.disconnectAll?.().catch(() => {});
-    
+
     // Reset all state
     setBusy(false);
     setPhase("idle");
@@ -183,12 +187,12 @@ export default function CaptureScreen({ route, navigation }: any) {
     setLastReading(null);
     setSyncStatus("");
     targetMacRef.current = "";
-    
+
     // Reset meal timing state
     setShowMealTimingModal(false);
     setSelectedMealTiming(getDefaultMealTiming());
     setPendingGlucoseReading(null);
-    
+
     // Reset animations
     pulseAnim.setValue(1);
     ringRotate.setValue(0);
@@ -197,14 +201,22 @@ export default function CaptureScreen({ route, navigation }: any) {
     waveAnim.setValue(0);
     successScale.setValue(0);
     progressAnim.setValue(0);
-  }, [pulseAnim, ringRotate, fadeAnim, scaleAnim, waveAnim, successScale, progressAnim]);
+  }, [
+    pulseAnim,
+    ringRotate,
+    fadeAnim,
+    scaleAnim,
+    waveAnim,
+    successScale,
+    progressAnim,
+  ]);
 
   // Reset state when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       // Reset state when screen gains focus
       resetState();
-      
+
       // Play entry animation after reset
       Animated.parallel([
         Animated.timing(fadeAnim, {
@@ -340,7 +352,10 @@ export default function CaptureScreen({ route, navigation }: any) {
 
         try {
           await IHealthDevices.stopScan();
-          const result = await IHealthDevices.connectDevice(data.mac, data.type);
+          const result = await IHealthDevices.connectDevice(
+            data.mac,
+            data.type
+          );
           addLog(`Connect initiated: ${result}`);
         } catch (e: any) {
           addLog(`Connect error: ${e.message}`);
@@ -429,7 +444,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       const kg = parseFloat(data.weight) || 0;
-      const lbs = Math.round(kg * 2.20462 * 10) / 10;
+      const lbs = Math.floor(kg * 2.20462 * 10) / 10;
       dispatch(
         addReadingAndPersist({
           type: "SCALE",
@@ -449,31 +464,28 @@ export default function CaptureScreen({ route, navigation }: any) {
   );
 
   // For BG: Show modal first, then save with selected meal timing
-  const handleGlucoseReading = useCallback(
-    (data: any) => {
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      
-      // Store the reading data and show the meal timing modal
-      setPendingGlucoseReading(data);
-      setSelectedMealTiming(getDefaultMealTiming()); // Reset to time-based default
-      setShowMealTimingModal(true);
-      
-      // Update UI to show we got a reading
-      setStatusText(`${data.value} ${data.unit || "mg/dL"}`);
-      setBusy(false);
-    },
-    []
-  );
+  const handleGlucoseReading = useCallback((data: any) => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+    // Store the reading data and show the meal timing modal
+    setPendingGlucoseReading(data);
+    setSelectedMealTiming(getDefaultMealTiming()); // Reset to time-based default
+    setShowMealTimingModal(true);
+
+    // Update UI to show we got a reading
+    setStatusText(`${data.value} ${data.unit || "mg/dL"}`);
+    setBusy(false);
+  }, []);
 
   // Called when user confirms meal timing selection
   const confirmGlucoseReading = useCallback(() => {
     if (!pendingGlucoseReading) return;
-    
+
     const data = pendingGlucoseReading;
     const mealTimingLabel = getMealTimingLabel(selectedMealTiming);
-    
+
     addLog(`💉 Saving glucose reading with meal timing: ${mealTimingLabel}`);
-    
+
     dispatch(
       addReadingAndPersist({
         type: "BG",
@@ -484,18 +496,26 @@ export default function CaptureScreen({ route, navigation }: any) {
         measurementCondition: mealTimingLabel, // This gets sent to EMR
       })
     );
-    
-    setLastReading({ 
-      value: data.value, 
+
+    setLastReading({
+      value: data.value,
       unit: data.unit || "mg/dL",
       mealTiming: mealTimingLabel,
     });
-    
+
     setShowMealTimingModal(false);
     setPendingGlucoseReading(null);
     playSuccessAnimation();
     syncToEMR();
-  }, [pendingGlucoseReading, selectedMealTiming, device, dispatch, addLog, playSuccessAnimation, syncToEMR]);
+  }, [
+    pendingGlucoseReading,
+    selectedMealTiming,
+    device,
+    dispatch,
+    addLog,
+    playSuccessAnimation,
+    syncToEMR,
+  ]);
 
   // Listen for readings
   useEffect(() => {
@@ -522,6 +542,9 @@ export default function CaptureScreen({ route, navigation }: any) {
     return () => subs.forEach((s) => s.remove());
   }, [addLog, saveBPReading, saveWeightReading, handleGlucoseReading]);
 
+  // ============================================================================
+  // START CAPTURE - Main function
+  // ============================================================================
   const start = useCallback(async () => {
     if (!device) {
       Alert.alert("Error", "Device not found");
@@ -540,7 +563,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     const mac = device.mac || device.id;
     targetMacRef.current = mac;
-    addLog(`Starting for ${device.name}, MAC: ${mac}`);
+    addLog(`Starting for ${device.name}, MAC: ${mac}, Model: ${device.model}`);
 
     setPhase("auth");
     setStatusText("Initializing...");
@@ -553,6 +576,51 @@ export default function CaptureScreen({ route, navigation }: any) {
       addLog(`Auth note: ${e.message}`);
     }
 
+    // =========================================================================
+    // BG5S: Direct connect (SDK scan doesn't discover this device)
+    // =========================================================================
+    if (device.model === "BG5S") {
+      addLog("🔧 BG5S detected - using direct connect (SDK scan workaround)");
+      setPhase("connect");
+      setStatusText("Waking up meter...");
+
+      try {
+        const result = await IHealthDevices.connectDevice(mac, "BG5S");
+        addLog(`✅ Connect initiated: ${JSON.stringify(result)}`);
+
+        // Update UI to prompt for test strip
+        setPhase("measure");
+        setStatusText("Insert test strip");
+      } catch (e: any) {
+        addLog(`❌ Connect error: ${e.message}`);
+        Alert.alert(
+          "Connection Error",
+          `Could not connect to BG5S: ${e.message}\n\nMake sure the meter is nearby and has battery.`
+        );
+        setBusy(false);
+        setPhase("idle");
+        setStatusText("");
+        return;
+      }
+
+      // Set timeout for BG5S (2 minutes for glucose test)
+      timeoutRef.current = setTimeout(() => {
+        addLog("⏰ Timeout - no reading received");
+        setBusy(false);
+        setPhase("idle");
+        setStatusText("");
+        Alert.alert(
+          "Timeout",
+          "No reading received. Make sure you inserted a test strip and applied blood."
+        );
+      }, 120000);
+
+      return; // Skip the normal scan flow
+    }
+
+    // =========================================================================
+    // All other devices: Normal scan flow (BP, Scale, BG5)
+    // =========================================================================
     setPhase("scan");
     if (device.type === "SCALE") {
       setStatusText("Step on scale to wake it");
@@ -563,13 +631,12 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
 
     try {
-      addLog("Starting scan for all device types...");
+      addLog("Starting scan...");
       await IHealthDevices.startScan([
         "BP3L",
         "BP5",
         "BP5S",
         "BG5",
-        "BG5S",
         "HS2S",
         "HS2",
         "HS4S",
@@ -650,7 +717,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         return "🔗 Connecting...";
       case "measure":
         if (device.type === "SCALE") return "🦶 Hold still...";
-        if (device.type === "BG") return "🩸 Apply blood sample";
+        if (device.type === "BG") return "🩸 Insert strip & apply blood";
         return "💪 Keep arm relaxed...";
       case "success":
         return "✨ Reading saved!";
@@ -689,7 +756,11 @@ export default function CaptureScreen({ route, navigation }: any) {
             </View>
             <Text style={styles.readingUnit}>mmHg</Text>
             <View style={styles.pulseContainer}>
-              <MaterialIcons name="favorite" size={18} color={theme.secondary} />
+              <MaterialIcons
+                name="favorite"
+                size={18}
+                color={theme.secondary}
+              />
               <Text style={styles.pulseText}>{lastReading.pulse} bpm</Text>
             </View>
             {syncStatus !== "" && (
@@ -742,7 +813,9 @@ export default function CaptureScreen({ route, navigation }: any) {
             {lastReading.mealTiming && (
               <View style={styles.mealTimingBadge}>
                 <MaterialIcons name="schedule" size={16} color="#43A047" />
-                <Text style={styles.mealTimingText}>{lastReading.mealTiming}</Text>
+                <Text style={styles.mealTimingText}>
+                  {lastReading.mealTiming}
+                </Text>
               </View>
             )}
             {syncStatus !== "" && (
@@ -965,20 +1038,27 @@ export default function CaptureScreen({ route, navigation }: any) {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <MaterialIcons name="schedule" size={28} color="#43A047" />
-              <Text style={styles.modalTitle}>When did you take this reading?</Text>
+              <Text style={styles.modalTitle}>
+                When did you take this reading?
+              </Text>
             </View>
-            
+
             <Text style={styles.modalSubtitle}>
-              Select the time period that best describes when you took this glucose reading
+              Select the time period that best describes when you took this
+              glucose reading
             </Text>
 
-            <ScrollView style={styles.optionsContainer} showsVerticalScrollIndicator={false}>
+            <ScrollView
+              style={styles.optionsContainer}
+              showsVerticalScrollIndicator={false}
+            >
               {MEAL_TIMING_OPTIONS.map((option) => (
                 <TouchableOpacity
                   key={option.id}
                   style={[
                     styles.optionButton,
-                    selectedMealTiming === option.id && styles.optionButtonSelected,
+                    selectedMealTiming === option.id &&
+                      styles.optionButtonSelected,
                   ]}
                   onPress={() => setSelectedMealTiming(option.id)}
                   activeOpacity={0.7}
@@ -986,12 +1066,15 @@ export default function CaptureScreen({ route, navigation }: any) {
                   <MaterialIcons
                     name={option.icon as any}
                     size={24}
-                    color={selectedMealTiming === option.id ? "#fff" : "#43A047"}
+                    color={
+                      selectedMealTiming === option.id ? "#fff" : "#43A047"
+                    }
                   />
                   <Text
                     style={[
                       styles.optionText,
-                      selectedMealTiming === option.id && styles.optionTextSelected,
+                      selectedMealTiming === option.id &&
+                        styles.optionTextSelected,
                     ]}
                   >
                     {option.label}
@@ -1051,26 +1134,25 @@ export default function CaptureScreen({ route, navigation }: any) {
             )}
           </ScrollView>
           <View style={styles.debugButtons}>
-
-          <TouchableOpacity
-    style={[styles.debugBtn, styles.debugBtnYellow]}
-    onPress={async () => {
-      addLog("🔧 Direct connect to BG5S MAC: 004D3229FEE0");
-      try {
-        // Make sure BG5S controller is ready
-        await IHealthDevices.authenticate("license.pem");
-        addLog("✅ Authenticated");
-        
-        // Try direct connect without scan
-        const result = await IHealthDevices.connectDevice("004D3229FEE0", "BG5S");
-        addLog(`✅ Connect result: ${JSON.stringify(result)}`);
-      } catch (e: any) {
-        addLog(`❌ Direct connect error: ${e.message}`);
-      }
-    }}
-  >
-    <Text style={styles.debugBtnText}>BG5S Direct</Text>
-  </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.debugBtn, styles.debugBtnYellow]}
+              onPress={async () => {
+                addLog("🔧 Direct connect to BG5S MAC: 004D3229FEE0");
+                try {
+                  await IHealthDevices.authenticate("license.pem");
+                  addLog("✅ Authenticated");
+                  const result = await IHealthDevices.connectDevice(
+                    "004D3229FEE0",
+                    "BG5S"
+                  );
+                  addLog(`✅ Connect result: ${JSON.stringify(result)}`);
+                } catch (e: any) {
+                  addLog(`❌ Direct connect error: ${e.message}`);
+                }
+              }}
+            >
+              <Text style={styles.debugBtnText}>BG5S Direct</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.debugBtn, styles.debugBtnBlue]}
               onPress={async () => {
@@ -1094,7 +1176,10 @@ export default function CaptureScreen({ route, navigation }: any) {
               onPress={() => {
                 const logText = debugLogs.join("\n");
                 Clipboard.setString(logText);
-                Alert.alert("Copied!", `${debugLogs.length} log lines copied to clipboard.`);
+                Alert.alert(
+                  "Copied!",
+                  `${debugLogs.length} log lines copied to clipboard.`
+                );
               }}
             >
               <Text style={styles.debugBtnText}>Copy</Text>
