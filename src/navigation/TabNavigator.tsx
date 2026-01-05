@@ -24,10 +24,10 @@ export default function TabNavigator() {
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: "#002040", // navbar background
+          backgroundColor: "#002040",
         },
-        tabBarActiveTintColor: "#ffffff",   // active icon color
-        tabBarInactiveTintColor: "#ffffff", // inactive icon color
+        tabBarActiveTintColor: "#ffffff",
+        tabBarInactiveTintColor: "#ffffff",
         tabBarIcon: ({ color, size }) => {
           let iconName: string = "help-outline";
 
@@ -45,10 +45,42 @@ export default function TabNavigator() {
         },
       })}
     >
-      <Tab.Screen name="Dashboard" component={DashboardNavigator} />
-      <Tab.Screen name="Devices" component={DevicesNavigator} />
-      <Tab.Screen name="History" component={HistoryNavigator} />
-      <Tab.Screen name="Profile" component={ProfileNavigator} />
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardNavigator}
+        listeners={({ navigation }: any) => ({
+          tabPress: () => {
+            navigation.navigate("Dashboard", { screen: "DashboardMain" });
+          },
+        })}
+      />
+      <Tab.Screen
+        name="Devices"
+        component={DevicesNavigator}
+        listeners={({ navigation }: any) => ({
+          tabPress: () => {
+            navigation.navigate("Devices", { screen: "DevicesMain" });
+          },
+        })}
+      />
+      <Tab.Screen
+        name="History"
+        component={HistoryNavigator}
+        listeners={({ navigation }: any) => ({
+          tabPress: () => {
+            navigation.navigate("History", { screen: "HistoryMain" });
+          },
+        })}
+      />
+      <Tab.Screen
+        name="Profile"
+        component={ProfileNavigator}
+        listeners={({ navigation }: any) => ({
+          tabPress: () => {
+            navigation.navigate("Profile", { screen: "ProfileMain" });
+          },
+        })}
+      />
     </Tab.Navigator>
   );
 }
