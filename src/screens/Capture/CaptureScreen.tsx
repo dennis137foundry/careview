@@ -13,6 +13,7 @@ import {
   Dimensions,
   StatusBar,
   Share,
+  Modal,
 } from "react-native";
 import Clipboard from "@react-native-clipboard/clipboard";
 import LinearGradient from "react-native-linear-gradient";
@@ -60,6 +61,62 @@ const deviceThemes: Record<
   },
 };
 
+// ============================================================================
+// Meal Timing Options for Blood Glucose
+// ============================================================================
+const MEAL_TIMING_OPTIONS = [
+  { id: "fasting", label: "Fasting", icon: "nightlight-round" },
+  { id: "pre_breakfast", label: "Before Breakfast", icon: "wb-sunny" },
+  { id: "post_breakfast", label: "After Breakfast", icon: "free-breakfast" },
+  { id: "pre_lunch", label: "Before Lunch", icon: "lunch-dining" },
+  { id: "post_lunch", label: "After Lunch", icon: "restaurant" },
+  { id: "pre_dinner", label: "Before Dinner", icon: "dinner-dining" },
+  { id: "post_dinner", label: "After Dinner", icon: "tapas" },
+  { id: "bedtime", label: "Bedtime", icon: "bedtime" },
+];
+
+/**
+ * Auto-select the most likely meal timing based on current time
+ */
+function getDefaultMealTiming(): string {
+  const hour = new Date().getHours();
+  
+  // 5am-7am: Fasting (early morning, likely before eating)
+  if (hour >= 5 && hour < 7) return "fasting";
+  
+  // 7am-8am: Before breakfast
+  if (hour >= 7 && hour < 8) return "pre_breakfast";
+  
+  // 8am-10am: After breakfast
+  if (hour >= 8 && hour < 10) return "post_breakfast";
+  
+  // 10am-12pm: Before lunch
+  if (hour >= 10 && hour < 12) return "pre_lunch";
+  
+  // 12pm-2pm: After lunch
+  if (hour >= 12 && hour < 14) return "post_lunch";
+  
+  // 2pm-5pm: Before dinner (afternoon)
+  if (hour >= 14 && hour < 17) return "pre_dinner";
+  
+  // 5pm-8pm: After dinner
+  if (hour >= 17 && hour < 20) return "post_dinner";
+  
+  // 8pm-10pm: Bedtime
+  if (hour >= 20 && hour < 22) return "bedtime";
+  
+  // 10pm-5am: Fasting (night/early morning)
+  return "fasting";
+}
+
+/**
+ * Get display label for meal timing
+ */
+function getMealTimingLabel(id: string): string {
+  const option = MEAL_TIMING_OPTIONS.find(o => o.id === id);
+  return option?.label || id;
+}
+
 export default function CaptureScreen({ route, navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
@@ -77,6 +134,11 @@ export default function CaptureScreen({ route, navigation }: any) {
   const scrollRef = useRef<ScrollView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetMacRef = useRef<string>("");
+
+  // BG Meal Timing Modal State
+  const [showMealTimingModal, setShowMealTimingModal] = useState(false);
+  const [selectedMealTiming, setSelectedMealTiming] = useState<string>(getDefaultMealTiming());
+  const [pendingGlucoseReading, setPendingGlucoseReading] = useState<any>(null);
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -121,6 +183,11 @@ export default function CaptureScreen({ route, navigation }: any) {
     setLastReading(null);
     setSyncStatus("");
     targetMacRef.current = "";
+    
+    // Reset meal timing state
+    setShowMealTimingModal(false);
+    setSelectedMealTiming(getDefaultMealTiming());
+    setPendingGlucoseReading(null);
     
     // Reset animations
     pulseAnim.setValue(1);
@@ -342,6 +409,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           value2: data.diastolic,
           heartRate: data.pulse,
           unit: "mmHg",
+          // Note: heartRate is stored separately, vitalsSyncService maps it to measurement_condition
         })
       );
       setLastReading({
@@ -380,26 +448,54 @@ export default function CaptureScreen({ route, navigation }: any) {
     [device, dispatch, playSuccessAnimation, syncToEMR]
   );
 
-  const saveGlucoseReading = useCallback(
+  // For BG: Show modal first, then save with selected meal timing
+  const handleGlucoseReading = useCallback(
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      dispatch(
-        addReadingAndPersist({
-          type: "BG",
-          deviceId: device?.id || "",
-          deviceName: device?.name || "Glucose Meter",
-          value: data.value,
-          unit: data.unit || "mg/dL",
-        })
-      );
-      setLastReading({ value: data.value, unit: data.unit || "mg/dL" });
-      setStatusText(`${data.value}`);
+      
+      // Store the reading data and show the meal timing modal
+      setPendingGlucoseReading(data);
+      setSelectedMealTiming(getDefaultMealTiming()); // Reset to time-based default
+      setShowMealTimingModal(true);
+      
+      // Update UI to show we got a reading
+      setStatusText(`${data.value} ${data.unit || "mg/dL"}`);
       setBusy(false);
-      playSuccessAnimation();
-      syncToEMR();
     },
-    [device, dispatch, playSuccessAnimation, syncToEMR]
+    []
   );
+
+  // Called when user confirms meal timing selection
+  const confirmGlucoseReading = useCallback(() => {
+    if (!pendingGlucoseReading) return;
+    
+    const data = pendingGlucoseReading;
+    const mealTimingLabel = getMealTimingLabel(selectedMealTiming);
+    
+    addLog(`💉 Saving glucose reading with meal timing: ${mealTimingLabel}`);
+    
+    dispatch(
+      addReadingAndPersist({
+        type: "BG",
+        deviceId: device?.id || "",
+        deviceName: device?.name || "Glucose Meter",
+        value: data.value,
+        unit: data.unit || "mg/dL",
+        measurementCondition: mealTimingLabel, // This gets sent to EMR
+      })
+    );
+    
+    setLastReading({ 
+      value: data.value, 
+      unit: data.unit || "mg/dL",
+      mealTiming: mealTimingLabel,
+    });
+    
+    setShowMealTimingModal(false);
+    setPendingGlucoseReading(null);
+    playSuccessAnimation();
+    syncToEMR();
+  }, [pendingGlucoseReading, selectedMealTiming, device, dispatch, addLog, playSuccessAnimation, syncToEMR]);
 
   // Listen for readings
   useEffect(() => {
@@ -416,7 +512,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       }),
       emitter.addListener("onBloodGlucoseReading", (data: any) => {
         addLog(`🎉 Glucose: ${data.value} ${data.unit}`);
-        saveGlucoseReading(data);
+        handleGlucoseReading(data);
       }),
       emitter.addListener("onError", (data: any) => {
         addLog(`❌ Error: ${data.message || JSON.stringify(data)}`);
@@ -424,7 +520,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, saveBPReading, saveWeightReading, saveGlucoseReading]);
+  }, [addLog, saveBPReading, saveWeightReading, handleGlucoseReading]);
 
   const start = useCallback(async () => {
     if (!device) {
@@ -643,6 +739,12 @@ export default function CaptureScreen({ route, navigation }: any) {
           >
             <Text style={styles.glucoseValue}>{lastReading.value}</Text>
             <Text style={styles.readingUnit}>{lastReading.unit}</Text>
+            {lastReading.mealTiming && (
+              <View style={styles.mealTimingBadge}>
+                <MaterialIcons name="schedule" size={16} color="#43A047" />
+                <Text style={styles.mealTimingText}>{lastReading.mealTiming}</Text>
+              </View>
+            )}
             {syncStatus !== "" && (
               <Text
                 style={[
@@ -849,6 +951,68 @@ export default function CaptureScreen({ route, navigation }: any) {
           </View>
         </Animated.View>
       </ScrollView>
+
+      {/* Meal Timing Modal for Blood Glucose */}
+      <Modal
+        visible={showMealTimingModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          // Don't allow dismissing without selection - user must pick one
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <MaterialIcons name="schedule" size={28} color="#43A047" />
+              <Text style={styles.modalTitle}>When did you take this reading?</Text>
+            </View>
+            
+            <Text style={styles.modalSubtitle}>
+              Select the time period that best describes when you took this glucose reading
+            </Text>
+
+            <ScrollView style={styles.optionsContainer} showsVerticalScrollIndicator={false}>
+              {MEAL_TIMING_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option.id}
+                  style={[
+                    styles.optionButton,
+                    selectedMealTiming === option.id && styles.optionButtonSelected,
+                  ]}
+                  onPress={() => setSelectedMealTiming(option.id)}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons
+                    name={option.icon as any}
+                    size={24}
+                    color={selectedMealTiming === option.id ? "#fff" : "#43A047"}
+                  />
+                  <Text
+                    style={[
+                      styles.optionText,
+                      selectedMealTiming === option.id && styles.optionTextSelected,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                  {selectedMealTiming === option.id && (
+                    <MaterialIcons name="check-circle" size={24} color="#fff" />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={styles.confirmButton}
+              onPress={confirmGlucoseReading}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.confirmButtonText}>Confirm & Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Debug Panel */}
       {showDebug && (
@@ -1140,6 +1304,21 @@ const styles = StyleSheet.create({
     fontWeight: "200",
     color: "#fff",
   },
+  mealTimingBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: "rgba(67, 160, 71, 0.15)",
+    borderRadius: 20,
+    gap: 6,
+  },
+  mealTimingText: {
+    fontSize: 14,
+    color: "#B9F6CA",
+    fontWeight: "500",
+  },
   syncStatusText: {
     fontSize: 14,
     color: "#888",
@@ -1196,6 +1375,81 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "500",
   },
+  // Meal Timing Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    justifyContent: "flex-end",
+  },
+  modalContent: {
+    backgroundColor: "#1a1a2e",
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    maxHeight: "80%",
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 8,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#fff",
+    flex: 1,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: "#888",
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  optionsContainer: {
+    maxHeight: 350,
+  },
+  optionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(67, 160, 71, 0.1)",
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+    borderWidth: 2,
+    borderColor: "transparent",
+    gap: 12,
+  },
+  optionButtonSelected: {
+    backgroundColor: "#43A047",
+    borderColor: "#66BB6A",
+  },
+  optionText: {
+    fontSize: 16,
+    color: "#fff",
+    flex: 1,
+    fontWeight: "500",
+  },
+  optionTextSelected: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  confirmButton: {
+    backgroundColor: "#43A047",
+    borderRadius: 28,
+    paddingVertical: 16,
+    alignItems: "center",
+    marginTop: 16,
+  },
+  confirmButtonText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "600",
+  },
+  // Debug Panel Styles
   debugPanel: {
     position: "absolute",
     top: 0,

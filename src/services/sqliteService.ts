@@ -69,7 +69,8 @@ export function initDB() {
       heartRate REAL,
       unit TEXT,
       ts INTEGER,
-      synced INTEGER DEFAULT 0
+      synced INTEGER DEFAULT 0,
+      measurementCondition TEXT
     );
   `);
 
@@ -77,6 +78,14 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE readings ADD COLUMN synced INTEGER DEFAULT 0;");
     console.log("✅ Added 'synced' column to readings");
+  } catch (e) {
+    // Column already exists, ignore
+  }
+
+  // Migration: Add measurementCondition column for BG meal timing and BP pulse info
+  try {
+    db.execute("ALTER TABLE readings ADD COLUMN measurementCondition TEXT;");
+    console.log("✅ Added 'measurementCondition' column to readings");
   } catch (e) {
     // Column already exists, ignore
   }
@@ -261,6 +270,7 @@ export type SavedReading = {
   unit: string;
   ts: number;
   synced?: boolean;
+  measurementCondition?: string; // For BG: meal timing, For BP: pulse is stored separately but this can be used for extra context
 };
 
 export function saveReading(r: Omit<SavedReading, 'id' | 'ts'> & { id?: string; ts?: number }) {
@@ -268,7 +278,7 @@ export function saveReading(r: Omit<SavedReading, 'id' | 'ts'> & { id?: string; 
   const ts = r.ts || Date.now();
   try {
     db.execute(
-      "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+      "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
       [
         id,
         r.deviceId,
@@ -280,9 +290,10 @@ export function saveReading(r: Omit<SavedReading, 'id' | 'ts'> & { id?: string; 
         r.unit,
         ts,
         r.synced ? 1 : 0,
+        r.measurementCondition ?? null,
       ]
     );
-    console.log("✅ Reading saved:", id);
+    console.log("✅ Reading saved:", id, "measurementCondition:", r.measurementCondition);
   } catch (e) {
     console.error("❌ Failed to save reading:", e);
   }

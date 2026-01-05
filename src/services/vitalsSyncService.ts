@@ -9,6 +9,10 @@
  * - Exponential backoff retry for failures
  * - Background sync of pending readings
  * - Network-aware (pauses when offline)
+ * 
+ * Updates:
+ * - BP readings: heartRate sent as measurement_condition (e.g., "72 bpm")
+ * - BG readings: meal timing sent as measurement_condition
  */
 
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
@@ -175,6 +179,7 @@ export function initNetworkMonitoring(): () => void {
  */
 async function sendToApi(payload: SyncPayload): Promise<SyncResponse> {
   console.log(`[VitalsSync] Sending ${payload.vitals.length} readings to API...`);
+  console.log(`[VitalsSync] Payload:`, JSON.stringify(payload, null, 2));
 
   const response = await fetch(CONFIG.apiUrl, {
     method: 'POST',
@@ -196,8 +201,23 @@ async function sendToApi(payload: SyncPayload): Promise<SyncResponse> {
 
 /**
  * Convert SavedReading to API payload format
+ * 
+ * Key mapping:
+ * - BP: heartRate -> measurement_condition (e.g., "72 bpm")
+ * - BG: measurementCondition -> measurement_condition (meal timing)
+ * - SCALE: no measurement_condition
  */
 function readingToPayload(reading: SavedReading): VitalPayload {
+  let measurementCondition: string | null = null;
+
+  if (reading.type === 'BP' && reading.heartRate) {
+    // For BP, send pulse/heart rate as measurement_condition
+    measurementCondition = `${reading.heartRate} bpm`;
+  } else if (reading.type === 'BG' && reading.measurementCondition) {
+    // For BG, send the meal timing selection
+    measurementCondition = reading.measurementCondition;
+  }
+
   return {
     id: reading.id,
     type: reading.type,
@@ -206,6 +226,7 @@ function readingToPayload(reading: SavedReading): VitalPayload {
     heartRate: reading.heartRate ?? null,
     unit: reading.unit,
     ts: reading.ts,
+    measurement_condition: measurementCondition,
   };
 }
 

@@ -6,7 +6,6 @@ import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import RNBootSplash from "react-native-bootsplash";
 import { StatusBar } from "react-native";
-
 import { store } from "./src/redux/store";
 import { initDB } from "./src/services/sqliteService";
 import { loadUser } from "./src/redux/userSlice";

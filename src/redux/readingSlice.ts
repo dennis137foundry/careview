@@ -10,7 +10,13 @@ export const addReadingAndPersist = createAsyncThunk(
   'readings/addAndPersist',
   async (payload: Omit<SavedReading, 'id'|'ts'>, { rejectWithValue }) => {
     try {
-      const r: SavedReading = { id: nanoid(), ts: Date.now(), ...payload };
+      const r: SavedReading = { 
+        id: nanoid(), 
+        ts: Date.now(), 
+        ...payload,
+        // Ensure measurementCondition is included if provided
+        measurementCondition: payload.measurementCondition,
+      };
       saveReading(r);
       return r;
     } catch (e:any) {

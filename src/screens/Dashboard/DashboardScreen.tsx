@@ -130,7 +130,8 @@ export default function DashboardScreen() {
           showsVerticalScrollIndicator={false}
         >
         
-        <Text style={styles.welcome}>Welcome to CareView</Text>
+        
+        <Text style={styles.sectionTitle}>{deviceCount} {deviceCount === 1 ? "Device" : "Devices"} Saved</Text>
         
           {/* --- Device Card --- */}
           <View style={styles.deviceCard}>
@@ -161,9 +162,6 @@ export default function DashboardScreen() {
                     );
                   })}
                 </View>
-                <Text style={styles.deviceLabel}>
-                  {deviceCount} {deviceCount === 1 ? "Device" : "Devices"} Saved
-                </Text>
                 {deviceCount > 4 && (
                   <Text style={styles.moreDevices}>
                     +{deviceCount - 4} more
@@ -180,7 +178,7 @@ export default function DashboardScreen() {
                 <Text style={styles.noDevicesText}>No devices added yet</Text>
                 <View style={styles.addDevicePrompt}>
                   <MaterialIcons name="add-circle" size={20} color="#00509f" />
-                  <Text style={styles.addDeviceText}>Tap to add your first device</Text>
+                  <Text style={styles.addDeviceText}>Tap here to add your first device.</Text>
                 </View>
               </TouchableOpacity>
             )}

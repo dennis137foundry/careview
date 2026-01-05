@@ -1,3 +1,4 @@
+/* eslint-disable react/no-unstable-nested-components */
 // src/navigation/TabNavigator.tsx
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
