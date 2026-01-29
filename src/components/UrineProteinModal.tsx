@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   Modal,
   ActivityIndicator,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import {
@@ -77,47 +80,6 @@ export default function UrineProteinModal({
     onDefer();
   };
 
-  const ResultOption = ({
-    value,
-    label,
-    color,
-    selected,
-    onPress,
-  }: {
-    value: string;
-    label: string;
-    color: string;
-    selected: boolean;
-    onPress: () => void;
-  }) => (
-    <TouchableOpacity
-      style={[
-        styles.resultOption,
-        selected && { borderColor: color, backgroundColor: `${color}15` },
-      ]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <View
-        style={[
-          styles.resultDot,
-          { backgroundColor: selected ? color : "#ddd" },
-        ]}
-      />
-      <Text
-        style={[
-          styles.resultLabel,
-          selected && { color, fontWeight: "700" },
-        ]}
-      >
-        {label}
-      </Text>
-      {selected && (
-        <MaterialIcons name="check-circle" size={20} color={color} />
-      )}
-    </TouchableOpacity>
-  );
-
   return (
     <Modal
       visible={visible}
@@ -126,7 +88,15 @@ export default function UrineProteinModal({
       onRequestClose={handleDefer}
     >
       <View style={styles.overlay}>
-        <View style={styles.container}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.container}
+        >
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+            contentContainerStyle={styles.scrollContent}
+          >
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.iconContainer}>
@@ -146,17 +116,39 @@ export default function UrineProteinModal({
             </Text>
           </View>
 
-          {/* Result Options */}
+          {/* Result Options - 2 column grid */}
           <View style={styles.optionsGrid}>
             {PROTEIN_OPTIONS.map((option) => (
-              <ResultOption
+              <TouchableOpacity
                 key={option.value}
-                value={option.value}
-                label={option.label}
-                color={option.color}
-                selected={selectedResult === option.value}
+                style={[
+                  styles.resultOption,
+                  selectedResult === option.value && { 
+                    borderColor: option.color, 
+                    backgroundColor: `${option.color}15` 
+                  },
+                ]}
                 onPress={() => setSelectedResult(option.value)}
-              />
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.resultDot,
+                    { backgroundColor: selectedResult === option.value ? option.color : "#ddd" },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.resultLabel,
+                    selectedResult === option.value && { color: option.color, fontWeight: "700" },
+                  ]}
+                >
+                  {option.label}
+                </Text>
+                {selectedResult === option.value && (
+                  <MaterialIcons name="check-circle" size={18} color={option.color} />
+                )}
+              </TouchableOpacity>
             ))}
           </View>
 
@@ -200,7 +192,8 @@ export default function UrineProteinModal({
           <Text style={styles.reminderNote}>
             You'll be reminded every 72 hours to record a result.
           </Text>
-        </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </View>
     </Modal>
   );
@@ -216,10 +209,13 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
+    maxHeight: "90%",
+    overflow: "hidden",
+  },
+  scrollContent: {
     paddingTop: 24,
     paddingHorizontal: 24,
     paddingBottom: 40,
-    maxHeight: "85%",
   },
   header: {
     alignItems: "center",
@@ -262,27 +258,31 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   optionsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
     marginBottom: 16,
   },
   resultOption: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 14,
+    width: "48%",
+    padding: 12,
     borderRadius: 12,
     borderWidth: 2,
     borderColor: "#e0e0e0",
     backgroundColor: "#fafafa",
-    marginBottom: 8,
+    marginBottom: 10,
   },
   resultDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    marginRight: 12,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 8,
   },
   resultLabel: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
     color: "#333",
   },
   selectionSummary: {
