@@ -1,567 +1,303 @@
 /* eslint-disable react-native/no-inline-styles */
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
-  StyleSheet,
-  TouchableOpacity,
-  Alert,
   FlatList,
+  TouchableOpacity,
+  StyleSheet,
   ActivityIndicator,
-  Platform,
-  ScrollView,
+  Alert,
   Modal,
+  TextInput,
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
-import { addDevice } from "../../redux/deviceSlice";
-import type { AppDispatch, RootState } from "../../redux/store";
+import { useNavigation } from "@react-navigation/native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import {
-  NativeModules,
-  NativeEventEmitter,
-  PermissionsAndroid,
-} from "react-native";
-import { useFocusEffect } from "@react-navigation/native";
+  Camera,
+  useCameraDevice,
+  useCodeScanner,
+} from "react-native-vision-camera";
 
-const { IHealthDevices } = NativeModules;
-const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
+import deviceService, { DiscoveredDevice } from "../../services/deviceService";
+import { addDevice, loadDevices } from "../../redux/deviceSlice";
+import type { AppDispatch, RootState } from "../../redux/store";
+import type { DeviceRecord } from "../../services/sqliteService";
 
-// Map device type codes to human-readable categories
-const deviceTypeMap: Record<string, "BP" | "SCALE" | "BG"> = {
-  BP3L: "BP",
-  BP5: "BP",
-  BP5S: "BP",
-  BG5: "BG",
-  BG5S: "BG",
-  HS2S: "SCALE",
-  HS2: "SCALE",
-  HS4S: "SCALE",
-};
-
-const deviceTypeLabels: Record<string, string> = {
-  BP3L: "Blood Pressure Monitor",
-  BP5: "Blood Pressure Monitor",
-  BP5S: "Blood Pressure Monitor",
-  BG5: "Glucose Meter (QR Required)",
-  BG5S: "Glucose Meter",
-  HS2S: "Smart Scale",
-  HS2: "Smart Scale",
-  HS4S: "Smart Scale",
-};
-
-const categoryLabels: Record<string, string> = {
-  BP: "Blood Pressure Monitor",
-  SCALE: "Smart Scale",
-  BG: "Glucose Meter",
-};
-
-const deviceIcons: Record<string, string> = {
-  BP: "favorite",
-  SCALE: "monitor-weight",
-  BG: "bloodtype",
-};
-
-type DiscoveredDevice = {
-  mac: string;
-  name: string;
-  type: string; // The model: BP3L, BG5, BG5S, etc.
-  rssi: number;
-  source?: string; // "iHealthSDK" or "CoreBluetooth"
-};
-
-type AddDeviceParams = {
-  // From QR scanner - new device
-  scannedId?: string;
-  scannedMac?: string;
-  // From QR scanner - updating existing device with bottle code
-  scannedBottleCode?: string;
-  forDeviceId?: string;
-};
-
-/**
- * Parse QR code data to extract device info
- * Expected formats:
- * - "BG5S:004D3229FEE0" (type:mac)
- * - "BP5:AABBCCDDEEFF"
- * - Just a MAC address: "004D3229FEE0"
- */
-function parseQRCode(
-  qrData: string
-): { type: string; mac: string; name: string } | null {
-  if (!qrData || qrData.trim().length === 0) {
-    return null;
-  }
-
-  const trimmed = qrData.trim().toUpperCase();
-
-  // Format: TYPE:MAC
-  if (trimmed.includes(":")) {
-    const parts = trimmed.split(":");
-    if (parts.length >= 2) {
-      const type = parts[0];
-      const mac = parts[1];
-
-      // Validate type is known
-      if (deviceTypeMap[type]) {
-        return {
-          type,
-          mac,
-          name: `${type} (${mac.substring(mac.length - 4)})`,
-        };
-      }
-    }
-  }
-
-  // Just a MAC address - try to infer type or default to BG5S
-  // iHealth MAC addresses often start with 004D
-  const macRegex = /^[0-9A-F]{12}$/;
-  if (macRegex.test(trimmed.replace(/[:-]/g, ""))) {
-    const cleanMac = trimmed.replace(/[:-]/g, "");
-    return {
-      type: "BG5S", // Default assumption for QR scanned devices
-      mac: cleanMac,
-      name: `iHealth Device (${cleanMac.substring(cleanMac.length - 4)})`,
-    };
-  }
-
-  return null;
-}
-
-function getIconBg(type: string): string {
-  switch (type) {
-    case "BP":
-      return "rgba(244, 67, 54, 0.1)";
-    case "SCALE":
-      return "rgba(76, 175, 80, 0.1)";
-    case "BG":
-      return "rgba(33, 150, 243, 0.1)";
-    default:
-      return "rgba(0, 0, 0, 0.05)";
-  }
-}
-
-function getIconColor(type: string): string {
-  switch (type) {
-    case "BP":
-      return "#F44336";
-    case "SCALE":
-      return "#4CAF50";
-    case "BG":
-      return "#2196F3";
-    default:
-      return "#666";
-  }
-}
-
-export default function AddDeviceScreen({ navigation, route }: any) {
+export default function AddDeviceScreen() {
   const dispatch = useDispatch<AppDispatch>();
-  const existingDevices = useSelector(
-    (state: RootState) => state.devices.devices
-  );
-
-  const params: AddDeviceParams = route.params ?? {};
+  const navigation = useNavigation<any>();
+  const existingDevices = useSelector((state: RootState) => state.devices.devices);
 
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [showLogs, setShowLogs] = useState(false);
-  const logScrollRef = useRef<ScrollView>(null);
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [showQRScanner, setShowQRScanner] = useState(false);
+  
+  // Friendly name modal
+  const [showNameModal, setShowNameModal] = useState(false);
+  const [pendingDevice, setPendingDevice] = useState<DiscoveredDevice | null>(null);
+  const [friendlyName, setFriendlyName] = useState("");
 
-  // ============================================================================
-  // Callbacks - Define BEFORE useFocusEffect that uses them
-  // ============================================================================
+  const subscriptionsRef = useRef<any[]>([]);
+  const cameraDevice = useCameraDevice("back");
 
-  const addLog = useCallback((msg: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    const logEntry = `${timestamp}: ${msg}`;
-    console.log(`[AddDevice] ${msg}`);
-    setDebugLogs((prev) => [...prev.slice(-100), logEntry]);
+  // QR Code Scanner
+  const codeScanner = useCodeScanner({
+    codeTypes: ["qr"],
+    onCodeScanned: (codes) => {
+      if (codes.length > 0 && codes[0].value) {
+        handleQRCode(codes[0].value);
+      }
+    },
+  });
+
+  useEffect(() => {
+    // Setup event listeners
+    const deviceFoundSub = deviceService.onDeviceFound((device) => {
+      console.log("[AddDevice] Device found:", device.name, device.type, device.source);
+      setDevices((prev) => {
+        // Avoid duplicates by MAC
+        if (prev.find((d) => d.mac === device.mac)) {
+          return prev;
+        }
+        return [...prev, device];
+      });
+    });
+
+    const scanStateSub = deviceService.onScanStateChanged((event) => {
+      console.log("[AddDevice] Scan state:", event.scanning);
+    });
+
+    const debugSub = deviceService.onDebugLog((event) => {
+      console.log("[AddDevice] Debug:", event.message);
+    });
+
+    subscriptionsRef.current = [deviceFoundSub, scanStateSub, debugSub];
+
+    return () => {
+      subscriptionsRef.current.forEach((sub) => sub?.remove?.());
+      deviceService.stopScan();
+    };
   }, []);
 
-  const hasDeviceType = useCallback(
-    (type: "BP" | "SCALE" | "BG"): boolean => {
-      return existingDevices.some((d) => d.type === type);
-    },
-    [existingDevices]
-  );
-
-  const getExistingDeviceOfType = useCallback(
-    (type: "BP" | "SCALE" | "BG") => {
-      return existingDevices.find((d) => d.type === type);
-    },
-    [existingDevices]
-  );
-
-  // ============================================================================
-  // Handle QR scanned params when screen loads or params change
-  // ============================================================================
-
-  useFocusEffect(
-    useCallback(() => {
-      // Handle bottle code update for existing device
-      if (params.scannedBottleCode && params.forDeviceId) {
-        addLog(`📦 Bottle code received for device ${params.forDeviceId}`);
-        navigation.setParams({
-          scannedBottleCode: undefined,
-          forDeviceId: undefined,
-        });
-        return;
-      }
-
-      // Handle new device from QR scan
-      if (params.scannedId) {
-        addLog(`📱 QR Code received: ${params.scannedId}`);
-
-        const parsed = parseQRCode(params.scannedId);
-
-        if (parsed) {
-          addLog(`✅ Parsed QR: type=${parsed.type}, mac=${parsed.mac}`);
-
-          const category = deviceTypeMap[parsed.type] || "BG";
-
-          if (hasDeviceType(category)) {
-            const existing = getExistingDeviceOfType(category);
-            Alert.alert(
-              "Device Type Already Added",
-              `You already have a ${categoryLabels[category]} (${
-                existing?.name || "device"
-              }) added.\n\nTo add a different ${categoryLabels[
-                category
-              ].toLowerCase()}, please delete the existing one first.`,
-              [{ text: "OK", onPress: () => navigation.goBack() }]
-            );
-          } else {
-            Alert.alert(
-              "Add Device from QR Code",
-              `Found: ${parsed.name}\nType: ${
-                deviceTypeLabels[parsed.type] || parsed.type
-              }\nMAC: ${parsed.mac}\n\nAdd this device?`,
-              [
-                {
-                  text: "Cancel",
-                  style: "cancel",
-                  onPress: () => navigation.goBack(),
-                },
-                {
-                  text: "Add Device",
-                  onPress: () => {
-                    const newDevice = {
-                      id: parsed.mac,
-                      name: parsed.name,
-                      type: category,
-                      mac: parsed.mac,
-                      model: parsed.type,
-                      bottleCode: undefined,
-                    };
-
-                    dispatch(addDevice(newDevice));
-                    addLog(`✅ Device added from QR: ${parsed.name}`);
-
-                    Alert.alert(
-                      "Device Added",
-                      `${parsed.name} has been added successfully!`,
-                      [{ text: "OK", onPress: () => navigation.goBack() }]
-                    );
-                  },
-                },
-              ]
-            );
-          }
-        } else {
-          addLog(`❌ Could not parse QR code: ${params.scannedId}`);
-          Alert.alert(
-            "Invalid QR Code",
-            `Could not recognize device from QR code:\n\n"${params.scannedId}"\n\nExpected format: DEVICE_TYPE:MAC_ADDRESS\n(e.g., BG5S:004D3229FEE0)`,
-            [{ text: "OK" }]
-          );
-        }
-
-        navigation.setParams({ scannedId: undefined, scannedMac: undefined });
-      }
-    }, [
-      params.scannedId,
-      params.scannedBottleCode,
-      params.forDeviceId,
-      addLog,
-      dispatch,
-      getExistingDeviceOfType,
-      hasDeviceType,
-      navigation,
-    ])
-  );
-
-  // ============================================================================
-  // Effects
-  // ============================================================================
-
-  // Auto-scroll logs to bottom
-  useEffect(() => {
-    if (showLogs && logScrollRef.current) {
-      setTimeout(() => {
-        logScrollRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    }
-  }, [debugLogs, showLogs]);
-
-  // Request permissions on Android
-  useEffect(() => {
-    if (Platform.OS === "android") {
-      const requestPermissions = async () => {
-        try {
-          const granted = await PermissionsAndroid.requestMultiple([
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          ]);
-          addLog(`Permissions: ${JSON.stringify(granted)}`);
-        } catch (e) {
-          addLog(`Permission error: ${e}`);
-        }
-      };
-      requestPermissions();
-    }
-  }, [addLog]);
-
-  // Listen for discovered devices
-  useEffect(() => {
-    if (!emitter) {
-      addLog("❌ Native module not available");
-      return;
-    }
-
-    addLog("📡 Setting up event listeners...");
-
-    const sub = emitter.addListener(
-      "onDeviceFound",
-      (device: DiscoveredDevice) => {
-        addLog(
-          `✅ FOUND: ${device.name} (${device.type}) MAC=${device.mac} via ${
-            device.source || "unknown"
-          }`
-        );
-
-        setDevices((prev) => {
-          // Avoid duplicates
-          if (prev.find((d) => d.mac === device.mac)) {
-            return prev;
-          }
-          return [...prev, device];
-        });
-      }
-    );
-
-    const debugSub = emitter.addListener(
-      "onDebugLog",
-      (data: { message: string }) => {
-        addLog(`[Native] ${data.message}`);
-      }
-    );
-
-    const scanStateSub = emitter.addListener(
-      "onScanStateChanged",
-      (data: { scanning: boolean }) => {
-        addLog(`📶 Scan state: ${data.scanning ? "ACTIVE" : "STOPPED"}`);
-      }
-    );
-
-    return () => {
-      sub.remove();
-      debugSub.remove();
-      scanStateSub.remove();
-    };
-  }, [addLog]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (scanning && IHealthDevices?.stopScan) {
-        IHealthDevices.stopScan().catch(() => {});
-      }
-    };
-  }, [scanning]);
-
-  // ============================================================================
-  // Handlers
-  // ============================================================================
-
   const startScan = async () => {
-    if (!IHealthDevices) {
-      Alert.alert("Error", "Native module not available");
-      return;
-    }
-
     setDevices([]);
     setScanning(true);
-    addLog("🚀 Starting scan...");
 
     try {
-      addLog("🔑 Authenticating SDK...");
-      await IHealthDevices.authenticate("license.pem");
-      addLog("✅ Authenticated");
-    } catch (e: any) {
-      addLog(`⚠️ Auth note: ${e.message}`);
-    }
-
-    try {
-      addLog(
-        "📡 Calling startScan for: BP3L, BP5, BP5S, BG5, BG5S, HS2S, HS2, HS4S"
-      );
-      await IHealthDevices.startScan([
-        "BP3L",
-        "BP5",
-        "BP5S",
-        "BG5",
-        "BG5S",
-        "HS2S",
-        "HS2",
-        "HS4S",
-      ]);
-      addLog("✅ Scan started - wake your devices!");
+      await deviceService.authenticate();
+      // Scan for BP and Scale devices (no BG)
+      await deviceService.startScan(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"]);
 
       // Auto-stop after 30 seconds
       setTimeout(() => {
         stopScan();
       }, 30000);
-    } catch (e: any) {
-      addLog(`❌ Scan error: ${e.message}`);
-      Alert.alert("Scan Error", e.message);
+    } catch (error: any) {
+      console.error("[AddDevice] Scan error:", error);
+      Alert.alert("Scan Error", error.message || "Failed to start scanning");
       setScanning(false);
     }
   };
 
   const stopScan = async () => {
-    addLog("🛑 Stopping scan...");
-    if (IHealthDevices?.stopScan) {
-      try {
-        await IHealthDevices.stopScan();
-        addLog("✅ Scan stopped");
-      } catch (e) {
-        addLog(`⚠️ Stop error: ${e}`);
-      }
-    }
+    await deviceService.stopScan();
     setScanning(false);
   };
 
-  const selectDevice = (device: DiscoveredDevice) => {
-    const category = deviceTypeMap[device.type] || "BP";
-    const isBG5 = device.type === "BG5";
+  // Check if device type already exists
+  const hasDeviceOfType = (category: string): boolean => {
+    return existingDevices.some((d) => d.type === category);
+  };
 
-    // Check if device type already exists
-    if (hasDeviceType(category)) {
-      const existing = getExistingDeviceOfType(category);
-      const categoryName = categoryLabels[category];
+  // Handle device selection - show name modal
+  const handleSelectDevice = (device: DiscoveredDevice) => {
+    const category = device.category || deviceService.getCategory(device.type);
 
+    // Check for existing device of same type
+    if (hasDeviceOfType(category)) {
       Alert.alert(
-        "Device Type Already Added",
-        `You already have a ${categoryName} (${
-          existing?.name || "device"
-        }) added.\n\nTo add a different ${categoryName.toLowerCase()}, please delete the existing one first from the Devices screen.`,
-        [{ text: "OK", style: "default" }]
+        "Device Type Exists",
+        `You already have a ${category === "BP" ? "blood pressure monitor" : "scale"} registered. Remove it first to add a new one.`,
+        [{ text: "OK" }]
       );
       return;
     }
 
-    Alert.alert(
-      "Add Device",
-      `Add "${device.name}" (${device.type}) to your devices?${
-        isBG5
-          ? "\n\nNote: BG5 requires scanning test strip bottle QR code."
-          : ""
-      }`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: isBG5 ? "Add & Scan QR" : "Add",
-          onPress: () => {
-            stopScan();
+    // Show friendly name modal
+    setPendingDevice(device);
+    setFriendlyName(device.name || deviceService.getFriendlyTypeName(device.type));
+    setShowNameModal(true);
+  };
 
-            const newDevice = {
-              id: device.mac,
-              name: device.name || device.type,
-              type: category,
-              mac: device.mac,
-              model: device.type,
-              bottleCode: undefined,
-            };
+  // Confirm device addition with friendly name
+  const confirmAddDevice = async () => {
+    if (!pendingDevice) return;
 
-            dispatch(addDevice(newDevice));
-            addLog(`✅ Device saved: ${device.name}`);
+    setShowNameModal(false);
+    setConnecting(pendingDevice.mac);
 
-            if (isBG5) {
-              navigation.replace("ScanQR", {
-                deviceId: device.mac,
-                deviceName: device.name,
-                returnTo: "Capture",
-              });
-            } else {
-              navigation.goBack();
-            }
+    try {
+      await stopScan();
+
+      const category = pendingDevice.category || deviceService.getCategory(pendingDevice.type);
+
+      const deviceRecord: DeviceRecord = {
+        id: `device_${pendingDevice.mac.replace(/[:-]/g, "")}`,
+        name: pendingDevice.name || pendingDevice.type,
+        type: category,
+        mac: pendingDevice.mac,
+        model: pendingDevice.type,
+        friendlyName: friendlyName.trim() || undefined,
+        source: pendingDevice.source,
+      };
+
+      dispatch(addDevice(deviceRecord));
+      dispatch(loadDevices());
+
+      Alert.alert(
+        "Device Added",
+        `${friendlyName || pendingDevice.name} has been added successfully.`,
+        [
+          {
+            text: "OK",
+            onPress: () => navigation.goBack(),
           },
-        },
-      ]
-    );
+        ]
+      );
+    } catch (error: any) {
+      console.error("[AddDevice] Add error:", error);
+      Alert.alert("Error", "Failed to add device. Please try again.");
+    } finally {
+      setConnecting(null);
+      setPendingDevice(null);
+      setFriendlyName("");
+    }
   };
 
-  const handleScanQR = () => {
-    navigation.navigate("ScanQR");
+  // Handle QR code scan
+  const handleQRCode = (code: string) => {
+    setShowQRScanner(false);
+    console.log("[AddDevice] QR Code scanned:", code);
+
+    // Expected format: "TYPE:MAC" e.g., "BP3L:A4C1386B2E90"
+    const parts = code.split(":");
+    if (parts.length !== 2) {
+      Alert.alert("Invalid QR Code", "The QR code format is not recognized.");
+      return;
+    }
+
+    const [type, mac] = parts;
+    const upperType = type.toUpperCase();
+
+    // Determine category (removed BG support)
+    let category: "BP" | "SCALE";
+    if (upperType.includes("BP")) {
+      category = "BP";
+    } else if (upperType.includes("HS")) {
+      category = "SCALE";
+    } else {
+      Alert.alert("Unknown Device", `Device type "${type}" is not supported.`);
+      return;
+    }
+
+    // Check for existing device
+    if (hasDeviceOfType(category)) {
+      Alert.alert(
+        "Device Type Exists",
+        `You already have a ${category === "BP" ? "blood pressure monitor" : "scale"} registered.`
+      );
+      return;
+    }
+
+    // Create device from QR code
+    const device: DiscoveredDevice = {
+      mac: mac.toUpperCase(),
+      name: `${upperType} ${mac.slice(-4)}`,
+      type: upperType,
+      category,
+      source: "iHealthSDK",
+    };
+
+    // Show name modal for QR-scanned device
+    setPendingDevice(device);
+    setFriendlyName(device.name);
+    setShowNameModal(true);
   };
 
-  const clearLogs = () => {
-    setDebugLogs([]);
-    addLog("🗑️ Logs cleared");
+  // Get icon for device type
+  const getDeviceIcon = (type: string): string => {
+    const upperType = type.toUpperCase();
+    if (upperType.includes("BP") || upperType.includes("BLOOD")) {
+      return "favorite";
+    }
+    if (upperType.includes("HS") || upperType.includes("SCALE") || upperType.includes("WEIGHT")) {
+      return "fitness-center";
+    }
+    return "devices-other";
   };
 
-  // ============================================================================
-  // Render Helpers
-  // ============================================================================
+  // Get color for device type
+  const getDeviceColor = (type: string): string => {
+    const upperType = type.toUpperCase();
+    if (upperType.includes("BP")) return "#e53935";
+    if (upperType.includes("HS") || upperType.includes("SCALE")) return "#00acc1";
+    return "#757575";
+  };
 
+  // Render device item
   const renderDevice = ({ item }: { item: DiscoveredDevice }) => {
-    const category = deviceTypeMap[item.type] || "BP";
-    const icon = deviceIcons[category] || "bluetooth";
-    const label = deviceTypeLabels[item.type] || item.type;
-    const isBG5 = item.type === "BG5";
-    const alreadyHasType = hasDeviceType(category);
+    const isConnecting = connecting === item.mac;
+    const category = item.category || deviceService.getCategory(item.type);
+    const alreadyExists = hasDeviceOfType(category);
+    const isGATT = item.source === "BLE_GATT";
 
     return (
       <TouchableOpacity
-        style={[styles.deviceCard, alreadyHasType && styles.deviceCardDisabled]}
-        onPress={() => selectDevice(item)}
+        style={[styles.deviceItem, alreadyExists && styles.deviceItemDisabled]}
+        onPress={() => handleSelectDevice(item)}
+        disabled={isConnecting || alreadyExists}
         activeOpacity={0.7}
       >
-        <View
-          style={[styles.deviceIcon, { backgroundColor: getIconBg(category) }]}
-        >
-          <MaterialIcons name={icon} size={24} color={getIconColor(category)} />
+        <View style={[styles.deviceIcon, { backgroundColor: `${getDeviceColor(item.type)}20` }]}>
+          <MaterialIcons
+            name={getDeviceIcon(item.type)}
+            size={24}
+            color={getDeviceColor(item.type)}
+          />
         </View>
+
         <View style={styles.deviceInfo}>
-          <Text style={styles.deviceName}>{item.name || item.type}</Text>
-          <Text style={styles.deviceType}>{label}</Text>
-          <Text style={styles.deviceMac}>{item.mac}</Text>
-          {item.source && (
-            <Text style={styles.deviceSource}>via {item.source}</Text>
-          )}
-          {alreadyHasType && (
-            <Text style={styles.alreadyAddedText}>
-              ⚠️ You already have this device type
+          <View style={styles.deviceNameRow}>
+            <Text style={styles.deviceName} numberOfLines={1}>
+              {item.name || item.type}
             </Text>
-          )}
+            {isGATT && (
+              <View style={styles.sourceBadge}>
+                <Text style={styles.sourceBadgeText}>BLE</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.deviceMac}>{item.mac}</Text>
+          <Text style={styles.deviceType}>
+            {deviceService.getFriendlyTypeName(item.type)}
+          </Text>
         </View>
-        <View style={styles.deviceAction}>
-          {isBG5 && !alreadyHasType ? (
-            <View style={styles.qrBadge}>
-              <MaterialIcons name="qr-code" size={16} color="#666" />
-            </View>
-          ) : (
-            <MaterialIcons name="add-circle" size={28} color="#00509f" />
-          )}
-        </View>
+
+        {isConnecting ? (
+          <ActivityIndicator color="#00509f" />
+        ) : alreadyExists ? (
+          <View style={styles.existsBadge}>
+            <Text style={styles.existsBadgeText}>Added</Text>
+          </View>
+        ) : (
+          <MaterialIcons name="add-circle" size={28} color="#00509f" />
+        )}
       </TouchableOpacity>
     );
   };
-
-  // ============================================================================
-  // Main Render
-  // ============================================================================
 
   return (
     <View style={styles.container}>
@@ -571,176 +307,167 @@ export default function AddDeviceScreen({ navigation, route }: any) {
           onPress={() => navigation.goBack()}
           style={styles.backButton}
         >
-          <MaterialIcons name="arrow-back" size={24} color="#1a1a2e" />
+          <MaterialIcons name="arrow-back" size={24} color="#002040" />
         </TouchableOpacity>
-        <Text style={styles.title}>Add Device</Text>
+        <Text style={styles.headerTitle}>Add Device</Text>
         <TouchableOpacity
-          onPress={() => setShowLogs(true)}
-          style={styles.logButton}
+          onPress={() => setShowQRScanner(true)}
+          style={styles.qrButton}
         >
-          <MaterialIcons name="bug-report" size={24} color="#666" />
+          <MaterialIcons name="qr-code-scanner" size={24} color="#00509f" />
         </TouchableOpacity>
       </View>
 
-      {/* Instructions */}
-      <View style={styles.instructions}>
-        <MaterialIcons name="bluetooth-searching" size={48} color="#00509f" />
-        <Text style={styles.instructionTitle}>
-          {scanning
-            ? "Searching for devices..."
-            : "Scan Using Bluetooth or QR Code To Add Your Device"}
-        </Text>
-        <Text style={styles.instructionText}>
-          {scanning
-            ? "Wake your device: press the button on BP monitors, step on scales, or turn on glucose meters."
-            : "Make sure your device is nearby and ready to pair."}
-        </Text>
-      </View>
-
-      {/* Action Buttons - Side by Side */}
-      <View style={styles.buttonRow}>
+      {/* Scan Controls */}
+      <View style={styles.scanControls}>
         <TouchableOpacity
-          style={[
-            styles.actionButton,
-            styles.scanButton,
-            scanning && styles.scanButtonActive,
-          ]}
+          style={[styles.scanButton, scanning && styles.scanButtonActive]}
           onPress={scanning ? stopScan : startScan}
           activeOpacity={0.8}
         >
           {scanning ? (
             <>
-              <ActivityIndicator color="#fff" size="small" />
-              <Text style={styles.actionButtonText}>Stop</Text>
+              <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.scanButtonText}>Scanning...</Text>
             </>
           ) : (
             <>
-              <MaterialIcons
-                name="bluetooth-searching"
-                size={22}
-                color="#fff"
-              />
-              <Text style={styles.actionButtonText}>Start Scanning</Text>
+              <MaterialIcons name="bluetooth-searching" size={20} color="#fff" />
+              <Text style={styles.scanButtonText}>Start Scan</Text>
             </>
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.actionButton, styles.qrButton]}
-          onPress={handleScanQR}
-          activeOpacity={0.8}
-        >
-          <MaterialIcons name="qr-code-scanner" size={22} color="#00509f" />
-          <Text style={styles.qrButtonText}>Scan QR Code</Text>
-        </TouchableOpacity>
+        <Text style={styles.scanHint}>
+          {scanning
+            ? "Turn on your device and put it in pairing mode"
+            : "Tap to scan for nearby BP monitors and scales"}
+        </Text>
       </View>
 
       {/* Device List */}
-      {devices.length > 0 && (
-        <View style={styles.listContainer}>
-          <Text style={styles.listTitle}>Found Devices ({devices.length})</Text>
-          <FlatList
-            data={devices}
-            keyExtractor={(item) => item.mac}
-            renderItem={renderDevice}
-            contentContainerStyle={styles.listContent}
-          />
-        </View>
-      )}
+      <FlatList
+        data={devices}
+        renderItem={renderDevice}
+        keyExtractor={(item) => item.mac}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            {scanning ? (
+              <>
+                <ActivityIndicator size="large" color="#00509f" />
+                <Text style={styles.emptyText}>Searching for devices...</Text>
+              </>
+            ) : (
+              <>
+                <MaterialIcons name="bluetooth-disabled" size={48} color="#ccc" />
+                <Text style={styles.emptyText}>No devices found</Text>
+                <Text style={styles.emptyHint}>
+                  Start scanning and make sure your device is powered on
+                </Text>
+              </>
+            )}
+          </View>
+        }
+      />
 
-      {/* Empty State */}
-      {scanning && devices.length === 0 && (
-        <View style={styles.emptyState}>
-          <ActivityIndicator size="large" color="#00509f" />
-          <Text style={styles.emptyText}>Looking for devices...</Text>
-          <Text style={styles.emptyHint}>
-            Press the button on your BP monitor, step on your scale, or turn on
-            your glucose meter.
+      {/* QR Scanner Modal */}
+      <Modal visible={showQRScanner} animationType="slide">
+        <View style={styles.qrContainer}>
+          <View style={styles.qrHeader}>
+            <TouchableOpacity
+              onPress={() => setShowQRScanner(false)}
+              style={styles.qrCloseButton}
+            >
+              <MaterialIcons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+            <Text style={styles.qrTitle}>Scan Device QR Code</Text>
+          </View>
+
+          {cameraDevice ? (
+            <Camera
+              style={styles.camera}
+              device={cameraDevice}
+              isActive={showQRScanner}
+              codeScanner={codeScanner}
+            />
+          ) : (
+            <View style={styles.noCameraContainer}>
+              <MaterialIcons name="no-photography" size={64} color="#ccc" />
+              <Text style={styles.noCameraText}>Camera not available</Text>
+            </View>
+          )}
+
+          <View style={styles.qrOverlay}>
+            <View style={styles.qrFrame} />
+          </View>
+
+          <Text style={styles.qrHint}>
+            Point at the QR code on your device packaging
           </Text>
         </View>
-      )}
+      </Modal>
 
-      {/* Debug Log Modal */}
-      <Modal
-        visible={showLogs}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowLogs(false)}
-      >
-        <View style={styles.logModal}>
-          <View style={styles.logHeader}>
-            <Text style={styles.logTitle}>Debug Logs ({debugLogs.length})</Text>
-            <View style={styles.logActions}>
-              <TouchableOpacity onPress={clearLogs} style={styles.logAction}>
-                <MaterialIcons name="delete-outline" size={24} color="#666" />
+      {/* Friendly Name Modal */}
+      <Modal visible={showNameModal} transparent animationType="fade">
+        <View style={styles.nameModalOverlay}>
+          <View style={styles.nameModalContainer}>
+            <Text style={styles.nameModalTitle}>Name Your Device</Text>
+            <Text style={styles.nameModalSubtitle}>
+              Give this device a friendly name to help identify it
+            </Text>
+
+            <TextInput
+              style={styles.nameInput}
+              value={friendlyName}
+              onChangeText={setFriendlyName}
+              placeholder="e.g., Living Room Scale"
+              placeholderTextColor="#999"
+              maxLength={30}
+              autoFocus
+            />
+
+            {pendingDevice && (
+              <View style={styles.devicePreview}>
+                <View style={[styles.previewIcon, { backgroundColor: `${getDeviceColor(pendingDevice.type)}20` }]}>
+                  <MaterialIcons
+                    name={getDeviceIcon(pendingDevice.type)}
+                    size={20}
+                    color={getDeviceColor(pendingDevice.type)}
+                  />
+                </View>
+                <View style={styles.previewInfo}>
+                  <Text style={styles.previewType}>
+                    {deviceService.getFriendlyTypeName(pendingDevice.type)}
+                  </Text>
+                  <Text style={styles.previewMac}>{pendingDevice.mac}</Text>
+                </View>
+                {pendingDevice.source === "BLE_GATT" && (
+                  <View style={styles.sourceBadge}>
+                    <Text style={styles.sourceBadgeText}>BLE</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            <View style={styles.nameModalButtons}>
+              <TouchableOpacity
+                style={styles.nameModalCancel}
+                onPress={() => {
+                  setShowNameModal(false);
+                  setPendingDevice(null);
+                  setFriendlyName("");
+                }}
+              >
+                <Text style={styles.nameModalCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => setShowLogs(false)}
-                style={styles.logAction}
+                style={styles.nameModalConfirm}
+                onPress={confirmAddDevice}
               >
-                <MaterialIcons name="close" size={24} color="#333" />
+                <Text style={styles.nameModalConfirmText}>Add Device</Text>
               </TouchableOpacity>
             </View>
-          </View>
-
-          <ScrollView
-            ref={logScrollRef}
-            style={styles.logScroll}
-            contentContainerStyle={styles.logContent}
-          >
-            {debugLogs.length === 0 ? (
-              <Text style={styles.logEmpty}>
-                No logs yet. Start a scan to see debug output.
-              </Text>
-            ) : (
-              debugLogs.map((log, i) => (
-                <Text
-                  key={i}
-                  style={[
-                    styles.logLine,
-                    log.includes("❌") && styles.logError,
-                    log.includes("✅") && styles.logSuccess,
-                    log.includes("⚠️") && styles.logWarning,
-                    log.includes("[Native]") && styles.logNative,
-                  ]}
-                >
-                  {log}
-                </Text>
-              ))
-            )}
-          </ScrollView>
-
-          {/* Debug Action Buttons */}
-          <View style={styles.logButtonRow}>
-            <TouchableOpacity
-              style={[styles.logBtn, styles.logBtnYellow]}
-              onPress={async () => {
-                addLog("🔧 Direct connect to BG5S MAC: 004D3229FEE0");
-                try {
-                  await IHealthDevices.authenticate("license.pem");
-                  addLog("✅ Authenticated");
-                  const result = await IHealthDevices.connectDevice(
-                    "004D3229FEE0",
-                    "BG5S"
-                  );
-                  addLog(`✅ Connect result: ${JSON.stringify(result)}`);
-                } catch (e: any) {
-                  addLog(`❌ Direct connect error: ${e.message}`);
-                }
-              }}
-            >
-              <Text style={styles.logBtnText}>BG5S Direct</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.logBtn} onPress={clearLogs}>
-              <Text style={styles.logBtnText}>Clear</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.logFooter}>
-            <Text style={styles.logHint}>
-              💡 Look for "BG5S" in logs to see if it's being discovered
-            </Text>
           </View>
         </View>
       </Modal>
@@ -751,128 +478,80 @@ export default function AddDeviceScreen({ navigation, route }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
+    backgroundColor: "#f5f7fa",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
     paddingTop: 50,
+    paddingHorizontal: 16,
     paddingBottom: 16,
     backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    borderBottomColor: "#e0e0e0",
   },
   backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
+    padding: 8,
   },
-  title: {
+  headerTitle: {
     fontSize: 18,
     fontWeight: "600",
-    color: "#1a1a2e",
+    color: "#002040",
   },
-  logButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  qrButton: {
+    padding: 8,
+  },
+  scanControls: {
+    padding: 20,
     alignItems: "center",
-    justifyContent: "center",
-  },
-  instructions: {
-    alignItems: "center",
-    padding: 24,
-    paddingBottom: 16,
-    backgroundColor: "#fff",
-  },
-  instructionTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1a1a2e",
-    marginTop: 12,
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  instructionText: {
-    fontSize: 14,
-    color: "#666",
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  buttonRow: {
-    flexDirection: "row",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
     backgroundColor: "#fff",
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    borderBottomColor: "#e0e0e0",
   },
-  actionButton: {
-    flex: 1,
+  scanButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 14,
-    borderRadius: 12,
-    gap: 8,
-  },
-  scanButton: {
     backgroundColor: "#00509f",
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    borderRadius: 30,
+    gap: 8,
   },
   scanButtonActive: {
     backgroundColor: "#c62828",
   },
-  actionButtonText: {
+  scanButtonText: {
     color: "#fff",
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: "600",
   },
-  qrButton: {
-    backgroundColor: "rgba(0, 80, 159, 0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(0, 80, 159, 0.3)",
-  },
-  qrButtonText: {
-    color: "#00509f",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  listContainer: {
-    flex: 1,
-    marginTop: 16,
-  },
-  listTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#666",
-    marginHorizontal: 16,
-    marginBottom: 8,
+  scanHint: {
+    marginTop: 12,
+    fontSize: 13,
+    color: "#888",
+    textAlign: "center",
   },
   listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 24,
+    padding: 16,
+    paddingBottom: 100,
   },
-  deviceCard: {
+  deviceItem: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#fff",
     padding: 16,
     borderRadius: 12,
-    marginBottom: 8,
+    marginBottom: 12,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
   },
-  deviceCardDisabled: {
-    backgroundColor: "#f5f5f5",
-    opacity: 0.8,
+  deviceItemDisabled: {
+    opacity: 0.6,
   },
   deviceIcon: {
     width: 48,
@@ -880,161 +559,220 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
+    marginRight: 14,
   },
   deviceInfo: {
     flex: 1,
   },
+  deviceNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   deviceName: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#1a1a2e",
+    color: "#333",
+    flex: 1,
+  },
+  sourceBadge: {
+    backgroundColor: "#2196F3",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  sourceBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  deviceMac: {
+    fontSize: 12,
+    color: "#999",
+    marginTop: 2,
+    fontFamily: "monospace",
   },
   deviceType: {
     fontSize: 13,
     color: "#666",
     marginTop: 2,
   },
-  deviceMac: {
-    fontSize: 11,
-    color: "#999",
-    marginTop: 2,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  existsBadge: {
+    backgroundColor: "#e8f5e9",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
-  deviceSource: {
-    fontSize: 10,
-    color: "#00509f",
-    marginTop: 2,
-    fontStyle: "italic",
+  existsBadgeText: {
+    color: "#4CAF50",
+    fontSize: 12,
+    fontWeight: "600",
   },
-  alreadyAddedText: {
-    fontSize: 11,
-    color: "#e65100",
-    marginTop: 4,
-    fontWeight: "500",
-  },
-  deviceAction: {
-    flexDirection: "row",
+  emptyContainer: {
     alignItems: "center",
-  },
-  qrBadge: {
-    backgroundColor: "#f0f0f0",
-    padding: 6,
-    borderRadius: 6,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 32,
+    paddingVertical: 60,
   },
   emptyText: {
     fontSize: 16,
-    color: "#666",
+    color: "#999",
     marginTop: 16,
   },
   emptyHint: {
     fontSize: 13,
-    color: "#999",
-    textAlign: "center",
+    color: "#bbb",
     marginTop: 8,
-    lineHeight: 18,
+    textAlign: "center",
+    paddingHorizontal: 40,
   },
-  logModal: {
+  // QR Scanner styles
+  qrContainer: {
     flex: 1,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#000",
   },
-  logHeader: {
+  qrHeader: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
     paddingTop: 50,
+    paddingHorizontal: 16,
     paddingBottom: 16,
-    backgroundColor: "#252540",
-    borderBottomWidth: 1,
-    borderBottomColor: "#333",
   },
-  logTitle: {
+  qrCloseButton: {
+    padding: 8,
+  },
+  qrTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: "600",
     color: "#fff",
+    textAlign: "center",
+    marginRight: 40,
   },
-  logActions: {
-    flexDirection: "row",
-    gap: 8,
+  camera: {
+    flex: 1,
   },
-  logAction: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  noCameraContainer: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.1)",
   },
-  logScroll: {
-    flex: 1,
+  noCameraText: {
+    color: "#999",
+    fontSize: 16,
+    marginTop: 16,
   },
-  logContent: {
-    padding: 12,
+  qrOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  logEmpty: {
-    color: "#666",
+  qrFrame: {
+    width: 250,
+    height: 250,
+    borderWidth: 2,
+    borderColor: "#00509f",
+    borderRadius: 16,
+    backgroundColor: "transparent",
+  },
+  qrHint: {
+    color: "#fff",
     fontSize: 14,
     textAlign: "center",
-    marginTop: 32,
+    padding: 20,
+    paddingBottom: 40,
   },
-  logLine: {
-    fontSize: 11,
-    color: "#aaa",
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    marginBottom: 4,
-    lineHeight: 16,
-  },
-  logError: {
-    color: "#ff6b6b",
-  },
-  logSuccess: {
-    color: "#69db7c",
-  },
-  logWarning: {
-    color: "#ffd43b",
-  },
-  logNative: {
-    color: "#74c0fc",
-  },
-  logFooter: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#252540",
-    borderTopWidth: 1,
-    borderTopColor: "#333",
-  },
-  logHint: {
-    fontSize: 12,
-    color: "#888",
-    textAlign: "center",
-  },
-  logButtonRow: {
-    flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: "#252540",
-  },
-  logBtn: {
+  // Friendly Name Modal styles
+  nameModalOverlay: {
     flex: 1,
-    backgroundColor: "#333",
-    paddingVertical: 12,
-    borderRadius: 8,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  nameModalContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 340,
+  },
+  nameModalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#002040",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  nameModalSubtitle: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  nameInput: {
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    color: "#333",
+    backgroundColor: "#fafafa",
+    marginBottom: 16,
+  },
+  devicePreview: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f5f5f5",
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 20,
+  },
+  previewIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  previewInfo: {
+    flex: 1,
+  },
+  previewType: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#333",
+  },
+  previewMac: {
+    fontSize: 11,
+    color: "#999",
+    fontFamily: "monospace",
+  },
+  nameModalButtons: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  nameModalCancel: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 30,
+    backgroundColor: "#f0f0f0",
     alignItems: "center",
   },
-  logBtnYellow: {
-    backgroundColor: "#f9a825",
+  nameModalCancelText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#666",
   },
-  logBtnText: {
-    color: "#fff",
+  nameModalConfirm: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 30,
+    backgroundColor: "#00509f",
+    alignItems: "center",
+  },
+  nameModalConfirmText: {
+    fontSize: 16,
     fontWeight: "600",
-    fontSize: 14,
+    color: "#fff",
   },
 });

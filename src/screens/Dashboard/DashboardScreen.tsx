@@ -1,5 +1,5 @@
 /* eslint-disable react-native/no-inline-styles */
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -16,35 +16,39 @@ import { loadReadings } from "../../redux/readingSlice";
 import { loadDevices } from "../../redux/deviceSlice";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { AppDispatch, RootState } from "../../redux/store";
+import { isBPHigh } from "../../redux/userSlice";
+import {
+  needsUrineProteinResponse,
+  hasUrineProteinDeferredToday,
+} from "../../services/sqliteService";
+import UrineProteinModal from "../../components/UrineProteinModal";
 
-// Map device types to images
+// Map device types to images (removed BG)
 const deviceImages: Record<string, any> = {
   BP: require("../../assets/bp3l.png"),
   BP3L: require("../../assets/bp3l.png"),
   BP5: require("../../assets/bp3l.png"),
   BP5S: require("../../assets/bp3l.png"),
+  GATT_BP: require("../../assets/bp3l.png"),
   SCALE: require("../../assets/hs5s.png"),
   HS2: require("../../assets/hs5s.png"),
   HS2S: require("../../assets/hs5s.png"),
   HS4S: require("../../assets/hs5s.png"),
-  BG: require("../../assets/bg5.png"),
-  BG5: require("../../assets/bg5.png"),
-  BG5S: require("../../assets/bg5.png"),
+  GATT_SCALE: require("../../assets/hs5s.png"),
 };
 
-// Friendly names for device types
+// Friendly names for device types (removed BG)
 const deviceTypeNames: Record<string, string> = {
   BP: "Blood Pressure",
   BP3L: "Blood Pressure",
   BP5: "Blood Pressure",
   BP5S: "Blood Pressure",
+  GATT_BP: "Blood Pressure",
   SCALE: "Smart Scale",
   HS2: "Smart Scale",
   HS2S: "Smart Scale",
   HS4S: "Smart Scale",
-  BG: "Glucose Meter",
-  BG5: "Glucose Meter",
-  BG5S: "Glucose Meter",
+  GATT_SCALE: "Smart Scale",
 };
 
 export default function DashboardScreen() {
@@ -52,27 +56,56 @@ export default function DashboardScreen() {
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
 
-  // FIX: Use correct Redux state path - 'devices' not 'items'
   const readings = useSelector((state: RootState) => state.readings.items);
   const devices = useSelector((state: RootState) => state.devices.devices);
+  const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
+  
   const [todayTip, setTodayTip] = useState<string>("");
+  
+  // Urine Protein Modal State
+  const [showUrineProteinModal, setShowUrineProteinModal] = useState(false);
+  const [showUrineProteinAlert, setShowUrineProteinAlert] = useState(false);
 
   useEffect(() => {
     getDailyTip().then(setTodayTip);
+  }, []);
+
+  // Check for urine protein modal on focus
+  const checkUrineProteinStatus = useCallback(() => {
+    const needsResponse = needsUrineProteinResponse();
+    const hasDeferred = hasUrineProteinDeferredToday();
+
+    console.log("[Dashboard] Urine protein check:", { needsResponse, hasDeferred });
+
+    if (needsResponse && !hasDeferred) {
+      // Show modal if 72+ hours since last answer AND not deferred today
+      setShowUrineProteinModal(true);
+      setShowUrineProteinAlert(false);
+    } else if (needsResponse && hasDeferred) {
+      // User deferred today - show alert bar instead
+      setShowUrineProteinModal(false);
+      setShowUrineProteinAlert(true);
+    } else {
+      // All good
+      setShowUrineProteinModal(false);
+      setShowUrineProteinAlert(false);
+    }
   }, []);
 
   useEffect(() => {
     if (isFocused) {
       dispatch(loadReadings());
       dispatch(loadDevices());
+      checkUrineProteinStatus();
     }
-  }, [dispatch, isFocused]);
+  }, [dispatch, isFocused, checkUrineProteinStatus]);
 
   // Debug log to verify devices are loading
   useEffect(() => {
     console.log('[Dashboard] Devices loaded:', devices?.length, devices);
   }, [devices]);
 
+  // Filter for BP and Scale readings only (no BG)
   const lastBP = readings
     ?.filter((r: any) => r.type === "BP")
     .sort((a: any, b: any) => b.ts - a.ts)[0];
@@ -81,16 +114,16 @@ export default function DashboardScreen() {
     ?.filter((r: any) => r.type === "SCALE")
     .sort((a: any, b: any) => b.ts - a.ts)[0];
 
-  const lastBG = readings
-    ?.filter((r: any) => r.type === "BG")
-    .sort((a: any, b: any) => b.ts - a.ts)[0];
-
   const deviceList = devices || [];
   const deviceCount = deviceList.length;
 
   // Helper to get device type from device object
   const getDeviceType = (device: any): string => {
-    // Check device.type first (from DB)
+    // Check model first (more specific)
+    if (device.model && deviceImages[device.model]) {
+      return device.model;
+    }
+    // Check device.type
     if (device.type && deviceImages[device.type]) {
       return device.type;
     }
@@ -102,7 +135,6 @@ export default function DashboardScreen() {
     // Fallback based on general type
     if (device.type === "BP") return "BP3L";
     if (device.type === "SCALE") return "HS2S";
-    if (device.type === "BG") return "BG5";
     return "BP3L"; // ultimate fallback
   };
 
@@ -112,10 +144,46 @@ export default function DashboardScreen() {
     return deviceImages[deviceType] || deviceImages.BP;
   };
 
-  // Get friendly name for device
+  // Get friendly name for device (use custom name if set)
   const getDeviceFriendlyName = (device: any) => {
+    if (device.friendlyName) {
+      return device.friendlyName;
+    }
     const deviceType = getDeviceType(device);
     return deviceTypeNames[deviceType] || device.name || "Device";
+  };
+
+  // Get source badge text
+  const getSourceBadge = (device: any) => {
+    if (device.source === 'BLE_GATT') {
+      return 'BLE';
+    }
+    return null; // Don't show badge for iHealth SDK devices
+  };
+
+  // Check if BP reading is high
+  const isBPReadingHigh = (reading: any) => {
+    if (!reading?.value || !reading?.value2) return false;
+    return isBPHigh(reading.value, reading.value2, bpThresholds);
+  };
+
+  // Handle urine protein modal complete
+  const handleUrineProteinComplete = (result: string) => {
+    console.log("[Dashboard] Urine protein result:", result);
+    setShowUrineProteinModal(false);
+    setShowUrineProteinAlert(false);
+  };
+
+  // Handle urine protein defer
+  const handleUrineProteinDefer = () => {
+    console.log("[Dashboard] Urine protein deferred");
+    setShowUrineProteinModal(false);
+    setShowUrineProteinAlert(true);
+  };
+
+  // Handle alert bar tap
+  const handleAlertBarTap = () => {
+    setShowUrineProteinModal(true);
   };
 
   return (
@@ -129,9 +197,24 @@ export default function DashboardScreen() {
           contentContainerStyle={styles.scrollContainer}
           showsVerticalScrollIndicator={false}
         >
-        
-        
-        <Text style={styles.sectionTitle}>{deviceCount} {deviceCount === 1 ? "Device" : "Devices"} Saved</Text>
+          {/* Urine Protein Alert Bar */}
+          {showUrineProteinAlert && (
+            <TouchableOpacity
+              style={styles.alertBar}
+              onPress={handleAlertBarTap}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="warning" size={20} color="#E65100" />
+              <Text style={styles.alertBarText}>
+                Add Urine Protein Result
+              </Text>
+              <MaterialIcons name="chevron-right" size={20} color="#E65100" />
+            </TouchableOpacity>
+          )}
+
+          <Text style={styles.sectionTitle}>
+            {deviceCount} {deviceCount === 1 ? "Device" : "Devices"} Saved
+          </Text>
         
           {/* --- Device Card --- */}
           <View style={styles.deviceCard}>
@@ -141,6 +224,8 @@ export default function DashboardScreen() {
                   {deviceList.slice(0, 4).map((device: any, index: number) => {
                     const imageSource = getDeviceImage(device);
                     const friendlyName = getDeviceFriendlyName(device);
+                    const sourceBadge = getSourceBadge(device);
+                    
                     return (
                       <TouchableOpacity 
                         key={device.id || index} 
@@ -151,10 +236,17 @@ export default function DashboardScreen() {
                         })}
                         activeOpacity={0.7}
                       >
-                        <Image
-                          source={imageSource}
-                          style={styles.deviceIcon}
-                        />
+                        <View style={styles.deviceImageWrapper}>
+                          <Image
+                            source={imageSource}
+                            style={styles.deviceIcon}
+                          />
+                          {sourceBadge && (
+                            <View style={styles.sourceBadge}>
+                              <Text style={styles.sourceBadgeText}>{sourceBadge}</Text>
+                            </View>
+                          )}
+                        </View>
                         <Text style={styles.deviceName} numberOfLines={2}>
                           {friendlyName}
                         </Text>
@@ -188,13 +280,23 @@ export default function DashboardScreen() {
           <View style={styles.readingsContainer}>
             <Text style={styles.sectionTitle}>Latest Readings</Text>
 
-            {lastBP || lastScale || lastBG ? (
+            {lastBP || lastScale ? (
               <>
                 {lastBP && (
-                  <View style={styles.readingItem}>
+                  <View style={[
+                    styles.readingItem,
+                    isBPReadingHigh(lastBP) && styles.readingItemHigh
+                  ]}>
                     <View style={styles.readingHeader}>
-                      <View style={[styles.readingIcon, { backgroundColor: '#ffebee' }]}>
-                        <MaterialIcons name="favorite" size={18} color="#e53935" />
+                      <View style={[
+                        styles.readingIcon, 
+                        { backgroundColor: isBPReadingHigh(lastBP) ? '#ffcdd2' : '#ffebee' }
+                      ]}>
+                        <MaterialIcons 
+                          name="favorite" 
+                          size={18} 
+                          color={isBPReadingHigh(lastBP) ? "#c62828" : "#e53935"} 
+                        />
                       </View>
                       <View style={styles.readingInfo}>
                         <Text style={styles.readingDevice}>
@@ -211,8 +313,16 @@ export default function DashboardScreen() {
                           })}
                         </Text>
                       </View>
+                      {isBPReadingHigh(lastBP) && (
+                        <View style={styles.highBadge}>
+                          <Text style={styles.highBadgeText}>HIGH</Text>
+                        </View>
+                      )}
                     </View>
-                    <Text style={styles.readingValue}>
+                    <Text style={[
+                      styles.readingValue,
+                      isBPReadingHigh(lastBP) && styles.readingValueHigh
+                    ]}>
                       {lastBP.value}/{lastBP.value2} <Text style={styles.readingUnit}>{lastBP.unit}</Text>
                     </Text>
                     {lastBP.heartRate && (
@@ -245,34 +355,6 @@ export default function DashboardScreen() {
                     </View>
                     <Text style={styles.readingValue}>
                       {lastScale.value} <Text style={styles.readingUnit}>{lastScale.unit}</Text>
-                    </Text>
-                  </View>
-                )}
-
-                {lastBG && (
-                  <View style={styles.readingItem}>
-                    <View style={styles.readingHeader}>
-                      <View style={[styles.readingIcon, { backgroundColor: '#e8f5e9' }]}>
-                        <MaterialIcons name="water-drop" size={18} color="#43a047" />
-                      </View>
-                      <View style={styles.readingInfo}>
-                        <Text style={styles.readingDevice}>
-                          {lastBG.deviceName || "Glucose Meter"}
-                        </Text>
-                        <Text style={styles.readingTime}>
-                          {new Date(lastBG.ts).toLocaleDateString([], {
-                            month: "short",
-                            day: "numeric",
-                          })}{" "}
-                          {new Date(lastBG.ts).toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={styles.readingValue}>
-                      {lastBG.value} <Text style={styles.readingUnit}>{lastBG.unit}</Text>
                     </Text>
                   </View>
                 )}
@@ -315,6 +397,13 @@ export default function DashboardScreen() {
           </View>
         </ScrollView>
       </View>
+
+      {/* Urine Protein Modal */}
+      <UrineProteinModal
+        visible={showUrineProteinModal}
+        onComplete={handleUrineProteinComplete}
+        onDefer={handleUrineProteinDefer}
+      />
     </ImageBackground>
   );
 }
@@ -333,6 +422,24 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingHorizontal: 24,
     paddingBottom: 60,
+  },
+  alertBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF3E0",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#FFE0B2",
+  },
+  alertBarText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#E65100",
   },
   deviceCard: {
     backgroundColor: "rgba(255,255,255,0.95)",
@@ -368,11 +475,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     width: 70,
   },
+  deviceImageWrapper: {
+    position: "relative",
+  },
   deviceIcon: {
     width: 56,
     height: 56,
     resizeMode: "contain",
     marginBottom: 4,
+  },
+  sourceBadge: {
+    position: "absolute",
+    bottom: 2,
+    right: -4,
+    backgroundColor: "#2196F3",
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  sourceBadgeText: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: "#fff",
   },
   deviceName: {
     fontSize: 11,
@@ -431,6 +555,11 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+  readingItemHigh: {
+    borderWidth: 2,
+    borderColor: "#ef5350",
+    backgroundColor: "rgba(255,235,238,0.95)",
+  },
   readingHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -457,11 +586,25 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  highBadge: {
+    backgroundColor: "#c62828",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  highBadgeText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "700",
+  },
   readingValue: {
     fontSize: 28,
     fontWeight: "700",
     color: "#222",
     marginTop: 4,
+  },
+  readingValueHigh: {
+    color: "#c62828",
   },
   readingUnit: {
     fontSize: 16,

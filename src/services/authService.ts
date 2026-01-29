@@ -45,6 +45,26 @@ const authService = {
   /**
    * Verify the 6-digit code
    * Returns LocalUser on success, null on failure
+   * 
+   * Expected API response format:
+   * {
+   *   success: true,
+   *   patient: {
+   *     patientId: 12345,
+   *     firstName: "Jane",
+   *     lastName: "Doe",
+   *     phone: "+15551234567"
+   *   },
+   *   provider: {
+   *     firstName: "Dr. John",
+   *     lastName: "Smith",
+   *     practiceName: "Trinity Women's Health"
+   *   },
+   *   bpThresholds: {          // NEW: Physician-set BP thresholds
+   *     systolicHigh: 140,
+   *     diastolicHigh: 90
+   *   }
+   * }
    */
   async verifyCode(phone: string, code: string): Promise<LocalUser | null> {
     try {
@@ -71,6 +91,13 @@ const authService = {
         throw new Error(data.error || "Verification failed");
       }
 
+      // Extract BP thresholds from response (with defaults)
+      const bpThresholds = data.bpThresholds || {};
+      const systolicHigh = bpThresholds.systolicHigh ?? 140;
+      const diastolicHigh = bpThresholds.diastolicHigh ?? 90;
+
+      console.log("[Auth] BP Thresholds from server:", { systolicHigh, diastolicHigh });
+
       // Build LocalUser from response
       const user: LocalUser = {
         patientId: String(data.patient.patientId),
@@ -80,6 +107,8 @@ const authService = {
         providerFirstName: data.provider?.firstName || "",
         providerLastName: data.provider?.lastName || "",
         providerPracticeName: data.provider?.practiceName || "",
+        systolicHigh,
+        diastolicHigh,
       };
 
       // Persist to SQLite

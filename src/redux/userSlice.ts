@@ -4,6 +4,11 @@ import { getUser, clearUser, LocalUser } from "../services/sqliteService";
 // ----------------------------------
 // State type definition
 // ----------------------------------
+interface BPThresholds {
+  systolicHigh: number;
+  diastolicHigh: number;
+}
+
 interface UserState {
   isAuthenticated: boolean;
   loading: boolean;
@@ -16,6 +21,9 @@ interface UserState {
   providerFirstName?: string;
   providerLastName?: string;
   providerPracticeName?: string;
+
+  // BP Thresholds from physician
+  bpThresholds: BPThresholds;
 }
 
 // ----------------------------------
@@ -24,6 +32,10 @@ interface UserState {
 const initialState: UserState = {
   isAuthenticated: false,
   loading: true,
+  bpThresholds: {
+    systolicHigh: 140,  // Default values per clinical guidelines
+    diastolicHigh: 90,
+  },
 };
 
 // ----------------------------------
@@ -59,6 +71,12 @@ const userSlice = createSlice({
       state.providerLastName = u.providerLastName;
       state.providerPracticeName = u.providerPracticeName;
       state.loading = false;
+
+      // Set BP thresholds from login response
+      state.bpThresholds = {
+        systolicHigh: u.systolicHigh ?? 140,
+        diastolicHigh: u.diastolicHigh ?? 90,
+      };
     },
 
     // --- Manual override if needed ---
@@ -74,6 +92,17 @@ const userSlice = createSlice({
       state.providerLastName = u.providerLastName;
       state.providerPracticeName = u.providerPracticeName;
       state.loading = false;
+
+      // Set BP thresholds
+      state.bpThresholds = {
+        systolicHigh: u.systolicHigh ?? 140,
+        diastolicHigh: u.diastolicHigh ?? 90,
+      };
+    },
+
+    // --- Update BP thresholds separately (e.g., from a refresh) ---
+    setBPThresholds: (state, action: PayloadAction<BPThresholds>) => {
+      state.bpThresholds = action.payload;
     },
 
     // --- Logout clears state + SQLite ---
@@ -94,6 +123,10 @@ const userSlice = createSlice({
       state.providerLastName = undefined;
       state.providerPracticeName = undefined;
       state.loading = false;
+      state.bpThresholds = {
+        systolicHigh: 140,
+        diastolicHigh: 90,
+      };
     },
   },
 
@@ -111,6 +144,12 @@ const userSlice = createSlice({
         state.providerFirstName = u.providerFirstName;
         state.providerLastName = u.providerLastName;
         state.providerPracticeName = u.providerPracticeName;
+
+        // Restore BP thresholds from SQLite
+        state.bpThresholds = {
+          systolicHigh: u.systolicHigh ?? 140,
+          diastolicHigh: u.diastolicHigh ?? 90,
+        };
       }
 
       state.loading = false;
@@ -119,7 +158,34 @@ const userSlice = createSlice({
 });
 
 // ----------------------------------
+// Selectors
+// ----------------------------------
+
+/**
+ * Check if a BP reading is considered HIGH based on physician thresholds
+ * Returns true if systolic >= threshold OR diastolic >= threshold
+ */
+export const isBPHigh = (
+  systolic: number,
+  diastolic: number,
+  thresholds: BPThresholds
+): boolean => {
+  return systolic >= thresholds.systolicHigh || diastolic >= thresholds.diastolicHigh;
+};
+
+/**
+ * Get color for BP reading based on threshold
+ */
+export const getBPColor = (
+  systolic: number,
+  diastolic: number,
+  thresholds: BPThresholds
+): 'normal' | 'high' => {
+  return isBPHigh(systolic, diastolic, thresholds) ? 'high' : 'normal';
+};
+
+// ----------------------------------
 // Exports
 // ----------------------------------
-export const { login, logout, setUser } = userSlice.actions;
+export const { login, logout, setUser, setBPThresholds } = userSlice.actions;
 export default userSlice.reducer;

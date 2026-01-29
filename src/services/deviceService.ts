@@ -1,179 +1,331 @@
-import { NativeModules, NativeEventEmitter } from 'react-native';
+/**
+ * deviceService.ts
+ *
+ * Wrapper service for IHealthDevices native module.
+ * Supports both iHealth SDK devices and generic BLE GATT devices.
+ *
+ * Device Sources:
+ * - iHealthSDK: BP3L, BP5, BP5S, HS2, HS2S, HS4S
+ * - BLE_GATT: Any device advertising BP (0x1810) or Scale (0x181D) services
+ */
+
+import { NativeModules, NativeEventEmitter, EmitterSubscription } from "react-native";
 
 const { IHealthDevices } = NativeModules;
-const emitter = new NativeEventEmitter(IHealthDevices);
+const eventEmitter = new NativeEventEmitter(IHealthDevices);
 
-export type DeviceType = 'BP' | 'SCALE' | 'BG';
-export type Device = { id: string; name: string; type: DeviceType; mac?: string; image?: any };
+// Device type mapping
+export type DeviceCategory = "BP" | "SCALE";
+export type DeviceSource = "iHealthSDK" | "BLE_GATT";
 
-export type ReadingPayload =
-  | { type: 'BP'; systolic: number; diastolic: number; heartRate: number; unit: 'mmHg' }
-  | { type: 'SCALE'; value: number; unit: 'lb' }
-  | { type: 'BG'; value: number; unit: 'mg/dL' };
-
-const img = {
-  BP3L: require('../assets/bp3l.png'),
-  BP5: require('../assets/bp3l.png'),
-  BP5S: require('../assets/bp3l.png'),
-  HS2S: require('../assets/hs5s.png'),
-  BG5: require('../assets/bg5.png'),
-  BG5S: require('../assets/bg5.png'),
-};
-
-function mapIHealthType(type: string): DeviceType {
-  if (type.startsWith('BP')) return 'BP';
-  if (type.startsWith('HS')) return 'SCALE';
-  if (type.startsWith('BG')) return 'BG';
-  return 'BP';
+export interface DiscoveredDevice {
+  mac: string;
+  name: string;
+  type: string; // e.g., "BP3L", "HS2S", "GATT_BP", "GATT_SCALE"
+  category?: DeviceCategory;
+  rssi?: number;
+  source: DeviceSource;
 }
 
-function getImage(type: string) {
-  return img[type as keyof typeof img] || img.BP3L;
+export interface ConnectionEvent {
+  mac: string;
+  type: string;
+  connected: boolean;
+  source?: DeviceSource;
 }
 
-class deviceService {
-  devices: Device[] = [];
-  private authenticated = false;
-  private scanSubscription: any = null;
+export interface BloodPressureReading {
+  mac: string;
+  type: string;
+  systolic: number;
+  diastolic: number;
+  pulse: number;
+  irregular?: boolean;
+  source?: DeviceSource;
+  timestamp?: number;
+}
 
-  async authenticate(): Promise<boolean> {
-    if (this.authenticated) return true;
+export interface WeightReading {
+  mac: string;
+  type: string;
+  weight: number;
+  unit: string;
+  source?: DeviceSource;
+  timestamp?: number;
+}
+
+export interface DeviceError {
+  mac: string;
+  type: string;
+  error: number;
+  message?: string;
+}
+
+export interface DebugLogEvent {
+  message: string;
+  timestamp: number;
+}
+
+// Supported iHealth device types for scanning
+const IHEALTH_DEVICE_TYPES = ["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"];
+
+/**
+ * Map device type string to category
+ */
+function getDeviceCategory(type: string): DeviceCategory {
+  const upperType = type.toUpperCase();
+  if (upperType.includes("BP") || upperType.includes("BLOOD")) {
+    return "BP";
+  }
+  if (upperType.includes("HS") || upperType.includes("SCALE") || upperType.includes("WEIGHT")) {
+    return "SCALE";
+  }
+  return "BP"; // Default
+}
+
+/**
+ * Device Service - Unified interface for device operations
+ */
+const deviceService = {
+  /**
+   * Authenticate with iHealth SDK
+   * Required before using iHealth devices
+   */
+  authenticate: async (): Promise<boolean> => {
     try {
-      await IHealthDevices.authenticate('license.pem');
-      this.authenticated = true;
+      const result = await IHealthDevices.authenticate("");
+      console.log("[deviceService] Authentication result:", result);
+      return result === true;
+    } catch (error) {
+      console.error("[deviceService] Authentication error:", error);
+      // Continue anyway - might work in trial mode
       return true;
-    } catch (e) {
-      console.error('iHealth auth failed:', e);
+    }
+  },
+
+  /**
+   * Check if SDK is authenticated
+   */
+  isAuthenticated: async (): Promise<boolean> => {
+    try {
+      return await IHealthDevices.isAuthenticated();
+    } catch (error) {
       return false;
     }
-  }
+  },
 
-  async scan(timeoutMs = 12000): Promise<Device[]> {
-    // Authenticate first if needed
-    if (!this.authenticated) {
-      const ok = await this.authenticate();
-      if (!ok) {
-        console.warn('Auth failed, returning empty device list');
-        return [];
-      }
+  /**
+   * Start scanning for devices
+   * Scans both iHealth SDK devices and BLE GATT devices simultaneously
+   */
+  startScan: async (deviceTypes?: string[]): Promise<void> => {
+    try {
+      const types = deviceTypes || IHEALTH_DEVICE_TYPES;
+      console.log("[deviceService] Starting scan for:", types);
+      await IHealthDevices.startScan(types);
+    } catch (error) {
+      console.error("[deviceService] Scan error:", error);
+      throw error;
     }
+  },
 
-    this.devices = [];
+  /**
+   * Stop all scanning
+   */
+  stopScan: async (): Promise<void> => {
+    try {
+      await IHealthDevices.stopScan();
+      console.log("[deviceService] Scan stopped");
+    } catch (error) {
+      console.error("[deviceService] Stop scan error:", error);
+    }
+  },
 
-    return new Promise((resolve) => {
-      // Listen for discovered devices
-      this.scanSubscription = emitter.addListener('onDeviceFound', (device) => {
-        const exists = this.devices.find(d => d.mac === device.mac);
-        if (!exists) {
-          this.devices.push({
-            id: device.mac,
-            mac: device.mac,
-            name: device.name || device.type,
-            type: mapIHealthType(device.type),
-            image: getImage(device.type),
-          });
-        }
-      });
+  /**
+   * Connect to a device
+   * @param mac - Device MAC address or UUID (for GATT devices)
+   * @param deviceType - Device type string (e.g., "BP3L", "GATT_BP")
+   */
+  connect: async (mac: string, deviceType: string): Promise<boolean> => {
+    try {
+      console.log("[deviceService] Connecting to:", mac, deviceType);
+      const result = await IHealthDevices.connectDevice(mac, deviceType);
+      return result === true;
+    } catch (error) {
+      console.error("[deviceService] Connect error:", error);
+      throw error;
+    }
+  },
 
-      // Start scanning for all supported device types
-      IHealthDevices.startScan(['BP3L', 'BP5', 'BP5S', 'BG5', 'BG5S', 'HS2S']);
+  /**
+   * Disconnect from a device
+   */
+  disconnect: async (mac: string): Promise<void> => {
+    try {
+      await IHealthDevices.disconnectDevice(mac);
+      console.log("[deviceService] Disconnected:", mac);
+    } catch (error) {
+      console.error("[deviceService] Disconnect error:", error);
+    }
+  },
 
-      // Stop after timeout
-      setTimeout(async () => {
-        await IHealthDevices.stopScan();
-        this.scanSubscription?.remove();
-        resolve(this.devices);
-      }, timeoutMs);
+  /**
+   * Disconnect from all devices
+   */
+  disconnectAll: async (): Promise<void> => {
+    try {
+      await IHealthDevices.disconnectAll();
+      console.log("[deviceService] All devices disconnected");
+    } catch (error) {
+      console.error("[deviceService] Disconnect all error:", error);
+    }
+  },
+
+  /**
+   * Start measurement on a connected device
+   */
+  startMeasurement: async (mac: string): Promise<void> => {
+    try {
+      await IHealthDevices.startMeasurement(mac);
+      console.log("[deviceService] Measurement started:", mac);
+    } catch (error) {
+      console.error("[deviceService] Start measurement error:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Stop measurement on a device
+   */
+  stopMeasurement: async (mac: string): Promise<void> => {
+    try {
+      await IHealthDevices.stopMeasurement(mac);
+      console.log("[deviceService] Measurement stopped:", mac);
+    } catch (error) {
+      console.error("[deviceService] Stop measurement error:", error);
+    }
+  },
+
+  /**
+   * Get list of currently connected devices
+   */
+  getConnectedDevices: async (): Promise<Array<{ mac: string; type: string; source: string }>> => {
+    try {
+      return await IHealthDevices.getConnectedDevices();
+    } catch (error) {
+      console.error("[deviceService] Get connected devices error:", error);
+      return [];
+    }
+  },
+
+  /**
+   * Get battery level for a device
+   * Returns -1 if not available
+   */
+  getBatteryLevel: async (mac: string): Promise<number> => {
+    try {
+      return await IHealthDevices.getBatteryLevel(mac);
+    } catch (error) {
+      console.error("[deviceService] Get battery error:", error);
+      return -1;
+    }
+  },
+
+  // ============================================================
+  // Event Listeners
+  // ============================================================
+
+  /**
+   * Listen for discovered devices
+   */
+  onDeviceFound: (callback: (device: DiscoveredDevice) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onDeviceFound", (event) => {
+      const device: DiscoveredDevice = {
+        mac: event.mac,
+        name: event.name,
+        type: event.type,
+        category: event.category || getDeviceCategory(event.type),
+        rssi: event.rssi,
+        source: event.source || "iHealthSDK",
+      };
+      callback(device);
     });
-  }
+  },
 
-  async connect(id: string, timeoutMs = 10000): Promise<boolean> {
-    const device = this.devices.find(d => d.id === id || d.mac === id);
-    if (!device) return false;
+  /**
+   * Listen for connection state changes
+   */
+  onConnectionStateChanged: (callback: (event: ConnectionEvent) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onConnectionStateChanged", callback);
+  },
 
-    // Determine iHealth device type from our device
-    let iHealthType = 'BP3L';
-    if (device.name.includes('BP5S')) iHealthType = 'BP5S';
-    else if (device.name.includes('BP5')) iHealthType = 'BP5';
-    else if (device.name.includes('BP3L')) iHealthType = 'BP3L';
-    else if (device.name.includes('BG5S')) iHealthType = 'BG5S';
-    else if (device.name.includes('BG5')) iHealthType = 'BG5';
-    else if (device.name.includes('HS2S')) iHealthType = 'HS2S';
+  /**
+   * Listen for scan state changes
+   */
+  onScanStateChanged: (callback: (event: { scanning: boolean }) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onScanStateChanged", callback);
+  },
 
-    return new Promise((resolve) => {
-      const sub = emitter.addListener('onConnectionStateChanged', (event) => {
-        if (event.mac === device.mac) {
-          sub.remove();
-          resolve(event.connected);
-        }
-      });
+  /**
+   * Listen for blood pressure readings
+   */
+  onBloodPressureReading: (callback: (reading: BloodPressureReading) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onBloodPressureReading", callback);
+  },
 
-      IHealthDevices.connectDevice(device.mac, iHealthType);
+  /**
+   * Listen for weight readings
+   */
+  onWeightReading: (callback: (reading: WeightReading) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onWeightReading", callback);
+  },
 
-      // Timeout
-      setTimeout(() => {
-        sub.remove();
-        resolve(false);
-      }, timeoutMs);
-    });
-  }
+  /**
+   * Listen for device errors
+   */
+  onError: (callback: (error: DeviceError) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onError", callback);
+  },
 
-  async measure(device: Device): Promise<ReadingPayload> {
-    return new Promise((resolve, reject) => {
-      let sub: any;
+  /**
+   * Listen for debug log messages
+   */
+  onDebugLog: (callback: (event: DebugLogEvent) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onDebugLog", callback);
+  },
 
-      if (device.type === 'BP') {
-        sub = emitter.addListener('onBloodPressureReading', (reading) => {
-          if (reading.mac === device.mac || reading.mac === device.id) {
-            sub.remove();
-            resolve({
-              type: 'BP',
-              systolic: reading.systolic,
-              diastolic: reading.diastolic,
-              heartRate: reading.pulse,
-              unit: 'mmHg',
-            });
-          }
-        });
-      } else if (device.type === 'BG') {
-        sub = emitter.addListener('onBloodGlucoseReading', (reading) => {
-          if (reading.mac === device.mac || reading.mac === device.id) {
-            sub.remove();
-            resolve({
-              type: 'BG',
-              value: reading.value,
-              unit: 'mg/dL',
-            });
-          }
-        });
-      } else if (device.type === 'SCALE') {
-        sub = emitter.addListener('onWeightReading', (reading) => {
-          if (reading.mac === device.mac || reading.mac === device.id) {
-            sub.remove();
-            resolve({
-              type: 'SCALE',
-              value: reading.weight * 2.205, // kg to lb
-              unit: 'lb',
-            });
-          }
-        });
-      }
+  // ============================================================
+  // Utility Functions
+  // ============================================================
 
-      // Start measurement
-      IHealthDevices.startMeasurement(device.mac || device.id);
+  /**
+   * Get device category from type string
+   */
+  getCategory: getDeviceCategory,
 
-      // Timeout after 60 seconds (measurements can take a while)
-      setTimeout(() => {
-        sub?.remove();
-        reject(new Error('Measurement timeout'));
-      }, 60000);
-    });
-  }
+  /**
+   * Check if device type is a GATT device
+   */
+  isGATTDevice: (type: string): boolean => {
+    return type.toUpperCase().startsWith("GATT_");
+  },
 
-  async disconnect(id: string): Promise<void> {
-    await IHealthDevices.disconnectDevice(id);
-  }
-}
+  /**
+   * Get friendly name for device type
+   */
+  getFriendlyTypeName: (type: string): string => {
+    const typeMap: Record<string, string> = {
+      BP3L: "iHealth BP3L",
+      BP5: "iHealth BP5",
+      BP5S: "iHealth BP5S",
+      GATT_BP: "BLE Blood Pressure Monitor",
+      HS2: "iHealth HS2",
+      HS2S: "iHealth HS2S",
+      HS4S: "iHealth HS4S",
+      GATT_SCALE: "BLE Smart Scale",
+    };
+    return typeMap[type] || type;
+  },
+};
 
-const service = new deviceService();
-export default service;
+export default deviceService;
