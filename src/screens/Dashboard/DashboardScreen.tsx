@@ -188,7 +188,7 @@ export default function DashboardScreen() {
 
   return (
     <ImageBackground
-      source={require("../../assets/dashbg.png")}
+      source={require("../../assets/background.png")}
       style={styles.image}
       resizeMode="cover"
     >

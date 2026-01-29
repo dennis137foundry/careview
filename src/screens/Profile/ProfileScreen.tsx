@@ -3,6 +3,7 @@ import React, { useEffect } from "react";
 import {
   View,
   Text,
+  ImageBackground,
   StyleSheet,
   TouchableOpacity,
   Alert,
@@ -81,7 +82,6 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
         style: "destructive",
         onPress: () => {
           dispatch(logout());
-          // Navigation will automatically switch to Auth due to isAuthenticated change
         },
       },
     ]);
@@ -93,10 +93,12 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
     });
   };
 
-  const initials =
-    (user.firstName?.charAt(0) ?? "") + (user.lastName?.charAt(0) ?? "");
-
   return (
+    <ImageBackground
+          source={require("../../assets/background.png")}
+          style={styles.image}
+          resizeMode="cover"
+        >
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
@@ -106,42 +108,32 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
         style={styles.backgroundGradient}
       />
 
-       <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: insets.top + 40 },
-        ]}
+      {/* Header */}
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+        <Text style={styles.headerTitle}>Profile</Text>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {/* Name Card */}
         <Animated.View
           style={[
-            styles.profileSection,
+            styles.nameCard,
             {
               opacity: fadeAnim,
               transform: [{ scale: scaleAnim }],
             },
           ]}
         >
-          {/* Avatar */}
-          <View style={styles.avatarOuter}>
-            <LinearGradient
-              colors={["#0066CC", "#004499"]}
-              style={styles.avatarGradient}
-            >
-              <Text style={styles.avatarText}>
-                {initials || "?"}
-              </Text>
-            </LinearGradient>
-          </View>
-
-          {/* Name & ID */}
           <Text style={styles.userName}>
             {user.firstName || "Unknown"} {user.lastName || ""}
           </Text>
-          <View style={styles.patientIdBadge}>
-            <MaterialIcons name="badge" size={14} color="#0066CC" />
+          <View style={styles.patientIdRow}>
+            <MaterialIcons name="badge" size={16} color="#0066CC" />
             <Text style={styles.patientIdText}>
-              ID: {user.patientId || "N/A"}
+              Patient ID: {user.patientId || "N/A"}
             </Text>
           </View>
         </Animated.View>
@@ -194,28 +186,34 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
             },
           ]}
         >
-
           <TouchableOpacity style={styles.actionButton} onPress={handleLogout}>
-            <MaterialIcons name="settings" size={20} color="#0066CC" />
+            <MaterialIcons name="logout" size={20} color="#0066CC" />
             <Text style={styles.actionButtonText}>Sign Out</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionButton} onPress={handleHelpSupport}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.actionButtonLast]}
+            onPress={handleHelpSupport}
+          >
             <MaterialIcons name="help-outline" size={20} color="#0066CC" />
             <Text style={styles.actionButtonText}>Help & Support</Text>
           </TouchableOpacity>
         </Animated.View>
 
-       
-
         {/* Version */}
         <Text style={styles.versionText}>CareView v1.0.0</Text>
       </ScrollView>
     </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  image: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
   container: {
     flex: 1,
     backgroundColor: "#001830",
@@ -223,77 +221,56 @@ const styles = StyleSheet.create({
   backgroundGradient: {
     ...StyleSheet.absoluteFillObject,
   },
-  topShape: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 280,
-    overflow: "hidden",
+  header: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
   },
-  topShapeGradient: {
-    flex: 1,
-    borderBottomLeftRadius: 40,
-    borderBottomRightRadius: 40,
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#fff",
   },
   scrollContent: {
     paddingHorizontal: 20,
     paddingBottom: 40,
   },
-  profileSection: {
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  avatarOuter: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    padding: 4,
-    backgroundColor: "rgba(255,255,255,0.2)",
+  nameCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 20,
     marginBottom: 16,
-  },
-  avatarGradient: {
-    flex: 1,
-    borderRadius: 53,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  avatarText: {
-    fontSize: 38,
-    fontWeight: "700",
-    color: "#fff",
-    letterSpacing: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
   },
   userName: {
-    fontSize: 28,
+    fontSize: 22,
     fontWeight: "700",
-    color: "#fff",
+    color: "#1a2a3a",
     marginBottom: 8,
   },
-  patientIdBadge: {
+  patientIdRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.95)",
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
     gap: 6,
   },
   patientIdText: {
-    fontSize: 13,
-    fontWeight: "600",
+    fontSize: 14,
+    fontWeight: "500",
     color: "#0066CC",
   },
   infoCard: {
     backgroundColor: "#fff",
-    borderRadius: 20,
-    padding: 24,
+    borderRadius: 16,
+    padding: 20,
     marginBottom: 16,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 24,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
   },
   sectionTitle: {
     fontSize: 13,
@@ -337,7 +314,7 @@ const styles = StyleSheet.create({
   },
   actionsContainer: {
     backgroundColor: "#fff",
-    borderRadius: 20,
+    borderRadius: 16,
     overflow: "hidden",
     marginBottom: 24,
     shadowColor: "#000",
@@ -354,25 +331,13 @@ const styles = StyleSheet.create({
     borderBottomColor: "#F0F4F8",
     gap: 14,
   },
+  actionButtonLast: {
+    borderBottomWidth: 0,
+  },
   actionButtonText: {
     fontSize: 16,
     fontWeight: "500",
     color: "#1a2a3a",
-  },
-  logoutButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(220, 53, 69, 0.1)",
-    paddingVertical: 16,
-    borderRadius: 14,
-    gap: 10,
-    marginBottom: 20,
-  },
-  logoutText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#DC3545",
   },
   versionText: {
     textAlign: "center",

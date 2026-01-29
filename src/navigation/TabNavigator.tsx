@@ -49,7 +49,8 @@ export default function TabNavigator() {
         name="Dashboard"
         component={DashboardNavigator}
         listeners={({ navigation }: any) => ({
-          tabPress: () => {
+          tabPress: (e: any) => {
+            e.preventDefault();
             navigation.navigate("Dashboard", { screen: "DashboardMain" });
           },
         })}
@@ -58,7 +59,8 @@ export default function TabNavigator() {
         name="Devices"
         component={DevicesNavigator}
         listeners={({ navigation }: any) => ({
-          tabPress: () => {
+          tabPress: (e: any) => {
+            e.preventDefault();
             navigation.navigate("Devices", { screen: "DevicesMain" });
           },
         })}
@@ -67,7 +69,8 @@ export default function TabNavigator() {
         name="History"
         component={HistoryNavigator}
         listeners={({ navigation }: any) => ({
-          tabPress: () => {
+          tabPress: (e: any) => {
+            e.preventDefault();
             navigation.navigate("History", { screen: "HistoryMain" });
           },
         })}
@@ -76,7 +79,8 @@ export default function TabNavigator() {
         name="Profile"
         component={ProfileNavigator}
         listeners={({ navigation }: any) => ({
-          tabPress: () => {
+          tabPress: (e: any) => {
+            e.preventDefault();
             navigation.navigate("Profile", { screen: "ProfileMain" });
           },
         })}

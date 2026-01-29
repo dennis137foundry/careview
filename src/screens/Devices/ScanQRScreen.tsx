@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ export default function ScanQRScreen({ navigation, route }: any) {
   const { deviceId, deviceName, returnTo } = params;
 
   const [scanned, setScanned] = useState(false);
+  const isProcessingRef = useRef(false);
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice("back");
 
@@ -41,14 +42,24 @@ export default function ScanQRScreen({ navigation, route }: any) {
     }
   }, [hasPermission, requestPermission]);
 
+  // Reset processing ref when component mounts (in case of navigation back)
+  useEffect(() => {
+    isProcessingRef.current = false;
+    setScanned(false);
+  }, []);
+
   const handleCodeScanned = useCallback(
     (codes: any[]) => {
-      if (scanned || codes.length === 0) return;
-      
+      // Use ref for immediate sync check, not state which is async
+      if (isProcessingRef.current || codes.length === 0) return;
+
       const value = codes[0].value;
       if (!value) return;
 
+      // Immediately block further scans
+      isProcessingRef.current = true;
       setScanned(true);
+
       console.log("📷 QR Code scanned:", value);
 
       if (isUpdatingExisting) {
@@ -59,11 +70,15 @@ export default function ScanQRScreen({ navigation, route }: any) {
             {
               text: "Cancel",
               style: "cancel",
-              onPress: () => setScanned(false),
+              onPress: () => {
+                isProcessingRef.current = false;
+                setScanned(false);
+              },
             },
             {
               text: "Save",
               onPress: () => {
+                isProcessingRef.current = false;
                 if (returnTo === "Capture") {
                   navigation.navigate("Capture", { deviceId, bottleCode: value });
                 } else {
@@ -91,17 +106,23 @@ export default function ScanQRScreen({ navigation, route }: any) {
             {
               text: "Cancel",
               style: "cancel",
-              onPress: () => setScanned(false),
+              onPress: () => {
+                isProcessingRef.current = false;
+                setScanned(false);
+              },
             },
             {
               text: "Add Device",
-              onPress: () => navigation.navigate("AddDevice", { scannedId: value, scannedMac: mac }),
+              onPress: () => {
+                isProcessingRef.current = false;
+                navigation.navigate("AddDevice", { scannedId: value, scannedMac: mac });
+              },
             },
           ]
         );
       }
     },
-    [scanned, isUpdatingExisting, deviceId, returnTo, navigation]
+    [isUpdatingExisting, deviceId, returnTo, navigation]
   );
 
   const codeScanner = useCodeScanner({

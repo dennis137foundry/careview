@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
+  ImageBackground,
   StyleSheet,
   Image,
   TouchableOpacity,
@@ -98,6 +99,11 @@ function SwipeableDeviceCard({
   const typeLabel = deviceTypeLabels[device.type] || device.type;
 
   return (
+    <ImageBackground
+              source={require("../../assets/background.png")}
+              style={styles.image}
+              resizeMode="cover"
+            >
     <View style={styles.cardContainer}>
       {/* Delete button behind card */}
       <View style={styles.deleteButtonContainer}>
@@ -184,6 +190,7 @@ function SwipeableDeviceCard({
         />
       )}
     </View>
+    </ImageBackground>
   );
 }
 
@@ -266,6 +273,11 @@ export default function DevicesScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
+  image: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
   container: { 
     flex: 1, 
     padding: 16,
