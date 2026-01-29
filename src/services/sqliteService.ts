@@ -6,6 +6,7 @@ const db = open({ name: "trinity.db" });
 // ----------------------
 // Initialize Database
 // ----------------------
+
 export function initDB() {
   // Create user table with all fields including BP thresholds
   db.execute(`
@@ -47,6 +48,13 @@ export function initDB() {
       bottleCode TEXT,
       friendlyName TEXT,
       source TEXT DEFAULT 'iHealthSDK'
+    );
+  `);
+
+  db.execute(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
     );
   `);
 
@@ -202,9 +210,64 @@ export async function getUser(): Promise<LocalUser | null> {
 }
 
 // ----------------------
+// App Settings Helpers
+// ----------------------
+
+/**
+ * Get a setting value from app_settings table
+ */
+export function getAppSetting(key: string): string | null {
+  try {
+    const res = db.execute(
+      "SELECT value FROM app_settings WHERE key = ?;",
+      [key]
+    );
+    if (res.rows && res.rows.length > 0) {
+      return res.rows.item(0).value;
+    }
+    return null;
+  } catch (e) {
+    console.error("❌ Failed to get app setting:", key, e);
+    return null;
+  }
+}
+
+/**
+ * Set a setting value in app_settings table
+ */
+export function setAppSetting(key: string, value: string): void {
+  try {
+    db.execute(
+      "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);",
+      [key, value]
+    );
+    console.log("✅ App setting saved:", key);
+  } catch (e) {
+    console.error("❌ Failed to set app setting:", key, e);
+  }
+}
+
+/**
+ * Check if this is the first launch of the app
+ * Returns true if no "has_launched" flag is set
+ */
+export function getIsFirstLaunch(): boolean {
+  const hasLaunched = getAppSetting("has_launched");
+  return hasLaunched !== "1";
+}
+
+/**
+ * Mark that the app has been launched (no longer first launch)
+ */
+export function setFirstLaunchComplete(): void {
+  setAppSetting("has_launched", "1");
+  console.log("✅ First launch complete flag set");
+}
+
+// ----------------------
 // Device Helpers
 // ----------------------
-export type DeviceSource = 'iHealthSDK' | 'BLE_GATT';
+export type DeviceSource = "iHealthSDK" | "BLE_GATT";
 
 export type DeviceRecord = {
   id: string;
@@ -230,7 +293,7 @@ export function saveDevice(device: DeviceRecord) {
         device.model || null,
         device.bottleCode || null,
         device.friendlyName || null,
-        device.source || 'iHealthSDK',
+        device.source || "iHealthSDK",
       ]
     );
     console.log("✅ Device saved:", device.id);
@@ -340,8 +403,11 @@ export type SavedReading = {
   measurementCondition?: string;
 };
 
-export function saveReading(r: Omit<SavedReading, 'id' | 'ts'> & { id?: string; ts?: number }) {
-  const id = r.id || `reading_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+export function saveReading(
+  r: Omit<SavedReading, "id" | "ts"> & { id?: string; ts?: number }
+) {
+  const id =
+    r.id || `reading_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const ts = r.ts || Date.now();
   try {
     db.execute(
@@ -360,7 +426,12 @@ export function saveReading(r: Omit<SavedReading, 'id' | 'ts'> & { id?: string; 
         r.measurementCondition ?? null,
       ]
     );
-    console.log("✅ Reading saved:", id, "measurementCondition:", r.measurementCondition);
+    console.log(
+      "✅ Reading saved:",
+      id,
+      "measurementCondition:",
+      r.measurementCondition
+    );
   } catch (e) {
     console.error("❌ Failed to save reading:", e);
   }
@@ -393,7 +464,9 @@ export function getAllReadings(): SavedReading[] {
 /** Get all readings that haven't been synced yet */
 export function getUnsyncedReadings(): SavedReading[] {
   try {
-    const res = db.execute("SELECT * FROM readings WHERE synced = 0 ORDER BY ts ASC;");
+    const res = db.execute(
+      "SELECT * FROM readings WHERE synced = 0 ORDER BY ts ASC;"
+    );
     const out: SavedReading[] = [];
     if (res.rows) {
       for (let i = 0; i < res.rows.length; i++) {
@@ -427,7 +500,10 @@ export function markReadingsSynced(ids: string[]) {
   try {
     if (ids.length === 0) return;
     const placeholders = ids.map(() => "?").join(",");
-    db.execute(`UPDATE readings SET synced = 1 WHERE id IN (${placeholders});`, ids);
+    db.execute(
+      `UPDATE readings SET synced = 1 WHERE id IN (${placeholders});`,
+      ids
+    );
     console.log("✅ Marked", ids.length, "readings as synced");
   } catch (e) {
     console.error("❌ Failed to mark readings as synced:", e);
@@ -437,7 +513,9 @@ export function markReadingsSynced(ids: string[]) {
 /** Get count of unsynced readings */
 export function getUnsyncedCount(): number {
   try {
-    const res = db.execute("SELECT COUNT(*) as count FROM readings WHERE synced = 0;");
+    const res = db.execute(
+      "SELECT COUNT(*) as count FROM readings WHERE synced = 0;"
+    );
     if (res.rows && res.rows.length > 0) {
       return res.rows.item(0).count;
     }
@@ -452,10 +530,10 @@ export function getUnsyncedCount(): number {
 // Screening Response Helpers
 // =====================================================================
 
-export type ScreeningType = 
-  | 'daily_health_check'      // Headaches/visual disturbances before BP
-  | 'urine_protein_result'    // 72-hour urine protein answer
-  | 'urine_protein_deferred'; // User pressed "Answer Later"
+export type ScreeningType =
+  | "daily_health_check" // Headaches/visual disturbances before BP
+  | "urine_protein_result" // 72-hour urine protein answer
+  | "urine_protein_deferred"; // User pressed "Answer Later"
 
 export type ScreeningResponse = {
   id: string;
@@ -472,7 +550,7 @@ export type DailyHealthCheckData = {
 };
 
 export type UrineProteinData = {
-  result?: 'Negative' | 'Trace' | '+1' | '+2' | '+3' | '+4';
+  result?: "Negative" | "Trace" | "+1" | "+2" | "+3" | "+4";
   deferred?: boolean;
 };
 
@@ -486,7 +564,7 @@ export function saveScreeningResponse(
   const id = `screening_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const timestamp = Date.now();
   const dataJson = JSON.stringify(data);
-  
+
   try {
     db.execute(
       "INSERT INTO screening_responses (id, type, timestamp, data, synced) VALUES (?, ?, ?, ?, 0);",
@@ -496,14 +574,16 @@ export function saveScreeningResponse(
     return id;
   } catch (e) {
     console.error("❌ Failed to save screening response:", e);
-    return '';
+    return "";
   }
 }
 
 /**
  * Get the most recent screening response of a given type
  */
-export function getLastScreeningResponse(type: ScreeningType): ScreeningResponse | null {
+export function getLastScreeningResponse(
+  type: ScreeningType
+): ScreeningResponse | null {
   try {
     const res = db.execute(
       "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? ORDER BY timestamp DESC LIMIT 1;",
@@ -607,18 +687,18 @@ export function hasDailyHealthCheckToday(): boolean {
   const now = new Date();
   const today2am = new Date(now);
   today2am.setHours(2, 0, 0, 0);
-  
+
   // If current time is before 2am, use yesterday's 2am as the reset point
   if (now.getHours() < 2) {
     today2am.setDate(today2am.getDate() - 1);
   }
-  
+
   const responses = getScreeningResponsesInRange(
-    'daily_health_check',
+    "daily_health_check",
     today2am.getTime(),
     Date.now()
   );
-  
+
   return responses.length > 0;
 }
 
@@ -627,14 +707,15 @@ export function hasDailyHealthCheckToday(): boolean {
  * Returns true if user needs to answer the urine protein question
  */
 export function needsUrineProteinResponse(): boolean {
-  const lastAnswer = getLastScreeningResponse('urine_protein_result');
-  
+  const lastAnswer = getLastScreeningResponse("urine_protein_result");
+
   if (!lastAnswer) {
     // Never answered - needs response
     return true;
   }
-  
-  const hoursSinceLastAnswer = (Date.now() - lastAnswer.timestamp) / (1000 * 60 * 60);
+
+  const hoursSinceLastAnswer =
+    (Date.now() - lastAnswer.timestamp) / (1000 * 60 * 60);
   return hoursSinceLastAnswer >= 72;
 }
 
@@ -646,24 +727,24 @@ export function hasUrineProteinDeferredToday(): boolean {
   const now = new Date();
   const todayStart = new Date(now);
   todayStart.setHours(0, 0, 0, 0);
-  
+
   const deferrals = getScreeningResponsesInRange(
-    'urine_protein_deferred',
+    "urine_protein_deferred",
     todayStart.getTime(),
     Date.now()
   );
-  
+
   // Check if there's a deferral today that hasn't been answered
   if (deferrals.length === 0) return false;
-  
+
   const lastDeferral = deferrals[0];
-  const lastAnswer = getLastScreeningResponse('urine_protein_result');
-  
+  const lastAnswer = getLastScreeningResponse("urine_protein_result");
+
   // If there's an answer after the deferral, the deferral is resolved
   if (lastAnswer && lastAnswer.timestamp > lastDeferral.timestamp) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -675,6 +756,12 @@ export default {
   saveUser,
   clearUser,
   getUser,
+  // App Settings
+  getAppSetting,
+  setAppSetting,
+  getIsFirstLaunch,
+  setFirstLaunchComplete,
+  // Devices
   saveDevice,
   updateDeviceBottleCode,
   updateDeviceFriendlyName,
@@ -682,6 +769,7 @@ export default {
   getDevice,
   getDeviceByType,
   removeDevice,
+  // Readings
   saveReading,
   getAllReadings,
   getUnsyncedReadings,

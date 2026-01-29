@@ -1,4 +1,3 @@
-/* eslint-disable react-native/no-inline-styles */
 import React, { useState } from "react";
 import {
   View,
@@ -21,15 +20,42 @@ interface DailyHealthCheckModalProps {
   onComplete: (data: DailyHealthCheckData) => void;
 }
 
-/**
- * Daily Health Check Modal
- * 
- * Shown before the first BP reading of each day (after 2am reset).
- * Asks about headaches and visual disturbances - key warning signs
- * for preeclampsia in pregnancy monitoring.
- * 
- * BLOCKS capture until answered.
- */
+const RadioOption = ({
+  label,
+  selected,
+  onPress,
+  color = "#00509f",
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  color?: string;
+}) => (
+  <TouchableOpacity
+    style={[
+      styles.radioOption,
+      selected && { borderColor: color, backgroundColor: `${color}10` },
+    ]}
+    onPress={onPress}
+    activeOpacity={0.7}
+  >
+    <View style={[styles.radioCircle, selected && { borderColor: color }]}>
+      {selected && (
+        <View style={[styles.radioFill, { backgroundColor: color }]} />
+      )}
+    </View>
+    <Text
+      style={[
+        styles.radioLabel,
+        selected && styles.radioLabelSelected,
+        selected && { color },
+      ]}
+    >
+      {label}
+    </Text>
+  </TouchableOpacity>
+);
+
 export default function DailyHealthCheckModal({
   visible,
   onComplete,
@@ -53,7 +79,7 @@ export default function DailyHealthCheckModal({
     };
 
     // Save to local DB
-    saveScreeningResponse('daily_health_check', data);
+    saveScreeningResponse("daily_health_check", data);
 
     // TODO: POST to EMR alert endpoint if symptoms present
     if (hasHeadaches || hasVisualDisturbances) {
@@ -70,31 +96,6 @@ export default function DailyHealthCheckModal({
 
     onComplete(data);
   };
-
-  const RadioOption = ({
-    label,
-    selected,
-    onPress,
-    color = "#00509f",
-  }: {
-    label: string;
-    selected: boolean;
-    onPress: () => void;
-    color?: string;
-  }) => (
-    <TouchableOpacity
-      style={[styles.radioOption, selected && { borderColor: color, backgroundColor: `${color}10` }]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <View style={[styles.radioCircle, selected && { borderColor: color }]}>
-        {selected && <View style={[styles.radioFill, { backgroundColor: color }]} />}
-      </View>
-      <Text style={[styles.radioLabel, selected && { color, fontWeight: "600" }]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
 
   return (
     <Modal
@@ -115,14 +116,16 @@ export default function DailyHealthCheckModal({
               </View>
               <Text style={styles.title}>Daily Health Check</Text>
               <Text style={styles.subtitle}>
-                Please answer these questions before taking your blood pressure reading today.
+                Please answer these questions before taking your blood pressure
+                reading today.
               </Text>
             </View>
 
             {/* Question 1: Headaches */}
             <View style={styles.questionBlock}>
               <Text style={styles.questionText}>
-                Are you experiencing any <Text style={styles.emphasis}>headaches</Text> today?
+                Are you experiencing any{" "}
+                <Text style={styles.emphasis}>headaches</Text> today?
               </Text>
               <View style={styles.radioRow}>
                 <RadioOption
@@ -143,7 +146,8 @@ export default function DailyHealthCheckModal({
             {/* Question 2: Visual Disturbances */}
             <View style={styles.questionBlock}>
               <Text style={styles.questionText}>
-                Are you experiencing any <Text style={styles.emphasis}>visual disturbances</Text>?
+                Are you experiencing any{" "}
+                <Text style={styles.emphasis}>visual disturbances</Text>?
               </Text>
               <Text style={styles.questionHint}>
                 (blurry vision, seeing spots, flashing lights, etc.)
@@ -195,7 +199,10 @@ export default function DailyHealthCheckModal({
 
             {/* Submit Button */}
             <TouchableOpacity
-              style={[styles.submitButton, !canSubmit && styles.submitButtonDisabled]}
+              style={[
+                styles.submitButton,
+                !canSubmit && styles.submitButtonDisabled,
+              ]}
               onPress={handleSubmit}
               disabled={!canSubmit || submitting}
               activeOpacity={0.8}
@@ -204,7 +211,9 @@ export default function DailyHealthCheckModal({
                 <ActivityIndicator color="#fff" />
               ) : (
                 <>
-                  <Text style={styles.submitButtonText}>Continue to BP Reading</Text>
+                  <Text style={styles.submitButtonText}>
+                    Continue to BP Reading
+                  </Text>
                   <MaterialIcons name="arrow-forward" size={20} color="#fff" />
                 </>
               )}
@@ -311,6 +320,9 @@ const styles = StyleSheet.create({
   radioLabel: {
     fontSize: 16,
     color: "#333",
+  },
+  radioLabelSelected: {
+    fontWeight: "600",
   },
   detailsBlock: {
     marginBottom: 20,

@@ -27,6 +27,7 @@ import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
 import { hasDailyHealthCheckToday } from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
+import { findNonSerializableValue } from "@reduxjs/toolkit";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
