@@ -36,8 +36,8 @@ import { store } from "../redux/store";
 
 const CONFIG = {
   // API endpoints
-  vitalsApiUrl: "https://appapi.trinityhhs.com/api/careviewapp/vitals_sync.php",
-  screeningApiUrl: "https://appapi.trinityhhs.com/api/careviewapp/screening_sync.php",
+  vitalsApiUrl: "https://trinitycareview.com/api/careviewapp/vitals_sync.php",
+  screeningApiUrl: "https://trinitycareview.com/api/careviewapp/screening_sync.php",
 
   // API key - must match server
   apiKey: "dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85",

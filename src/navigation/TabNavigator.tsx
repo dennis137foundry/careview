@@ -3,12 +3,7 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-// Import your custom SVG icons
-import DashboardIcon from "../assets/icons/dashboard.svg";
-import DevicesIcon from "../assets/icons/devices.svg";
-import HistoryIcon from "../assets/icons/history.svg";
-import ProfileIcon from "../assets/icons/profile.svg";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 
 import DashboardNavigator from "./DashboardNavigator";
 import DevicesNavigator from "./DevicesNavigator";
@@ -23,14 +18,6 @@ export type TabParamList = {
 };
 
 const Tab = createBottomTabNavigator<TabParamList>();
-
-// Map route names to icon components
-const TabIcons: Record<string, React.FC<{ width: number; height: number; fill: string }>> = {
-  Dashboard: DashboardIcon,
-  Devices: DevicesIcon,
-  History: HistoryIcon,
-  Profile: ProfileIcon,
-};
 
 export default function TabNavigator() {
   const insets = useSafeAreaInsets();
@@ -57,11 +44,19 @@ export default function TabNavigator() {
         tabBarActiveTintColor: "#ffffff",
         tabBarInactiveTintColor: "rgba(255,255,255,0.6)",
         tabBarIcon: ({ color, size }) => {
-          const IconComponent = TabIcons[route.name];
-          if (IconComponent) {
-            return <IconComponent width={size} height={size} fill={color} />;
+          let iconName: string = "help-outline";
+
+          if (route.name === "Dashboard") {
+            iconName = "dashboard";
+          } else if (route.name === "Devices") {
+            iconName = "devices-other";
+          } else if (route.name === "History") {
+            iconName = "history";
+          } else if (route.name === "Profile") {
+            iconName = "person";
           }
-          return null;
+
+          return <MaterialIcons name={iconName} size={size} color={color} />;
         },
       })}
     >
