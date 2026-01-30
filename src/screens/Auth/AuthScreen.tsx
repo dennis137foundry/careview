@@ -62,9 +62,9 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
       />
 
       {/* Title */}
-      <Text style={styles.title}>Welcome to Trinity CareView</Text>
+      <Text style={styles.title}>Trinity CareView</Text>
       <Text style={styles.subtitle}>
-        Enter your mobile number to receive a verification code.
+        Enter your mobile number to sign in.
       </Text>
 
       {/* Input */}
@@ -86,12 +86,12 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
         disabled={busy}
       >
         <Text style={styles.buttonText}>
-          {busy ? "Sending code..." : "Send Code"}
+          {busy ? "Please Wait..." : "Request Code"}
         </Text>
       </TouchableOpacity>
 
       <Text style={styles.demoNote}>
-        We'll text a 6-digit code to verify your number.
+        We’ll send a 6-digit code to verify you.
       </Text>
     </KeyboardAvoidingView>
   );
@@ -100,7 +100,7 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#001529",
+    backgroundColor: "#002040",
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
