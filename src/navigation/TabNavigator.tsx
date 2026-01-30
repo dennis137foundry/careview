@@ -2,6 +2,7 @@
 // src/navigation/TabNavigator.tsx
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 
 import DashboardNavigator from "./DashboardNavigator";
@@ -19,17 +20,29 @@ export type TabParamList = {
 const Tab = createBottomTabNavigator<TabParamList>();
 
 export default function TabNavigator() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarStyle: {
           backgroundColor: "#002040",
-          paddingTop: 8,
-          height: 60,
+          paddingTop: 16,
+          paddingBottom: insets.bottom > 0 ? insets.bottom + 8 : 20,
+          height: 80 + (insets.bottom > 0 ? insets.bottom : 0),
+          borderTopWidth: 0,
+        },
+        tabBarItemStyle: {
+          paddingVertical: 8,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: "600",
+          marginTop: 4,
         },
         tabBarActiveTintColor: "#ffffff",
-        tabBarInactiveTintColor: "#ffffff",
+        tabBarInactiveTintColor: "rgba(255,255,255,0.6)",
         tabBarIcon: ({ color, size }) => {
           let iconName: string = "help-outline";
 

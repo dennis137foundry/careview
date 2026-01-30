@@ -10,8 +10,10 @@ import {
   Alert,
   Animated,
   PanResponder,
+  ScrollView,
 } from "react-native";
 import { useSelector, useDispatch } from "react-redux";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { loadDevices, removeDevice } from "../../redux/deviceSlice";
 import type { RootState, AppDispatch } from "../../redux/store";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
@@ -29,11 +31,11 @@ const deviceTypeLabels: Record<string, string> = {
 };
 
 // Swipeable Device Card Component
-function SwipeableDeviceCard({ 
-  device, 
-  lastReading, 
-  onCapture, 
-  onDelete 
+function SwipeableDeviceCard({
+  device,
+  lastReading,
+  onCapture,
+  onDelete,
 }: {
   device: any;
   lastReading: any;
@@ -83,13 +85,13 @@ function SwipeableDeviceCard({
       `Are you sure you want to remove "${device.name}"?\n\nThis will not delete any saved readings.`,
       [
         { text: "Cancel", style: "cancel", onPress: resetSwipe },
-        { 
-          text: "Delete", 
-          style: "destructive", 
+        {
+          text: "Delete",
+          style: "destructive",
           onPress: () => {
             resetSwipe();
             onDelete();
-          }
+          },
         },
       ]
     );
@@ -99,16 +101,11 @@ function SwipeableDeviceCard({
   const typeLabel = deviceTypeLabels[device.type] || device.type;
 
   return (
-    <ImageBackground
-              source={require("../../assets/background.png")}
-              style={styles.image}
-              resizeMode="cover"
-            >
     <View style={styles.cardContainer}>
       {/* Delete button behind card */}
       <View style={styles.deleteButtonContainer}>
-        <TouchableOpacity 
-          style={styles.deleteButton} 
+        <TouchableOpacity
+          style={styles.deleteButton}
           onPress={handleDelete}
           activeOpacity={0.8}
         >
@@ -123,32 +120,28 @@ function SwipeableDeviceCard({
         {...panResponder.panHandlers}
       >
         <Image source={image} style={styles.img} />
-        
+
         <View style={styles.cardContent}>
           <View style={styles.cardHeader}>
             <Text style={styles.name}>{device.name}</Text>
             <TouchableOpacity
               style={styles.moreButton}
               onPress={() => {
-                Alert.alert(
-                  device.name,
-                  `Type: ${typeLabel}\nMAC: ${device.mac || device.id}`,
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    { 
-                      text: "Delete Device", 
-                      style: "destructive", 
-                      onPress: onDelete 
-                    },
-                  ]
-                );
+                Alert.alert(device.name, `Type: ${typeLabel}\nMAC: ${device.mac || device.id}`, [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Delete Device",
+                    style: "destructive",
+                    onPress: onDelete,
+                  },
+                ]);
               }}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
               <MaterialIcons name="more-vert" size={22} color="#888" />
             </TouchableOpacity>
           </View>
-          
+
           <Text style={styles.typeLabel}>{typeLabel}</Text>
 
           {lastReading ? (
@@ -183,19 +176,19 @@ function SwipeableDeviceCard({
 
       {/* Tap outside to close swipe */}
       {isOpen && (
-        <TouchableOpacity 
-          style={StyleSheet.absoluteFill} 
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
           onPress={resetSwipe}
           activeOpacity={1}
         />
       )}
     </View>
-    </ImageBackground>
   );
 }
 
 export default function DevicesScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
+  const insets = useSafeAreaInsets();
   const { devices, loading } = useSelector((state: RootState) => state.devices);
   const readings = useSelector((state: RootState) => state.readings.items);
 
@@ -212,63 +205,81 @@ export default function DevicesScreen({ navigation }: any) {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color="#00509f" />
-        <Text style={styles.loadingText}>Loading devices…</Text>
-      </View>
+      <ImageBackground
+        source={require("../../assets/background.png")}
+        style={styles.image}
+        resizeMode="cover"
+      >
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#00509f" />
+          <Text style={styles.loadingText}>Loading devices…</Text>
+        </View>
+      </ImageBackground>
     );
   }
 
   return (
-    <View style={styles.container}>
-      {/* Header Row */}
-      <View style={styles.headerRow}>
-        <Text style={styles.title}>Your Devices</Text>
-        <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => navigation.navigate("AddDevice")}
-          activeOpacity={0.8}
-        >
-          <MaterialIcons name="add" size={20} color="#fff" />
-          <Text style={styles.addButtonText}>Add</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Device List or Empty State */}
-      {devices.length === 0 ? (
-        <View style={styles.emptyState}>
-          <View style={styles.emptyIconContainer}>
-            <MaterialIcons name="bluetooth-searching" size={48} color="#00509f" />
-          </View>
-          <Text style={styles.emptyTitle}>No Devices Yet</Text>
-          <Text style={styles.emptySubtitle}>
-            Add your devices to start tracking your health.
-          </Text>
+    <ImageBackground
+      source={require("../../assets/background.png")}
+      style={styles.image}
+      resizeMode="cover"
+    >
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: insets.top + 16 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header Row */}
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>Your Devices</Text>
           <TouchableOpacity
-            style={styles.emptyAddButton}
+            style={styles.addButton}
             onPress={() => navigation.navigate("AddDevice")}
             activeOpacity={0.8}
           >
-            <MaterialIcons name="add-circle" size={22} color="#fff" />
-            <Text style={styles.emptyAddButtonText}>Add Your First Device</Text>
+            <MaterialIcons name="add" size={20} color="#fff" />
+            <Text style={styles.addButtonText}>Add</Text>
           </TouchableOpacity>
         </View>
-      ) : (
-        devices.map((d) => {
-          const last = getLastReading(d.id);
-          
-          return (
-            <SwipeableDeviceCard
-              key={d.id}
-              device={d}
-              lastReading={last}
-              onCapture={() => navigation.navigate("Capture", { deviceId: d.id })}
-              onDelete={() => dispatch(removeDevice(d.id))}
-            />
-          );
-        })
-      )}
-    </View>
+
+        {/* Device List or Empty State */}
+        {devices.length === 0 ? (
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIconContainer}>
+              <MaterialIcons name="bluetooth-searching" size={48} color="#00509f" />
+            </View>
+            <Text style={styles.emptyTitle}>No Devices Yet</Text>
+            <Text style={styles.emptySubtitle}>
+              Add your devices to start tracking your health.
+            </Text>
+            <TouchableOpacity
+              style={styles.emptyAddButton}
+              onPress={() => navigation.navigate("AddDevice")}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="add-circle" size={22} color="#fff" />
+              <Text style={styles.emptyAddButtonText}>Add Your First Device</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          devices.map((d) => {
+            const last = getLastReading(d.id);
+
+            return (
+              <SwipeableDeviceCard
+                key={d.id}
+                device={d}
+                lastReading={last}
+                onCapture={() => navigation.navigate("Capture", { deviceId: d.id })}
+                onDelete={() => dispatch(removeDevice(d.id))}
+              />
+            );
+          })
+        )}
+      </ScrollView>
+    </ImageBackground>
   );
 }
 
@@ -278,16 +289,14 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
   },
-  container: { 
-    flex: 1, 
-    padding: 16,
-    backgroundColor: "#f8f9fa",
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
   },
-  center: { 
-    flex: 1, 
-    justifyContent: "center", 
+  center: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#f8f9fa",
   },
   loadingText: {
     marginTop: 12,
@@ -298,11 +307,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 40,
-    marginBottom: 8,
+    marginBottom: 16,
   },
-  title: { 
-    fontSize: 28, 
+  title: {
+    fontSize: 28,
     fontWeight: "700",
     color: "#1a1a2e",
   },
@@ -324,12 +332,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginLeft: 4,
     fontSize: 15,
-  },
-  swipeHint: {
-    fontSize: 12,
-    color: "#aaa",
-    marginBottom: 16,
-    textAlign: "center",
   },
   cardContainer: {
     marginBottom: 12,
@@ -369,10 +371,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
-  img: { 
-    width: 64, 
-    height: 64, 
-    marginRight: 14, 
+  img: {
+    width: 64,
+    height: 64,
+    marginRight: 14,
     borderRadius: 12,
     backgroundColor: "#f5f5f5",
   },
@@ -384,8 +386,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "flex-start",
   },
-  name: { 
-    fontSize: 17, 
+  name: {
+    fontSize: 17,
     fontWeight: "700",
     color: "#1a1a2e",
     flex: 1,
@@ -407,8 +409,8 @@ const styles = StyleSheet.create({
     marginTop: 6,
     gap: 4,
   },
-  meta: { 
-    color: "#666", 
+  meta: {
+    color: "#666",
     fontSize: 13,
   },
   metaEmpty: {
@@ -436,25 +438,18 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 2,
   },
-  primaryText: { 
-    color: "#fff", 
-    fontWeight: "600", 
+  primaryText: {
+    color: "#fff",
+    fontWeight: "600",
     marginLeft: 4,
     fontSize: 14,
-  },
-  infoButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "#f0f0f0",
-    alignItems: "center",
-    justifyContent: "center",
   },
   emptyState: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
+    paddingTop: 100,
   },
   emptyIconContainer: {
     width: 100,

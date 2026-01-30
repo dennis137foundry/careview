@@ -17,6 +17,7 @@ import {
 import { TabView, TabBar } from "react-native-tab-view";
 import { useDispatch, useSelector } from "react-redux";
 import { loadReadings } from "../../redux/readingSlice";
+import { isBPHigh } from "../../redux/userSlice";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import RNFS from "react-native-fs";
@@ -59,6 +60,9 @@ if (
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const { items } = useSelector((state: RootState) => state.readings);
+  const bpThresholds = useSelector(
+    (state: RootState) => state.user.bpThresholds
+  );
   const [index, setIndex] = useState(0);
   const [routes, setRoutes] = useState<TabRoute[]>([]);
   const [sortDirections, setSortDirections] = useState<Record<string, boolean>>(
@@ -90,14 +94,12 @@ export default function HistoryScreen() {
     dispatch(loadReadings());
   }, [dispatch]);
 
-  // ✅ FIX: Group by TYPE (BP, SCALE, BG) instead of deviceId
-  // This ensures BP readings only appear in BP tab, weight in weight tab, etc.
+  // Group by TYPE (BP, SCALE, BG) instead of deviceId
   const grouped = useMemo(() => {
     return items.reduce(
       (acc: Record<string, SavedReading[]>, r: SavedReading) => {
-        // Use the reading TYPE as the group key - this is always set correctly
-        const groupKey = r.type; // "BP" | "SCALE" | "BG"
-        
+        const groupKey = r.type;
+
         if (!acc[groupKey]) acc[groupKey] = [];
         acc[groupKey].push(r);
         return acc;
@@ -106,19 +108,17 @@ export default function HistoryScreen() {
     );
   }, [items]);
 
-  // ✅ FIX: Create tabs based on type, use deviceName for display
+  // Create tabs based on type, use deviceName for display
   useEffect(() => {
-    const typeOrder = ["BP", "SCALE", "BG"]; // Consistent tab order
+    const typeOrder = ["BP", "SCALE", "BG"];
     const newRoutes: TabRoute[] = [];
-    
+
     for (const type of typeOrder) {
       if (grouped[type] && grouped[type].length > 0) {
         const readings = grouped[type];
-        // Get the most recent device name for this type
         const sortedByTime = [...readings].sort((a, b) => b.ts - a.ts);
         const deviceName = sortedByTime[0]?.deviceName;
-        
-        // Use device name if available, otherwise use friendly type name
+
         let title = deviceName;
         if (!title || title.trim() === "") {
           if (type === "BP") title = "Blood Pressure";
@@ -126,14 +126,14 @@ export default function HistoryScreen() {
           else if (type === "BG") title = "Glucose";
           else title = type;
         }
-        
+
         newRoutes.push({
           key: type,
           title: title,
         });
       }
     }
-    
+
     setRoutes(
       newRoutes.length ? newRoutes : [{ key: "empty", title: "No Devices" }]
     );
@@ -240,7 +240,6 @@ export default function HistoryScreen() {
       );
     }
 
-    // route.key is now the TYPE (BP, SCALE, BG)
     const typeReadings = grouped[route.key] || [];
     const sortAsc = sortDirections[route.key] ?? false;
 
@@ -251,6 +250,7 @@ export default function HistoryScreen() {
         onToggleSort={() => toggleSort(route.key)}
         refreshing={refreshing}
         onRefresh={onRefresh}
+        bpThresholds={bpThresholds}
       />
     );
   };
@@ -343,9 +343,11 @@ export default function HistoryScreen() {
 function SummaryStats({
   data,
   type,
+  bpThresholds,
 }: {
   data: SavedReading[];
   type: "BP" | "SCALE" | "BG";
+  bpThresholds?: { systolicHigh: number; diastolicHigh: number };
 }) {
   const stats = useMemo(() => {
     if (!data.length) return null;
@@ -370,11 +372,16 @@ function SummaryStats({
         ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
         : null;
 
-      return { avg, high, low, avg2, high2, low2, avgHR };
+      // Count high readings
+      const highCount = data.filter((r) =>
+        isBPHigh(r.value || 0, r.value2 || 0, bpThresholds)
+      ).length;
+
+      return { avg, high, low, avg2, high2, low2, avgHR, highCount };
     }
 
     return { avg, high, low };
-  }, [data, type]);
+  }, [data, type, bpThresholds]);
 
   if (!stats) return null;
 
@@ -408,6 +415,15 @@ function SummaryStats({
           <Text style={styles.statValue}>{stats.avgHR}</Text>
         </View>
       )}
+      {type === "BP" && stats.highCount != null && stats.highCount > 0 && (
+        <View style={styles.statItem}>
+          <MaterialIcons name="warning" size={16} color="#c62828" />
+          <Text style={styles.statLabel}>Elevated</Text>
+          <Text style={[styles.statValue, { color: "#c62828" }]}>
+            {stats.highCount}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -419,12 +435,14 @@ function DeviceHistoryTab({
   onToggleSort,
   refreshing,
   onRefresh,
+  bpThresholds,
 }: {
   data: SavedReading[];
   sortAsc: boolean;
   onToggleSort: () => void;
   refreshing: boolean;
   onRefresh: () => void;
+  bpThresholds?: { systolicHigh: number; diastolicHigh: number };
 }) {
   const chronological = useMemo(
     () => [...data].sort((a, b) => a.ts - b.ts),
@@ -496,67 +514,91 @@ function DeviceHistoryTab({
     [numbered, deviceType]
   );
 
+  // Helper to check if a BP reading is high
+  const isReadingHigh = useCallback(
+    (item: DisplayReading): boolean => {
+      if (item.type !== "BP") return false;
+      return isBPHigh(item.value || 0, item.value2 || 0, bpThresholds);
+    },
+    [bpThresholds]
+  );
+
   const renderItem = useCallback(
-    ({ item }: { item: DisplayReading }) => (
-      <View style={styles.row}>
-        <View style={styles.info}>
-          <View style={styles.valueRow}>
-            <View style={styles.numberCircle}>
-              <Text style={styles.numberText}>{item.displayNumber}</Text>
-            </View>
-            <View style={styles.valueColumn}>
-              <Text style={styles.value}>
-                {item.type === "BP"
-                  ? `${item.value}/${item.value2} ${item.unit}`
-                  : `${item.value} ${item.unit}`}
-              </Text>
-              {item.type === "BP" && item.heartRate != null && (
-                <View style={styles.heartRateRow}>
-                  <MaterialCommunityIcons
-                    name="heart-pulse"
-                    size={14}
-                    color="#e53935"
-                  />
-                  <Text style={styles.heartRateText}>{item.heartRate} BPM</Text>
+    ({ item }: { item: DisplayReading }) => {
+      const isHigh = isReadingHigh(item);
+
+      return (
+        <View style={[styles.row, isHigh && styles.rowHigh]}>
+          <View style={styles.info}>
+            <View style={styles.valueRow}>
+              <View
+                style={[styles.numberCircle, isHigh && styles.numberCircleHigh]}
+              >
+                <Text style={styles.numberText}>{item.displayNumber}</Text>
+              </View>
+              <View style={styles.valueColumn}>
+                <View style={styles.valueWithBadge}>
+                  <Text style={[styles.value, isHigh && styles.valueHigh]}>
+                    {item.type === "BP"
+                      ? `${item.value}/${item.value2} ${item.unit}`
+                      : `${item.value} ${item.unit}`}
+                  </Text>
+                  {isHigh && (
+                    <View style={styles.highBadge}>
+                      <Text style={styles.highBadgeText}>HIGH</Text>
+                    </View>
+                  )}
                 </View>
-              )}
+                {item.type === "BP" && item.heartRate != null && (
+                  <View style={styles.heartRateRow}>
+                    <MaterialCommunityIcons
+                      name="heart-pulse"
+                      size={14}
+                      color="#e53935"
+                    />
+                    <Text style={styles.heartRateText}>
+                      {item.heartRate} BPM
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
+            <Text style={styles.timeText}>
+              {new Date(item.ts).toLocaleDateString([], {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}{" "}
+              at{" "}
+              {new Date(item.ts).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </Text>
           </View>
-          <Text style={styles.timeText}>
-            {new Date(item.ts).toLocaleDateString([], {
-              year: "numeric",
-              month: "short",
-              day: "numeric",
-            })}{" "}
-            at{" "}
-            {new Date(item.ts).toLocaleTimeString([], {
-              hour: "numeric",
-              minute: "2-digit",
-            })}
-          </Text>
+          <View style={styles.statusContainer}>
+            {item.synced ? (
+              <View style={styles.syncedBadge}>
+                <MaterialCommunityIcons
+                  name="cloud-check"
+                  size={20}
+                  color="#fff"
+                />
+              </View>
+            ) : (
+              <View style={styles.pendingBadge}>
+                <MaterialCommunityIcons
+                  name="cloud-upload-outline"
+                  size={20}
+                  color="#ff9800"
+                />
+              </View>
+            )}
+          </View>
         </View>
-        <View style={styles.statusContainer}>
-          {item.synced ? (
-            <View style={styles.syncedBadge}>
-              <MaterialCommunityIcons
-                name="cloud-check"
-                size={20}
-                color="#fff"
-              />
-            </View>
-          ) : (
-            <View style={styles.pendingBadge}>
-              <MaterialCommunityIcons
-                name="cloud-upload-outline"
-                size={20}
-                color="#ff9800"
-              />
-            </View>
-          )}
-        </View>
-      </View>
-    ),
-    []
+      );
+    },
+    [isReadingHigh]
   );
 
   return (
@@ -577,7 +619,11 @@ function DeviceHistoryTab({
           <>
             {/* Summary Stats */}
             {numbered.length > 0 && (
-              <SummaryStats data={data} type={deviceType} />
+              <SummaryStats
+                data={data}
+                type={deviceType}
+                bpThresholds={bpThresholds}
+              />
             )}
 
             {/* Chart */}
@@ -934,6 +980,11 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
+  rowHigh: {
+    backgroundColor: "#ffebee",
+    borderWidth: 2,
+    borderColor: "#ef5350",
+  },
   info: {
     flex: 1,
     paddingRight: 10,
@@ -946,6 +997,13 @@ const styles = StyleSheet.create({
   },
   valueColumn: {
     flexDirection: "column",
+    flex: 1,
+  },
+  valueWithBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
   },
   heartRateRow: {
     flexDirection: "row",
@@ -967,6 +1025,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 2,
   },
+  numberCircleHigh: {
+    backgroundColor: "#c62828",
+  },
   numberText: {
     color: "#fff",
     fontSize: 12,
@@ -976,6 +1037,20 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#002040",
+  },
+  valueHigh: {
+    color: "#c62828",
+  },
+  highBadge: {
+    backgroundColor: "#c62828",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  highBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "700",
   },
   timeText: {
     color: "#888",
