@@ -5,7 +5,6 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Dimensions,
   TouchableOpacity,
   Alert,
   LayoutAnimation,
@@ -13,11 +12,8 @@ import {
   UIManager,
   RefreshControl,
   ActivityIndicator,
-  ImageBackground,
 } from "react-native";
-import { TabView, TabBar } from "react-native-tab-view";
 import { useDispatch, useSelector } from "react-redux";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { loadReadings } from "../../redux/readingSlice";
 import { isBPHigh } from "../../redux/userSlice";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
@@ -32,45 +28,16 @@ import {
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { SavedReading } from "../../services/sqliteService";
 
-const screenWidth = Dimensions.get("window").width;
-
 // Default BP thresholds (standard hypertension definition)
 const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
 
-// Chart themes per device type
-const CHART_THEMES: Record<
-  string,
-  {
-    background: string;
-    primary: string;
-    secondary: string;
-    accent: string;
-  }
-> = {
-  BP: {
-    background: "#1e293b",
-    primary: "#FF6B6B",
-    secondary: "#FCD34D",
-    accent: "#94a3b8",
-  },
-  SCALE: {
-    background: "#312e81",
-    primary: "#FBBF24",
-    secondary: "#FBBF24",
-    accent: "#a5b4fc",
-  },
-  BG: {
-    background: "#4c1d95",
-    primary: "#A78BFA",
-    secondary: "#A78BFA",
-    accent: "#c4b5fd",
-  },
-  DEFAULT: {
-    background: "#1f2937",
-    primary: "#FB7185",
-    secondary: "#FB7185",
-    accent: "#9ca3af",
-  },
+// Single unified chart theme - dark navy with coral/amber lines
+const CHART_THEME = {
+  background: "#1e293b", // Slate 800
+  primaryLine: "#FF6B6B", // Coral (systolic / primary)
+  secondaryLine: "#FBBF24", // Amber (diastolic / secondary)
+  axisColor: "#94a3b8", // Slate 400
+  textColor: "#ffffff",
 };
 
 interface DisplayReading extends SavedReading {
@@ -108,6 +75,8 @@ function SegmentControl({
   selectedIndex: number;
   onChange: (index: number) => void;
 }) {
+  if (!segments || segments.length === 0) return null;
+
   return (
     <View style={segmentStyles.container}>
       {segments.map((segment, idx) => {
@@ -118,8 +87,6 @@ function SegmentControl({
             style={[
               segmentStyles.segment,
               isSelected && segmentStyles.segmentSelected,
-              idx === 0 && segmentStyles.segmentFirst,
-              idx === segments.length - 1 && segmentStyles.segmentLast,
             ]}
             onPress={() => onChange(idx)}
             activeOpacity={0.7}
@@ -145,7 +112,7 @@ const segmentStyles = StyleSheet.create({
     flexDirection: "row",
     marginHorizontal: 16,
     marginVertical: 12,
-    backgroundColor: "rgba(0, 32, 64, 0.15)",
+    backgroundColor: "rgba(0, 32, 64, 0.12)",
     borderRadius: 10,
     padding: 3,
   },
@@ -165,14 +132,6 @@ const segmentStyles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 3,
   },
-  segmentFirst: {
-    borderTopLeftRadius: 8,
-    borderBottomLeftRadius: 8,
-  },
-  segmentLast: {
-    borderTopRightRadius: 8,
-    borderBottomRightRadius: 8,
-  },
   segmentText: {
     fontSize: 14,
     fontWeight: "600",
@@ -185,7 +144,6 @@ const segmentStyles = StyleSheet.create({
 
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
-  const insets = useSafeAreaInsets();
   const { items } = useSelector((state: RootState) => state.readings);
   const bpThresholds = useSelector(
     (state: RootState) => state.user.bpThresholds
@@ -220,11 +178,12 @@ export default function HistoryScreen() {
     dispatch(loadReadings());
   }, [dispatch]);
 
-  // Group by TYPE (BP, SCALE) instead of deviceId
+  // Group by TYPE (BP, SCALE, BG)
   const grouped = useMemo(() => {
+    if (!items || !Array.isArray(items)) return {};
     return items.reduce(
       (acc: Record<string, SavedReading[]>, r: SavedReading) => {
-        const groupKey = r.type;
+        const groupKey = r.type || "OTHER";
         if (!acc[groupKey]) acc[groupKey] = [];
         acc[groupKey].push(r);
         return acc;
@@ -233,7 +192,7 @@ export default function HistoryScreen() {
     );
   }, [items]);
 
-  // Create tabs based on type, use deviceName for display
+  // Create routes based on type
   useEffect(() => {
     const typeOrder = ["BP", "SCALE", "BG"];
     const newRoutes: TabRoute[] = [];
@@ -257,9 +216,16 @@ export default function HistoryScreen() {
     }
 
     setRoutes(
-      newRoutes.length ? newRoutes : [{ key: "empty", title: "No Devices" }]
+      newRoutes.length > 0
+        ? newRoutes
+        : [{ key: "empty", title: "No Devices" }]
     );
-  }, [grouped]);
+    
+    // Reset index if out of bounds
+    if (index >= newRoutes.length && newRoutes.length > 0) {
+      setIndex(0);
+    }
+  }, [grouped, index]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -290,7 +256,7 @@ export default function HistoryScreen() {
 
   const handleExport = async () => {
     try {
-      if (!items?.length) {
+      if (!items || items.length === 0) {
         Alert.alert("No data", "There are no readings to export.");
         return;
       }
@@ -340,7 +306,9 @@ export default function HistoryScreen() {
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Unable to export readings.";
-      Alert.alert("Export failed", message);
+      if (!message.includes("User did not share")) {
+        Alert.alert("Export failed", message);
+      }
     }
   };
 
@@ -349,156 +317,118 @@ export default function HistoryScreen() {
     setSortDirections((prev) => ({ ...prev, [typeKey]: !prev[typeKey] }));
   }, []);
 
-  const renderScene = ({ route }: { route: TabRoute }) => {
-    if (route.key === "empty") {
-      return (
-        <View style={styles.emptyContainer}>
-          <MaterialIcons name="show-chart" size={64} color="#ccc" />
-          <Text style={styles.emptyTitle}>No Readings Yet</Text>
-          <Text style={styles.emptySubtitle}>
-            Take a measurement to see your history here
-          </Text>
-        </View>
-      );
-    }
-
-    const typeReadings = grouped[route.key] || [];
-    const sortAsc = sortDirections[route.key] ?? false;
-
-    return (
-      <DeviceHistoryTab
-        data={typeReadings}
-        sortAsc={sortAsc}
-        onToggleSort={() => toggleSort(route.key)}
-        refreshing={refreshing}
-        onRefresh={onRefresh}
-        bpThresholds={bpThresholds ?? DEFAULT_BP_THRESHOLDS}
-      />
-    );
-  };
-
   const pendingCount = syncState.pendingCount;
   const isSyncing = syncState.status === "syncing";
   const isOffline = syncState.status === "offline";
 
-  // Determine navigation mode based on device count
+  // Determine navigation mode
   const deviceCount = routes.filter((r) => r.key !== "empty").length;
-  const useSegmentControl = deviceCount >= 1 && deviceCount <= 3;
-  const useTabs = deviceCount >= 4;
   const isSingleDevice = deviceCount === 1;
+  const showSegments = deviceCount >= 2 && deviceCount <= 3;
+
+  // Get current route safely
+  const currentRoute = routes[index] || routes[0];
+  const currentKey = currentRoute?.key || "empty";
 
   return (
-    <ImageBackground
-      source={require("../../assets/bg.png")}
-      style={styles.backgroundImage}
-      resizeMode="cover"
-    >
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        {/* Sync Banner - TOP of screen */}
-        {pendingCount > 0 && (
-          <View
-            style={[styles.syncBanner, isOffline && styles.syncBannerOffline]}
-          >
-            <View style={styles.syncBannerLeft}>
-              <MaterialCommunityIcons
-                name={isOffline ? "cloud-off-outline" : "cloud-sync-outline"}
-                size={20}
-                color={isOffline ? "#9e9e9e" : "#e65100"}
-              />
-              <Text
-                style={[
-                  styles.syncBannerText,
-                  isOffline && styles.syncBannerTextOffline,
-                ]}
-              >
-                {pendingCount} reading{pendingCount !== 1 ? "s" : ""} pending
-                {isOffline ? " • Offline" : ""}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.syncBannerButton,
-                isSyncing && styles.syncBannerButtonDisabled,
-                isOffline && styles.syncBannerButtonOffline,
-              ]}
-              onPress={handleSync}
-              disabled={isSyncing || isOffline}
-            >
-              {isSyncing ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <MaterialCommunityIcons
-                  name="cloud-upload"
-                  size={16}
-                  color="#fff"
-                />
-              )}
-              <Text style={styles.syncBannerButtonText}>
-                {isSyncing ? "Syncing..." : "Sync Now"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Header */}
-        <View style={styles.headerRow}>
-          <Text style={styles.title}>History</Text>
-          <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
+    <View style={styles.container}>
+      {/* Sync Banner */}
+      {pendingCount > 0 && (
+        <View
+          style={[styles.syncBanner, isOffline && styles.syncBannerOffline]}
+        >
+          <View style={styles.syncBannerLeft}>
             <MaterialCommunityIcons
-              name="file-export-outline"
+              name={isOffline ? "cloud-off-outline" : "cloud-sync-outline"}
               size={20}
-              color="#fff"
+              color={isOffline ? "#9e9e9e" : "#e65100"}
             />
-            <Text style={styles.exportText}>Export</Text>
+            <Text
+              style={[
+                styles.syncBannerText,
+                isOffline && styles.syncBannerTextOffline,
+              ]}
+            >
+              {pendingCount} reading{pendingCount !== 1 ? "s" : ""} pending
+              {isOffline ? " • Offline" : ""}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[
+              styles.syncBannerButton,
+              isSyncing && styles.syncBannerButtonDisabled,
+              isOffline && styles.syncBannerButtonOffline,
+            ]}
+            onPress={handleSync}
+            disabled={isSyncing || isOffline}
+          >
+            {isSyncing ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <MaterialCommunityIcons
+                name="cloud-upload"
+                size={16}
+                color="#fff"
+              />
+            )}
+            <Text style={styles.syncBannerButtonText}>
+              {isSyncing ? "Syncing..." : "Sync Now"}
+            </Text>
           </TouchableOpacity>
         </View>
+      )}
 
-        {/* Dynamic Navigation: Single Title / Segment Control / Tabs */}
-        {isSingleDevice && routes[0]?.key !== "empty" && (
-          <View style={styles.singleDeviceHeader}>
-            <Text style={styles.singleDeviceTitle}>{routes[0]?.title}</Text>
+      {/* Header */}
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>History</Text>
+        <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
+          <MaterialCommunityIcons
+            name="file-export-outline"
+            size={20}
+            color="#fff"
+          />
+          <Text style={styles.exportText}>Export</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Single Device Title */}
+      {isSingleDevice && currentKey !== "empty" && (
+        <View style={styles.singleDeviceHeader}>
+          <Text style={styles.singleDeviceTitle}>{currentRoute?.title}</Text>
+        </View>
+      )}
+
+      {/* Segment Control for 2-3 devices */}
+      {showSegments && (
+        <SegmentControl
+          segments={routes}
+          selectedIndex={index}
+          onChange={setIndex}
+        />
+      )}
+
+      {/* Content */}
+      <View style={styles.contentContainer}>
+        {currentKey === "empty" ? (
+          <View style={styles.emptyContainer}>
+            <MaterialIcons name="show-chart" size={64} color="#ccc" />
+            <Text style={styles.emptyTitle}>No Readings Yet</Text>
+            <Text style={styles.emptySubtitle}>
+              Take a measurement to see your history here
+            </Text>
           </View>
-        )}
-
-        {useSegmentControl && !isSingleDevice && (
-          <SegmentControl
-            segments={routes}
-            selectedIndex={index}
-            onChange={setIndex}
+        ) : (
+          <DeviceHistoryTab
+            data={grouped[currentKey] || []}
+            sortAsc={sortDirections[currentKey] ?? false}
+            onToggleSort={() => toggleSort(currentKey)}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            bpThresholds={bpThresholds ?? DEFAULT_BP_THRESHOLDS}
           />
         )}
-
-        {/* Content Area */}
-        <View style={styles.contentContainer}>
-          {useTabs ? (
-            <TabView
-              navigationState={{ index, routes }}
-              renderScene={renderScene}
-              onIndexChange={setIndex}
-              initialLayout={{ width: screenWidth }}
-              renderTabBar={(props) => (
-                <TabBar
-                  {...props}
-                  indicatorStyle={styles.tabIndicator}
-                  style={styles.tabBar}
-                  scrollEnabled
-                />
-              )}
-            />
-          ) : routes[0]?.key === "empty" ? (
-            <View style={styles.emptyContainer}>
-              <MaterialIcons name="show-chart" size={64} color="#ccc" />
-              <Text style={styles.emptyTitle}>No Readings Yet</Text>
-              <Text style={styles.emptySubtitle}>
-                Take a measurement to see your history here
-              </Text>
-            </View>
-          ) : (
-            renderScene({ route: routes[index] || routes[0] })
-          )}
-        </View>
       </View>
-    </ImageBackground>
+    </View>
   );
 }
 
@@ -509,31 +439,35 @@ function SummaryStats({
   bpThresholds,
 }: {
   data: SavedReading[];
-  type: "BP" | "SCALE" | "BG";
+  type: string;
   bpThresholds: { systolicHigh: number; diastolicHigh: number };
 }) {
   const stats = useMemo(() => {
-    if (!data.length) return null;
+    if (!data || data.length === 0) return null;
 
-    const values = data.map((r) => r.value || 0);
+    const values = data.map((r) => r.value || 0).filter((v) => v > 0);
+    if (values.length === 0) return null;
+
     const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
     const high = Math.max(...values);
     const low = Math.min(...values);
 
     if (type === "BP") {
-      const values2 = data.map((r) => r.value2 || 0);
-      const avg2 = Math.round(
-        values2.reduce((a, b) => a + b, 0) / values2.length
-      );
-      const high2 = Math.max(...values2);
-      const low2 = Math.min(...values2);
+      const values2 = data.map((r) => r.value2 || 0).filter((v) => v > 0);
+      const avg2 =
+        values2.length > 0
+          ? Math.round(values2.reduce((a, b) => a + b, 0) / values2.length)
+          : 0;
+      const high2 = values2.length > 0 ? Math.max(...values2) : 0;
+      const low2 = values2.length > 0 ? Math.min(...values2) : 0;
 
       const hrValues = data
-        .filter((r) => r.heartRate != null)
+        .filter((r) => r.heartRate != null && r.heartRate > 0)
         .map((r) => r.heartRate!);
-      const avgHR = hrValues.length
-        ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
-        : null;
+      const avgHR =
+        hrValues.length > 0
+          ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
+          : null;
 
       const highCount = data.filter((r) =>
         isBPHigh(r.value || 0, r.value2 || 0, bpThresholds)
@@ -610,11 +544,13 @@ function DeviceHistoryTab({
   onRefresh: () => void;
   bpThresholds: { systolicHigh: number; diastolicHigh: number };
 }) {
-  const chronological = useMemo(
-    () => [...data].sort((a, b) => a.ts - b.ts),
-    [data]
-  );
+  // Sort chronologically for numbering
+  const chronological = useMemo(() => {
+    if (!data || data.length === 0) return [];
+    return [...data].sort((a, b) => a.ts - b.ts);
+  }, [data]);
 
+  // Add display numbers
   const numbered: DisplayReading[] = useMemo(
     () =>
       chronological.map((r, i) => ({
@@ -624,6 +560,7 @@ function DeviceHistoryTab({
     [chronological]
   );
 
+  // Sort for display
   const sortedList = useMemo(
     () =>
       sortAsc
@@ -632,52 +569,50 @@ function DeviceHistoryTab({
     [numbered, sortAsc]
   );
 
-  const deviceType = (numbered[0]?.type || "BP") as "BP" | "SCALE" | "BG";
-  const chartTheme = CHART_THEMES[deviceType] || CHART_THEMES.DEFAULT;
+  const deviceType = numbered[0]?.type || "BP";
 
-  const syncedCount = useMemo(
-    () => numbered.filter((r) => r.synced).length,
-    [numbered]
-  );
-  const unsyncedCount = numbered.length - syncedCount;
-
-  const values = useMemo(() => {
-    if (!numbered.length) return [];
-    if (deviceType === "BP") {
-      return numbered.flatMap((r) => [
-        parseFloat(String(r.value)) || 0,
-        parseFloat(String(r.value2)) || 0,
-      ]);
-    }
-    return numbered.map((r) => parseFloat(String(r.value)) || 0);
-  }, [numbered, deviceType]);
-
-  const minVal = values.length ? Math.min(...values) : 0;
-  const maxVal = values.length ? Math.max(...values) : 0;
-  const yAxisOffset = Math.max(0, minVal - 10);
-  const yAxisMax = maxVal + 10;
-
-  const primaryData = useMemo(
-    () =>
-      numbered.map((r) => ({
-        value: parseFloat(String(r.value)) || 0,
-        label: `#${r.displayNumber}`,
-        dataPointText: String(r.value ?? ""),
-      })),
+  // Sync counts
+  const unsyncedCount = useMemo(
+    () => numbered.filter((r) => !r.synced).length,
     [numbered]
   );
 
-  const secondaryData = useMemo(
-    () =>
+  // Chart data - only render if we have enough data points
+  const showChart = numbered.length >= 3;
+
+  const chartData = useMemo(() => {
+    if (!showChart) return { primary: [], secondary: [], yAxisOffset: 0, yAxisMax: 200 };
+
+    const primary = numbered.map((r) => ({
+      value: parseFloat(String(r.value)) || 0,
+      label: `#${r.displayNumber}`,
+    }));
+
+    const secondary =
       deviceType === "BP"
         ? numbered.map((r) => ({
             value: parseFloat(String(r.value2)) || 0,
             label: `#${r.displayNumber}`,
-            dataPointText: String(r.value2 ?? ""),
           }))
-        : [],
-    [numbered, deviceType]
-  );
+        : [];
+
+    // Calculate Y axis range
+    const allValues =
+      deviceType === "BP"
+        ? [...primary.map((p) => p.value), ...secondary.map((s) => s.value)]
+        : primary.map((p) => p.value);
+
+    const validValues = allValues.filter((v) => v > 0);
+    const minVal = validValues.length > 0 ? Math.min(...validValues) : 0;
+    const maxVal = validValues.length > 0 ? Math.max(...validValues) : 200;
+
+    return {
+      primary,
+      secondary,
+      yAxisOffset: Math.max(0, minVal - 15),
+      yAxisMax: maxVal + 15,
+    };
+  }, [numbered, deviceType, showChart]);
 
   const isReadingHigh = useCallback(
     (item: DisplayReading): boolean => {
@@ -704,8 +639,8 @@ function DeviceHistoryTab({
                 <View style={styles.valueWithBadge}>
                   <Text style={[styles.value, isHigh && styles.valueHigh]}>
                     {item.type === "BP"
-                      ? `${item.value}/${item.value2} ${item.unit}`
-                      : `${item.value} ${item.unit}`}
+                      ? `${item.value}/${item.value2} ${item.unit || "mmHg"}`
+                      : `${item.value} ${item.unit || ""}`}
                   </Text>
                   {isHigh && (
                     <View style={styles.highBadge}>
@@ -789,37 +724,34 @@ function DeviceHistoryTab({
               />
             )}
 
-            {numbered.length > 2 && (
+            {showChart && (
               <View style={styles.chartContainer}>
-                <View
-                  style={[
-                    styles.chartInner,
-                    { backgroundColor: chartTheme.background },
-                  ]}
-                >
+                <View style={styles.chartInner}>
                   {deviceType === "BP" ? (
                     <LineChart
-                      dataSet={[
-                        { data: primaryData, color: chartTheme.primary },
-                        { data: secondaryData, color: chartTheme.secondary },
-                      ]}
+                      data={chartData.primary}
+                      data2={chartData.secondary}
                       initialSpacing={20}
                       spacing={Math.max(40, 280 / numbered.length)}
                       thickness={3}
+                      thickness2={3}
                       height={140}
                       noOfSections={4}
                       curved
                       hideRules={false}
-                      yAxisColor={chartTheme.accent}
-                      xAxisColor={chartTheme.accent}
-                      yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
-                      xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
-                      yAxisOffset={yAxisOffset}
-                      maxValue={yAxisMax}
+                      yAxisColor={CHART_THEME.axisColor}
+                      xAxisColor={CHART_THEME.axisColor}
+                      yAxisTextStyle={{ color: CHART_THEME.textColor, fontSize: 11 }}
+                      xAxisLabelTextStyle={{ color: CHART_THEME.textColor, fontSize: 10 }}
+                      color={CHART_THEME.primaryLine}
+                      color2={CHART_THEME.secondaryLine}
+                      yAxisOffset={chartData.yAxisOffset}
+                      maxValue={chartData.yAxisMax}
+                      hideDataPoints={numbered.length > 15}
                     />
                   ) : (
                     <LineChart
-                      data={primaryData}
+                      data={chartData.primary}
                       initialSpacing={20}
                       spacing={Math.max(40, 280 / numbered.length)}
                       thickness={3}
@@ -827,13 +759,14 @@ function DeviceHistoryTab({
                       noOfSections={4}
                       curved
                       hideRules={false}
-                      yAxisColor={chartTheme.accent}
-                      xAxisColor={chartTheme.accent}
-                      yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
-                      xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
-                      color={chartTheme.primary}
-                      yAxisOffset={yAxisOffset}
-                      maxValue={yAxisMax}
+                      yAxisColor={CHART_THEME.axisColor}
+                      xAxisColor={CHART_THEME.axisColor}
+                      yAxisTextStyle={{ color: CHART_THEME.textColor, fontSize: 11 }}
+                      xAxisLabelTextStyle={{ color: CHART_THEME.textColor, fontSize: 10 }}
+                      color={CHART_THEME.primaryLine}
+                      yAxisOffset={chartData.yAxisOffset}
+                      maxValue={chartData.yAxisMax}
+                      hideDataPoints={numbered.length > 15}
                     />
                   )}
                   {deviceType === "BP" && (
@@ -842,7 +775,7 @@ function DeviceHistoryTab({
                         <View
                           style={[
                             styles.legendDot,
-                            { backgroundColor: chartTheme.primary },
+                            { backgroundColor: CHART_THEME.primaryLine },
                           ]}
                         />
                         <Text style={styles.legendText}>Systolic</Text>
@@ -851,7 +784,7 @@ function DeviceHistoryTab({
                         <View
                           style={[
                             styles.legendDot,
-                            { backgroundColor: chartTheme.secondary },
+                            { backgroundColor: CHART_THEME.secondaryLine },
                           ]}
                         />
                         <Text style={styles.legendText}>Diastolic</Text>
@@ -909,13 +842,12 @@ function DeviceHistoryTab({
 
 /* ---------- styles ---------- */
 const styles = StyleSheet.create({
-  backgroundImage: {
-    flex: 1,
-  },
   container: {
     flex: 1,
+    backgroundColor: "#f5f7fa",
+    paddingTop: 50,
   },
-  // Sync Banner - top of screen
+  // Sync Banner
   syncBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -973,6 +905,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 12,
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
   },
   title: {
     fontSize: 28,
@@ -996,26 +931,17 @@ const styles = StyleSheet.create({
   // Single device header
   singleDeviceHeader: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 12,
+    backgroundColor: "#fff",
   },
   singleDeviceTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "600",
     color: "#002040",
   },
   // Content
   contentContainer: {
     flex: 1,
-  },
-  // Tabs (for 4+ devices)
-  tabBar: {
-    backgroundColor: "#002040",
-    elevation: 0,
-    shadowOpacity: 0,
-  },
-  tabIndicator: {
-    backgroundColor: "#fff",
-    height: 3,
   },
   scene: {
     flex: 1,
@@ -1024,9 +950,9 @@ const styles = StyleSheet.create({
   statsContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    backgroundColor: "#fff",
     marginHorizontal: 16,
-    marginTop: 12,
+    marginTop: 16,
     paddingVertical: 16,
     borderRadius: 12,
     shadowColor: "#000",
@@ -1061,14 +987,15 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   chartInner: {
+    backgroundColor: CHART_THEME.background,
     borderRadius: 12,
-    paddingVertical: 12,
+    paddingVertical: 16,
     paddingHorizontal: 8,
   },
   legendRow: {
     flexDirection: "row",
     justifyContent: "center",
-    marginTop: 8,
+    marginTop: 12,
     gap: 24,
   },
   legendItem: {
@@ -1101,7 +1028,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   countText: {
-    color: "#444",
+    color: "#666",
     fontWeight: "600",
     fontSize: 14,
   },
@@ -1125,7 +1052,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
-    backgroundColor: "rgba(255, 255, 255, 0.9)",
+    backgroundColor: "#fff",
     gap: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -1147,7 +1074,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginHorizontal: 16,
     marginBottom: 8,
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    backgroundColor: "#fff",
     borderRadius: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -1195,7 +1122,7 @@ const styles = StyleSheet.create({
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: "#006b6b",
+    backgroundColor: "#002040",
     alignItems: "center",
     justifyContent: "center",
     marginTop: 2,
