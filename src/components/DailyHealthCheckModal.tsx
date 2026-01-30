@@ -14,6 +14,7 @@ import {
   saveScreeningResponse,
   DailyHealthCheckData,
 } from "../services/sqliteService";
+import { syncScreeningResponses } from "../services/screeningSyncService";
 
 interface DailyHealthCheckModalProps {
   visible: boolean;
@@ -68,34 +69,33 @@ export default function DailyHealthCheckModal({
   const canSubmit = hasHeadaches !== null && hasVisualDisturbances !== null;
 
   const handleSubmit = async () => {
-    if (!canSubmit) return;
+  if (!canSubmit) return;
 
-    setSubmitting(true);
+  setSubmitting(true);
 
-    const data: DailyHealthCheckData = {
-      hasHeadaches: hasHeadaches!,
-      hasVisualDisturbances: hasVisualDisturbances!,
-      details: details.trim() || undefined,
-    };
-
-    // Save to local DB
-    saveScreeningResponse("daily_health_check", data);
-
-    // TODO: POST to EMR alert endpoint if symptoms present
-    if (hasHeadaches || hasVisualDisturbances) {
-      console.log("[DailyHealthCheck] ALERT: Symptoms reported!", data);
-      // await postAlertToEMR(data);
-    }
-
-    setSubmitting(false);
-
-    // Reset for next time
-    setHasHeadaches(null);
-    setHasVisualDisturbances(null);
-    setDetails("");
-
-    onComplete(data);
+  const data: DailyHealthCheckData = {
+    hasHeadaches: hasHeadaches!,
+    hasVisualDisturbances: hasVisualDisturbances!,
+    details: details.trim() || undefined,
   };
+
+  // Save to local DB
+  saveScreeningResponse("daily_health_check", data);
+
+  // Trigger background sync to EMR
+  syncScreeningResponses().catch((err) => {
+    console.error("[DailyHealthCheck] Background sync error:", err);
+  });
+
+  setSubmitting(false);
+
+  // Reset for next time
+  setHasHeadaches(null);
+  setHasVisualDisturbances(null);
+  setDetails("");
+
+  onComplete(data);
+};
 
   return (
     <Modal

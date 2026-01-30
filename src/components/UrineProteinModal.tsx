@@ -12,10 +12,8 @@ import {
   Platform,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import {
-  saveScreeningResponse,
-  UrineProteinData,
-} from "../services/sqliteService";
+import { saveScreeningResponse } from "../services/sqliteService";
+import { syncScreeningResponses } from "../services/screeningSyncService";
 
 // Urine protein test result options
 const PROTEIN_OPTIONS = [
@@ -52,33 +50,33 @@ export default function UrineProteinModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    if (!selectedResult) return;
+  if (!selectedResult) return;
 
-    setSubmitting(true);
+  setSubmitting(true);
 
-    const data: UrineProteinData = {
-      result: selectedResult,
-    };
+  // Save to local DB
+  saveScreeningResponse("urine_protein_result", { result: selectedResult });
 
-    // Save to local DB
-    saveScreeningResponse('urine_protein_result', data);
+  // Trigger background sync to EMR
+  syncScreeningResponses().catch((err) => {
+    console.error("[UrineProtein] Background sync error:", err);
+  });
 
-    console.log("[UrineProtein] Result saved:", selectedResult);
+  setSubmitting(false);
+  onComplete(selectedResult);
+};
 
-    setSubmitting(false);
-    setSelectedResult(null);
-    onComplete(selectedResult);
-  };
-
-  const handleDefer = () => {
-    // Save deferral to DB
-    saveScreeningResponse('urine_protein_deferred', { deferred: true });
-    
-    console.log("[UrineProtein] User deferred - will show alert bar");
-    
-    setSelectedResult(null);
-    onDefer();
-  };
+// Also in defer handler:
+const handleDefer = () => {
+  saveScreeningResponse("urine_protein_deferred", { deferred: true });
+  
+  // Sync deferrals too (they get marked synced locally)
+  syncScreeningResponses().catch((err) => {
+    console.error("[UrineProtein] Background sync error:", err);
+  });
+  
+  onDefer();
+};
 
   return (
     <Modal
