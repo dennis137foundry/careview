@@ -13,9 +13,11 @@ import {
   UIManager,
   RefreshControl,
   ActivityIndicator,
+  ImageBackground,
 } from "react-native";
 import { TabView, TabBar } from "react-native-tab-view";
 import { useDispatch, useSelector } from "react-redux";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { loadReadings } from "../../redux/readingSlice";
 import { isBPHigh } from "../../redux/userSlice";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
@@ -34,6 +36,42 @@ const screenWidth = Dimensions.get("window").width;
 
 // Default BP thresholds (standard hypertension definition)
 const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
+
+// Chart themes per device type
+const CHART_THEMES: Record<
+  string,
+  {
+    background: string;
+    primary: string;
+    secondary: string;
+    accent: string;
+  }
+> = {
+  BP: {
+    background: "#1e293b",
+    primary: "#FF6B6B",
+    secondary: "#FCD34D",
+    accent: "#94a3b8",
+  },
+  SCALE: {
+    background: "#312e81",
+    primary: "#FBBF24",
+    secondary: "#FBBF24",
+    accent: "#a5b4fc",
+  },
+  BG: {
+    background: "#4c1d95",
+    primary: "#A78BFA",
+    secondary: "#A78BFA",
+    accent: "#c4b5fd",
+  },
+  DEFAULT: {
+    background: "#1f2937",
+    primary: "#FB7185",
+    secondary: "#FB7185",
+    accent: "#9ca3af",
+  },
+};
 
 interface DisplayReading extends SavedReading {
   displayNumber: number;
@@ -60,8 +98,94 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+/* ---- Segment Control Component ---- */
+function SegmentControl({
+  segments,
+  selectedIndex,
+  onChange,
+}: {
+  segments: { key: string; title: string }[];
+  selectedIndex: number;
+  onChange: (index: number) => void;
+}) {
+  return (
+    <View style={segmentStyles.container}>
+      {segments.map((segment, idx) => {
+        const isSelected = idx === selectedIndex;
+        return (
+          <TouchableOpacity
+            key={segment.key}
+            style={[
+              segmentStyles.segment,
+              isSelected && segmentStyles.segmentSelected,
+              idx === 0 && segmentStyles.segmentFirst,
+              idx === segments.length - 1 && segmentStyles.segmentLast,
+            ]}
+            onPress={() => onChange(idx)}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                segmentStyles.segmentText,
+                isSelected && segmentStyles.segmentTextSelected,
+              ]}
+              numberOfLines={1}
+            >
+              {segment.title}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+const segmentStyles = StyleSheet.create({
+  container: {
+    flexDirection: "row",
+    marginHorizontal: 16,
+    marginVertical: 12,
+    backgroundColor: "rgba(0, 32, 64, 0.15)",
+    borderRadius: 10,
+    padding: 3,
+  },
+  segment: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+  },
+  segmentSelected: {
+    backgroundColor: "#002040",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 3,
+  },
+  segmentFirst: {
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
+  },
+  segmentLast: {
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
+  },
+  segmentText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#002040",
+  },
+  segmentTextSelected: {
+    color: "#fff",
+  },
+});
+
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
+  const insets = useSafeAreaInsets();
   const { items } = useSelector((state: RootState) => state.readings);
   const bpThresholds = useSelector(
     (state: RootState) => state.user.bpThresholds
@@ -85,7 +209,6 @@ export default function HistoryScreen() {
   useEffect(() => {
     const unsubscribe = onSyncStateChange((state) => {
       setSyncState(state);
-      // Refresh readings list when sync completes
       if (state.status === "idle" && state.pendingCount === 0) {
         dispatch(loadReadings());
       }
@@ -102,7 +225,6 @@ export default function HistoryScreen() {
     return items.reduce(
       (acc: Record<string, SavedReading[]>, r: SavedReading) => {
         const groupKey = r.type;
-
         if (!acc[groupKey]) acc[groupKey] = [];
         acc[groupKey].push(r);
         return acc;
@@ -113,7 +235,7 @@ export default function HistoryScreen() {
 
   // Create tabs based on type, use deviceName for display
   useEffect(() => {
-    const typeOrder = ["BP", "SCALE"];
+    const typeOrder = ["BP", "SCALE", "BG"];
     const newRoutes: TabRoute[] = [];
 
     for (const type of typeOrder) {
@@ -126,13 +248,11 @@ export default function HistoryScreen() {
         if (!title || title.trim() === "") {
           if (type === "BP") title = "Blood Pressure";
           else if (type === "SCALE") title = "Weight";
+          else if (type === "BG") title = "Glucose";
           else title = type;
         }
 
-        newRoutes.push({
-          key: type,
-          title: title,
-        });
+        newRoutes.push({ key: type, title });
       }
     }
 
@@ -261,18 +381,45 @@ export default function HistoryScreen() {
   const isSyncing = syncState.status === "syncing";
   const isOffline = syncState.status === "offline";
 
+  // Determine navigation mode based on device count
+  const deviceCount = routes.filter((r) => r.key !== "empty").length;
+  const useSegmentControl = deviceCount >= 1 && deviceCount <= 3;
+  const useTabs = deviceCount >= 4;
+  const isSingleDevice = deviceCount === 1;
+
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <Text style={styles.title}>History</Text>
-        <View style={styles.headerButtons}>
-          {/* Sync Button - only show if there are pending readings */}
-          {pendingCount > 0 && (
+    <ImageBackground
+      source={require("../../assets/bg.png")}
+      style={styles.backgroundImage}
+      resizeMode="cover"
+    >
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        {/* Sync Banner - TOP of screen */}
+        {pendingCount > 0 && (
+          <View
+            style={[styles.syncBanner, isOffline && styles.syncBannerOffline]}
+          >
+            <View style={styles.syncBannerLeft}>
+              <MaterialCommunityIcons
+                name={isOffline ? "cloud-off-outline" : "cloud-sync-outline"}
+                size={20}
+                color={isOffline ? "#9e9e9e" : "#e65100"}
+              />
+              <Text
+                style={[
+                  styles.syncBannerText,
+                  isOffline && styles.syncBannerTextOffline,
+                ]}
+              >
+                {pendingCount} reading{pendingCount !== 1 ? "s" : ""} pending
+                {isOffline ? " • Offline" : ""}
+              </Text>
+            </View>
             <TouchableOpacity
               style={[
-                styles.syncButton,
-                isSyncing && styles.syncButtonDisabled,
-                isOffline && styles.syncButtonOffline,
+                styles.syncBannerButton,
+                isSyncing && styles.syncBannerButtonDisabled,
+                isOffline && styles.syncBannerButtonOffline,
               ]}
               onPress={handleSync}
               disabled={isSyncing || isOffline}
@@ -281,22 +428,21 @@ export default function HistoryScreen() {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <MaterialCommunityIcons
-                  name={isOffline ? "cloud-off-outline" : "cloud-upload"}
-                  size={18}
+                  name="cloud-upload"
+                  size={16}
                   color="#fff"
                 />
               )}
-              <Text style={styles.syncButtonText}>
-                {isSyncing
-                  ? "Syncing..."
-                  : isOffline
-                    ? "Offline"
-                    : `Sync ${pendingCount}`}
+              <Text style={styles.syncBannerButtonText}>
+                {isSyncing ? "Syncing..." : "Sync Now"}
               </Text>
             </TouchableOpacity>
-          )}
+          </View>
+        )}
 
-          {/* Export Button */}
+        {/* Header */}
+        <View style={styles.headerRow}>
+          <Text style={styles.title}>History</Text>
           <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
             <MaterialCommunityIcons
               name="file-export-outline"
@@ -306,38 +452,53 @@ export default function HistoryScreen() {
             <Text style={styles.exportText}>Export</Text>
           </TouchableOpacity>
         </View>
-      </View>
 
-      {/* Sync Status Banner */}
-      {syncState.lastError && pendingCount > 0 && (
-        <View style={styles.errorBanner}>
-          <MaterialIcons name="warning" size={16} color="#f57c00" />
-          <Text style={styles.errorBannerText}>
-            {pendingCount} reading{pendingCount !== 1 ? "s" : ""} pending sync
-          </Text>
-          <TouchableOpacity onPress={handleSync}>
-            <Text style={styles.errorBannerAction}>Retry</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+        {/* Dynamic Navigation: Single Title / Segment Control / Tabs */}
+        {isSingleDevice && routes[0]?.key !== "empty" && (
+          <View style={styles.singleDeviceHeader}>
+            <Text style={styles.singleDeviceTitle}>{routes[0]?.title}</Text>
+          </View>
+        )}
 
-      <View style={styles.tabContainer}>
-        <TabView
-          navigationState={{ index, routes }}
-          renderScene={renderScene}
-          onIndexChange={setIndex}
-          initialLayout={{ width: screenWidth }}
-          renderTabBar={(props) => (
-            <TabBar
-              {...props}
-              indicatorStyle={styles.tabIndicator}
-              style={styles.tabBar}
-              scrollEnabled
+        {useSegmentControl && !isSingleDevice && (
+          <SegmentControl
+            segments={routes}
+            selectedIndex={index}
+            onChange={setIndex}
+          />
+        )}
+
+        {/* Content Area */}
+        <View style={styles.contentContainer}>
+          {useTabs ? (
+            <TabView
+              navigationState={{ index, routes }}
+              renderScene={renderScene}
+              onIndexChange={setIndex}
+              initialLayout={{ width: screenWidth }}
+              renderTabBar={(props) => (
+                <TabBar
+                  {...props}
+                  indicatorStyle={styles.tabIndicator}
+                  style={styles.tabBar}
+                  scrollEnabled
+                />
+              )}
             />
+          ) : routes[0]?.key === "empty" ? (
+            <View style={styles.emptyContainer}>
+              <MaterialIcons name="show-chart" size={64} color="#ccc" />
+              <Text style={styles.emptyTitle}>No Readings Yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Take a measurement to see your history here
+              </Text>
+            </View>
+          ) : (
+            renderScene({ route: routes[index] || routes[0] })
           )}
-        />
+        </View>
       </View>
-    </View>
+    </ImageBackground>
   );
 }
 
@@ -348,7 +509,7 @@ function SummaryStats({
   bpThresholds,
 }: {
   data: SavedReading[];
-  type: "BP" | "SCALE";
+  type: "BP" | "SCALE" | "BG";
   bpThresholds: { systolicHigh: number; diastolicHigh: number };
 }) {
   const stats = useMemo(() => {
@@ -374,7 +535,6 @@ function SummaryStats({
         ? Math.round(hrValues.reduce((a, b) => a + b, 0) / hrValues.length)
         : null;
 
-      // Count high readings
       const highCount = data.filter((r) =>
         isBPHigh(r.value || 0, r.value2 || 0, bpThresholds)
       ).length;
@@ -412,7 +572,11 @@ function SummaryStats({
       </View>
       {type === "BP" && stats.avgHR != null && (
         <View style={styles.statItem}>
-          <MaterialCommunityIcons name="heart-pulse" size={16} color="#e53935" />
+          <MaterialCommunityIcons
+            name="heart-pulse"
+            size={16}
+            color="#e53935"
+          />
           <Text style={styles.statLabel}>Avg HR</Text>
           <Text style={styles.statValue}>{stats.avgHR}</Text>
         </View>
@@ -468,16 +632,15 @@ function DeviceHistoryTab({
     [numbered, sortAsc]
   );
 
-  const deviceType = numbered[0]?.type || "BP";
+  const deviceType = (numbered[0]?.type || "BP") as "BP" | "SCALE" | "BG";
+  const chartTheme = CHART_THEMES[deviceType] || CHART_THEMES.DEFAULT;
 
-  // Count synced/unsynced
   const syncedCount = useMemo(
     () => numbered.filter((r) => r.synced).length,
     [numbered]
   );
   const unsyncedCount = numbered.length - syncedCount;
 
-  // dynamic min/max for chart range
   const values = useMemo(() => {
     if (!numbered.length) return [];
     if (deviceType === "BP") {
@@ -516,7 +679,6 @@ function DeviceHistoryTab({
     [numbered, deviceType]
   );
 
-  // Helper to check if a BP reading is high
   const isReadingHigh = useCallback(
     (item: DisplayReading): boolean => {
       if (item.type !== "BP") return false;
@@ -619,7 +781,6 @@ function DeviceHistoryTab({
         }
         ListHeaderComponent={
           <>
-            {/* Summary Stats */}
             {numbered.length > 0 && (
               <SummaryStats
                 data={data}
@@ -628,21 +789,19 @@ function DeviceHistoryTab({
               />
             )}
 
-            {/* Chart */}
             {numbered.length > 2 && (
               <View style={styles.chartContainer}>
-                <View style={styles.chartInner}>
+                <View
+                  style={[
+                    styles.chartInner,
+                    { backgroundColor: chartTheme.background },
+                  ]}
+                >
                   {deviceType === "BP" ? (
                     <LineChart
                       dataSet={[
-                        {
-                          data: primaryData,
-                          color: "#ffba49",
-                        },
-                        {
-                          data: secondaryData,
-                          color: "#f5f5f5",
-                        },
+                        { data: primaryData, color: chartTheme.primary },
+                        { data: secondaryData, color: chartTheme.secondary },
                       ]}
                       initialSpacing={20}
                       spacing={Math.max(40, 280 / numbered.length)}
@@ -651,8 +810,8 @@ function DeviceHistoryTab({
                       noOfSections={4}
                       curved
                       hideRules={false}
-                      yAxisColor="#60809f"
-                      xAxisColor="#60809f"
+                      yAxisColor={chartTheme.accent}
+                      xAxisColor={chartTheme.accent}
                       yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
                       xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
                       yAxisOffset={yAxisOffset}
@@ -668,11 +827,11 @@ function DeviceHistoryTab({
                       noOfSections={4}
                       curved
                       hideRules={false}
-                      yAxisColor="#60809f"
-                      xAxisColor="#60809f"
+                      yAxisColor={chartTheme.accent}
+                      xAxisColor={chartTheme.accent}
                       yAxisTextStyle={{ color: "#fff", fontWeight: "600" }}
                       xAxisLabelTextStyle={{ color: "#fff", fontSize: 10 }}
-                      color="#f5f5f5"
+                      color={chartTheme.primary}
                       yAxisOffset={yAxisOffset}
                       maxValue={yAxisMax}
                     />
@@ -683,7 +842,7 @@ function DeviceHistoryTab({
                         <View
                           style={[
                             styles.legendDot,
-                            { backgroundColor: "#ffba49" },
+                            { backgroundColor: chartTheme.primary },
                           ]}
                         />
                         <Text style={styles.legendText}>Systolic</Text>
@@ -692,7 +851,7 @@ function DeviceHistoryTab({
                         <View
                           style={[
                             styles.legendDot,
-                            { backgroundColor: "#f5f5f5" },
+                            { backgroundColor: chartTheme.secondary },
                           ]}
                         />
                         <Text style={styles.legendText}>Diastolic</Text>
@@ -703,7 +862,6 @@ function DeviceHistoryTab({
               </View>
             )}
 
-            {/* Meta row */}
             <View style={styles.metaRow}>
               <View style={styles.countRow}>
                 <Text style={styles.countText}>
@@ -751,50 +909,75 @@ function DeviceHistoryTab({
 
 /* ---------- styles ---------- */
 const styles = StyleSheet.create({
+  backgroundImage: {
+    flex: 1,
+  },
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
   },
+  // Sync Banner - top of screen
+  syncBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#fff3e0",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#ffe0b2",
+  },
+  syncBannerOffline: {
+    backgroundColor: "#f5f5f5",
+    borderBottomColor: "#e0e0e0",
+  },
+  syncBannerLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  syncBannerText: {
+    color: "#e65100",
+    fontSize: 14,
+    fontWeight: "500",
+    flex: 1,
+  },
+  syncBannerTextOffline: {
+    color: "#757575",
+  },
+  syncBannerButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ff9800",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  syncBannerButtonDisabled: {
+    backgroundColor: "#bdbdbd",
+  },
+  syncBannerButtonOffline: {
+    backgroundColor: "#9e9e9e",
+  },
+  syncBannerButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  // Header
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 48,
-    paddingBottom: 16,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    paddingTop: 8,
+    paddingBottom: 12,
   },
   title: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: "700",
     color: "#002040",
-  },
-  headerButtons: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  syncButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#ff9800",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 24,
-    gap: 6,
-  },
-  syncButtonDisabled: {
-    backgroundColor: "#bdbdbd",
-  },
-  syncButtonOffline: {
-    backgroundColor: "#9e9e9e",
-  },
-  syncButtonText: {
-    color: "#fff",
-    fontWeight: "600",
-    fontSize: 14,
   },
   exportButton: {
     flexDirection: "row",
@@ -810,33 +993,25 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 14,
   },
-  errorBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff3e0",
+  // Single device header
+  singleDeviceHeader: {
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 8,
+    paddingVertical: 8,
   },
-  errorBannerText: {
-    flex: 1,
-    color: "#e65100",
-    fontSize: 13,
-  },
-  errorBannerAction: {
-    color: "#1976d2",
+  singleDeviceTitle: {
+    fontSize: 18,
     fontWeight: "600",
-    fontSize: 13,
+    color: "#002040",
   },
-  tabContainer: {
+  // Content
+  contentContainer: {
     flex: 1,
   },
+  // Tabs (for 4+ devices)
   tabBar: {
     backgroundColor: "#002040",
     elevation: 0,
     shadowOpacity: 0,
-    borderBottomWidth: 1,
-    borderBottomColor: "#001530",
   },
   tabIndicator: {
     backgroundColor: "#fff",
@@ -844,15 +1019,14 @@ const styles = StyleSheet.create({
   },
   scene: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
   },
   // Summary Stats
   statsContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     marginHorizontal: 16,
-    marginTop: 16,
+    marginTop: 12,
     paddingVertical: 16,
     borderRadius: 12,
     shadowColor: "#000",
@@ -887,7 +1061,6 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   chartInner: {
-    backgroundColor: "#006b6b",
     borderRadius: 12,
     paddingVertical: 12,
     paddingHorizontal: 8,
@@ -928,7 +1101,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   countText: {
-    color: "#666",
+    color: "#444",
     fontWeight: "600",
     fontSize: 14,
   },
@@ -952,7 +1125,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
     gap: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -974,7 +1147,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginHorizontal: 16,
     marginBottom: 8,
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     borderRadius: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },

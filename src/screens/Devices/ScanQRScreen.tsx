@@ -72,6 +72,13 @@ export default function ScanQRScreen({ navigation, route }: any) {
               style: "cancel",
               onPress: () => {
                 isProcessingRef.current = false;
+                navigation.goBack();
+              },
+            },
+            {
+              text: "Scan Again",
+              onPress: () => {
+                isProcessingRef.current = false;
                 setScanned(false);
               },
             },
@@ -106,6 +113,13 @@ export default function ScanQRScreen({ navigation, route }: any) {
             {
               text: "Cancel",
               style: "cancel",
+              onPress: () => {
+                isProcessingRef.current = false;
+                navigation.goBack();
+              },
+            },
+            {
+              text: "Scan Again",
               onPress: () => {
                 isProcessingRef.current = false;
                 setScanned(false);
