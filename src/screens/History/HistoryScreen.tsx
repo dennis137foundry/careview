@@ -12,7 +12,9 @@ import {
   UIManager,
   RefreshControl,
   ActivityIndicator,
+  ImageBackground,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useDispatch, useSelector } from "react-redux";
 import { loadReadings } from "../../redux/readingSlice";
 import { isBPHigh } from "../../redux/userSlice";
@@ -144,6 +146,7 @@ const segmentStyles = StyleSheet.create({
 
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
+  const insets = useSafeAreaInsets();
   const { items } = useSelector((state: RootState) => state.readings);
   const bpThresholds = useSelector(
     (state: RootState) => state.user.bpThresholds
@@ -331,9 +334,14 @@ export default function HistoryScreen() {
   const currentKey = currentRoute?.key || "empty";
 
   return (
-    <View style={styles.container}>
-      {/* Sync Banner */}
-      {pendingCount > 0 && (
+    <ImageBackground
+      source={require("../../assets/background.png")}
+      style={styles.backgroundImage}
+      resizeMode="cover"
+    >
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        {/* Sync Banner */}
+        {pendingCount > 0 && (
         <View
           style={[styles.syncBanner, isOffline && styles.syncBannerOffline]}
         >
@@ -429,6 +437,7 @@ export default function HistoryScreen() {
         )}
       </View>
     </View>
+    </ImageBackground>
   );
 }
 
@@ -842,10 +851,11 @@ function DeviceHistoryTab({
 
 /* ---------- styles ---------- */
 const styles = StyleSheet.create({
+  backgroundImage: {
+    flex: 1,
+  },
   container: {
     flex: 1,
-    backgroundColor: "#f5f7fa",
-    paddingTop: 50,
   },
   // Sync Banner
   syncBanner: {
@@ -905,9 +915,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 12,
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
   },
   title: {
     fontSize: 28,
@@ -932,7 +939,6 @@ const styles = StyleSheet.create({
   singleDeviceHeader: {
     paddingHorizontal: 16,
     paddingVertical: 12,
-    backgroundColor: "#fff",
   },
   singleDeviceTitle: {
     fontSize: 17,
@@ -950,7 +956,7 @@ const styles = StyleSheet.create({
   statsContainer: {
     flexDirection: "row",
     justifyContent: "space-around",
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     marginHorizontal: 16,
     marginTop: 16,
     paddingVertical: 16,
@@ -1052,7 +1058,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.9)",
     gap: 4,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
@@ -1074,7 +1080,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginHorizontal: 16,
     marginBottom: 8,
-    backgroundColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
     borderRadius: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
