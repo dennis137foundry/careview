@@ -32,6 +32,9 @@ import type { SavedReading } from "../../services/sqliteService";
 
 const screenWidth = Dimensions.get("window").width;
 
+// Default BP thresholds (standard hypertension definition)
+const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
+
 interface DisplayReading extends SavedReading {
   displayNumber: number;
 }
@@ -94,7 +97,7 @@ export default function HistoryScreen() {
     dispatch(loadReadings());
   }, [dispatch]);
 
-  // Group by TYPE (BP, SCALE, BG) instead of deviceId
+  // Group by TYPE (BP, SCALE) instead of deviceId
   const grouped = useMemo(() => {
     return items.reduce(
       (acc: Record<string, SavedReading[]>, r: SavedReading) => {
@@ -110,7 +113,7 @@ export default function HistoryScreen() {
 
   // Create tabs based on type, use deviceName for display
   useEffect(() => {
-    const typeOrder = ["BP", "SCALE", "BG"];
+    const typeOrder = ["BP", "SCALE"];
     const newRoutes: TabRoute[] = [];
 
     for (const type of typeOrder) {
@@ -123,7 +126,6 @@ export default function HistoryScreen() {
         if (!title || title.trim() === "") {
           if (type === "BP") title = "Blood Pressure";
           else if (type === "SCALE") title = "Weight";
-          else if (type === "BG") title = "Glucose";
           else title = type;
         }
 
@@ -250,7 +252,7 @@ export default function HistoryScreen() {
         onToggleSort={() => toggleSort(route.key)}
         refreshing={refreshing}
         onRefresh={onRefresh}
-        bpThresholds={bpThresholds}
+        bpThresholds={bpThresholds ?? DEFAULT_BP_THRESHOLDS}
       />
     );
   };
@@ -346,8 +348,8 @@ function SummaryStats({
   bpThresholds,
 }: {
   data: SavedReading[];
-  type: "BP" | "SCALE" | "BG";
-  bpThresholds?: { systolicHigh: number; diastolicHigh: number };
+  type: "BP" | "SCALE";
+  bpThresholds: { systolicHigh: number; diastolicHigh: number };
 }) {
   const stats = useMemo(() => {
     if (!data.length) return null;
@@ -442,7 +444,7 @@ function DeviceHistoryTab({
   onToggleSort: () => void;
   refreshing: boolean;
   onRefresh: () => void;
-  bpThresholds?: { systolicHigh: number; diastolicHigh: number };
+  bpThresholds: { systolicHigh: number; diastolicHigh: number };
 }) {
   const chronological = useMemo(
     () => [...data].sort((a, b) => a.ts - b.ts),
