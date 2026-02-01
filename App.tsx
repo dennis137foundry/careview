@@ -11,6 +11,7 @@ import { initDB } from "./src/services/sqliteService";
 import { loadUser } from "./src/redux/userSlice";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
 import AppNavigator from "./src/navigation/AppNavigator";
+import { ToastProvider } from "./src/components/Toast";
 
 const MyTheme = {
   ...DefaultTheme,
@@ -43,10 +44,12 @@ function RootApp() {
   }, [dispatch]);
 
   return (
-    <NavigationContainer theme={MyTheme}>
-      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      <AppNavigator />
-    </NavigationContainer>
+    <ToastProvider>
+      <NavigationContainer theme={MyTheme}>
+        <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+        <AppNavigator />
+      </NavigationContainer>
+    </ToastProvider>
   );
 }
 
