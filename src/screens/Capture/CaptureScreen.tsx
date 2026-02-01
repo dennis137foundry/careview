@@ -1,4 +1,3 @@
-/* eslint-disable react-native/no-inline-styles */
 import React, { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
@@ -12,9 +11,7 @@ import {
   Easing,
   Dimensions,
   StatusBar,
-  Share,
 } from "react-native";
-import Clipboard from "@react-native-clipboard/clipboard";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useSelector, useDispatch } from "react-redux";
@@ -65,13 +62,10 @@ export default function CaptureScreen({ route, navigation }: any) {
     "idle" | "auth" | "scan" | "connect" | "measure" | "success"
   >("idle");
   const [statusText, setStatusText] = useState<string>("");
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
-  const [showDebug, setShowDebug] = useState(false);
   const [lastReading, setLastReading] = useState<any>(null);
   const [syncStatus, setSyncStatus] = useState<
     "" | "syncing" | "synced" | "pending"
   >("");
-  const scrollRef = useRef<ScrollView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetMacRef = useRef<string>("");
 
@@ -102,10 +96,13 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   const theme = deviceThemes[device?.type || "BP"];
 
+  // ==========================================================================
+  // Dev-only logging (no UI, just console in __DEV__)
+  // ==========================================================================
   const addLog = useCallback((msg: string) => {
-    const timestamp = new Date().toLocaleTimeString();
-    setDebugLogs((prev) => [...prev.slice(-100), `[${timestamp}] ${msg}`]);
-    console.log(`[Capture] ${msg}`);
+    if (__DEV__) {
+      console.log(`[Capture] ${msg}`);
+    }
   }, []);
 
   // Check if BP reading is high based on thresholds
@@ -117,30 +114,24 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   // Reset all state to initial values
   const resetState = useCallback(() => {
-    // Clear any pending timeout
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
 
-    // Stop any ongoing scan/connection
     IHealthDevices?.stopScan?.().catch(() => {});
     IHealthDevices?.disconnectAll?.().catch(() => {});
 
-    // Reset all state
     setBusy(false);
     setPhase("idle");
     setStatusText("");
-    setDebugLogs([]);
     setLastReading(null);
     setSyncStatus("");
     targetMacRef.current = "";
 
-    // Reset health check state
     setShowHealthCheckModal(false);
     setPendingStartAfterHealthCheck(false);
 
-    // Reset animations
     pulseAnim.setValue(1);
     ringRotate.setValue(0);
     fadeAnim.setValue(0);
@@ -165,7 +156,6 @@ export default function CaptureScreen({ route, navigation }: any) {
       addLog(`Daily health check completed today: ${hasCompletedToday}`);
       setHealthCheckCompleted(hasCompletedToday);
     } else {
-      // Non-BP devices don't need health check
       setHealthCheckCompleted(true);
     }
   }, [device, addLog]);
@@ -176,24 +166,20 @@ export default function CaptureScreen({ route, navigation }: any) {
     setShowHealthCheckModal(false);
     setHealthCheckCompleted(true);
 
-    // If symptoms reported, log it
     if (data.hasHeadaches || data.hasVisualDisturbances) {
-      addLog("⚠️ Symptoms reported - care team will be notified");
+      addLog("Symptoms reported - care team will be notified");
     }
   }, [addLog]);
 
   // Reset state when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      // Reset state when screen gains focus
       resetState();
 
-      // Re-check health check status
       if (device?.type === "BP") {
         setHealthCheckCompleted(hasDailyHealthCheckToday());
       }
 
-      // Play entry animation after reset
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
@@ -208,7 +194,6 @@ export default function CaptureScreen({ route, navigation }: any) {
         }),
       ]).start();
 
-      // Cleanup when screen loses focus
       return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         IHealthDevices?.stopScan?.().catch(() => {});
@@ -322,7 +307,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         data.mac &&
         data.mac.toUpperCase() === targetMac.toUpperCase()
       ) {
-        addLog(`🎯 TARGET DEVICE FOUND! Connecting...`);
+        addLog("Target device found! Connecting...");
         setPhase("connect");
         setStatusText("Found you! Connecting...");
 
@@ -366,21 +351,21 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   // Helper to sync after saving
   const syncToEMR = useCallback(async () => {
-    addLog("📤 Syncing to EMR...");
+    addLog("Syncing to EMR...");
     setSyncStatus("syncing");
     try {
       const result = await syncPendingReadings();
       if (result.synced > 0) {
-        addLog(`✅ Synced to EMR`);
+        addLog("Synced to EMR");
         setSyncStatus("synced");
       } else if (result.remaining > 0) {
-        addLog(`⏳ Queued for sync (offline or error)`);
+        addLog("Queued for sync (offline or error)");
         setSyncStatus("pending");
       } else {
         setSyncStatus("synced");
       }
     } catch (e: any) {
-      addLog(`⚠️ Sync error: ${e.message}`);
+      addLog(`Sync error: ${e.message}`);
       setSyncStatus("pending");
     }
   }, [addLog]);
@@ -392,7 +377,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       
       const isHigh = isBPHigh(data.systolic, data.diastolic);
       if (isHigh) {
-        addLog(`⚠️ BP reading is HIGH (threshold: ${bpThresholds?.systolicHigh}/${bpThresholds?.diastolicHigh})`);
+        addLog(`BP reading is HIGH (threshold: ${bpThresholds?.systolicHigh}/${bpThresholds?.diastolicHigh})`);
       }
 
       dispatch(
@@ -449,15 +434,15 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     const subs = [
       emitter.addListener("onBloodPressureReading", (data: any) => {
-        addLog(`🎉 BP: ${data.systolic}/${data.diastolic} pulse=${data.pulse}`);
+        addLog(`BP: ${data.systolic}/${data.diastolic} pulse=${data.pulse}`);
         saveBPReading(data);
       }),
       emitter.addListener("onWeightReading", (data: any) => {
-        addLog(`🎉 Weight: ${data.weight} ${data.unit}`);
+        addLog(`Weight: ${data.weight} ${data.unit}`);
         saveWeightReading(data);
       }),
       emitter.addListener("onError", (data: any) => {
-        addLog(`❌ Error: ${data.message || JSON.stringify(data)}`);
+        addLog(`Error: ${data.message || JSON.stringify(data)}`);
       }),
     ];
 
@@ -465,7 +450,7 @@ export default function CaptureScreen({ route, navigation }: any) {
   }, [addLog, saveBPReading, saveWeightReading]);
 
   // ============================================================================
-  // START CAPTURE - Main function (extracted for reuse after health check)
+  // START CAPTURE
   // ============================================================================
   const startCapture = useCallback(async () => {
     if (!device) {
@@ -477,7 +462,6 @@ export default function CaptureScreen({ route, navigation }: any) {
       return;
     }
 
-    setDebugLogs([]);
     setBusy(true);
     setLastReading(null);
     setSyncStatus("");
@@ -491,14 +475,12 @@ export default function CaptureScreen({ route, navigation }: any) {
     setStatusText("Initializing...");
 
     try {
-      addLog("Authenticating SDK...");
       await IHealthDevices.authenticate("license.pem");
-      addLog("✅ Authenticated");
+      addLog("Authenticated");
     } catch (e: any) {
       addLog(`Auth note: ${e.message}`);
     }
 
-    // Normal scan flow (BP, Scale)
     setPhase("scan");
     if (device.type === "SCALE") {
       setStatusText("Step on scale to wake it");
@@ -516,7 +498,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         "HS2",
         "HS4S",
       ]);
-      addLog("✅ Scan started");
+      addLog("Scan started");
     } catch (e: any) {
       addLog(`Scan error: ${e.message}`);
       Alert.alert("Scan Error", e.message);
@@ -526,7 +508,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
 
     timeoutRef.current = setTimeout(() => {
-      addLog("⏰ Timeout - no reading received");
+      addLog("Timeout - no reading received");
       IHealthDevices.stopScan?.().catch(() => {});
       setBusy(false);
       setPhase("idle");
@@ -542,7 +524,6 @@ export default function CaptureScreen({ route, navigation }: any) {
   useEffect(() => {
     if (healthCheckCompleted && pendingStartAfterHealthCheck) {
       setPendingStartAfterHealthCheck(false);
-      // Small delay to let modal close
       const timer = setTimeout(() => {
         startCapture();
       }, 300);
@@ -554,7 +535,6 @@ export default function CaptureScreen({ route, navigation }: any) {
   // START - Entry point that checks for health check first
   // ============================================================================
   const start = useCallback(async () => {
-    // For BP devices, check if health check is needed
     if (device?.type === "BP" && !healthCheckCompleted) {
       addLog("Daily health check required before BP measurement");
       setPendingStartAfterHealthCheck(true);
@@ -562,7 +542,6 @@ export default function CaptureScreen({ route, navigation }: any) {
       return;
     }
 
-    // Otherwise proceed directly
     startCapture();
   }, [device, healthCheckCompleted, addLog, startCapture]);
 
@@ -573,7 +552,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     try {
       await IHealthDevices?.stopScan?.();
       await IHealthDevices?.disconnectAll?.();
-    } catch (e) {}
+    } catch (_e) {}
     setBusy(false);
     setPhase("idle");
     setStatusText("");
@@ -582,6 +561,10 @@ export default function CaptureScreen({ route, navigation }: any) {
   const done = useCallback(() => {
     navigation.goBack();
   }, [navigation]);
+
+  // ==========================================================================
+  // Render helpers
+  // ==========================================================================
 
   if (!device) {
     return (
@@ -613,15 +596,15 @@ export default function CaptureScreen({ route, navigation }: any) {
       case "auth":
         return "Initializing...";
       case "scan":
-        if (device.type === "SCALE") return "👆 Step on scale to wake it";
-        return "👆 Press start on your device";
+        if (device.type === "SCALE") return "Step on scale to wake it";
+        return "Press start on your device";
       case "connect":
-        return "🔗 Connecting...";
+        return "Connecting...";
       case "measure":
-        if (device.type === "SCALE") return "🦶 Hold still...";
-        return "💪 Keep arm relaxed...";
+        if (device.type === "SCALE") return "Hold still...";
+        return "Keep arm relaxed...";
       case "success":
-        return "✨ Reading saved!";
+        return "Reading saved!";
       default:
         return "Ready to measure";
     }
@@ -630,11 +613,11 @@ export default function CaptureScreen({ route, navigation }: any) {
   const getSyncStatusText = () => {
     switch (syncStatus) {
       case "syncing":
-        return "Syncing to EMR...";
+        return "Syncing to care team...";
       case "synced":
-        return "✓ Synced to EMR";
+        return "✓ Sent to care team";
       case "pending":
-        return "Will sync when online";
+        return "Will send when online";
       default:
         return "";
     }
@@ -653,12 +636,12 @@ export default function CaptureScreen({ route, navigation }: any) {
             <View style={styles.bpReading}>
               <Text style={[
                 styles.bpValue,
-                lastReading.isHigh && styles.bpValueHigh
+                lastReading.isHigh && styles.bpValueHigh,
               ]}>{lastReading.systolic}</Text>
               <Text style={styles.bpSeparator}>/</Text>
               <Text style={[
                 styles.bpValue,
-                lastReading.isHigh && styles.bpValueHigh
+                lastReading.isHigh && styles.bpValueHigh,
               ]}>{lastReading.diastolic}</Text>
             </View>
             <Text style={styles.readingUnit}>mmHg</Text>
@@ -739,16 +722,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Capture Reading</Text>
-        <TouchableOpacity
-          onPress={() => setShowDebug(!showDebug)}
-          style={styles.headerBtn}
-        >
-          <MaterialIcons
-            name="bug-report"
-            size={22}
-            color={showDebug ? theme.primary : "#666"}
-          />
-        </TouchableOpacity>
+        <View style={styles.headerBtnSpacer} />
       </Animated.View>
 
       {/* Main Content */}
@@ -836,10 +810,10 @@ export default function CaptureScreen({ route, navigation }: any) {
             <View style={styles.statusSection}>
               <Text
                 style={[
-                  styles.statusText,
-                  { color: busy ? theme.secondary : "#888" },
+                    styles.statusText,
+                    busy ? { color: theme.secondary } : styles.statusTextIdle,
                 ]}
-              >
+               >
                 {getPhaseMessage()}
               </Text>
               {busy && statusText && (
@@ -912,76 +886,6 @@ export default function CaptureScreen({ route, navigation }: any) {
         visible={showHealthCheckModal}
         onComplete={handleHealthCheckComplete}
       />
-
-      {/* Debug Panel */}
-      {showDebug && (
-        <View style={styles.debugPanel}>
-          <View style={styles.debugHeader}>
-            <Text style={styles.debugTitle}>Debug Log</Text>
-            <TouchableOpacity onPress={() => setShowDebug(false)}>
-              <MaterialIcons name="close" size={24} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            ref={scrollRef}
-            style={styles.debugScroll}
-            onContentSizeChange={() => scrollRef.current?.scrollToEnd()}
-          >
-            {debugLogs.length === 0 ? (
-              <Text style={styles.logLine}>Tap Start to begin...</Text>
-            ) : (
-              debugLogs.map((log, i) => (
-                <Text
-                  key={i}
-                  style={[
-                    styles.logLine,
-                    log.includes("🎉") && styles.logSuccess,
-                    log.includes("❌") && styles.logError,
-                    log.includes("🎯") && styles.logTarget,
-                    log.includes("[Native]") && styles.logNative,
-                    log.includes("[Found]") && styles.logFound,
-                    log.includes("📤") && styles.logSync,
-                    log.includes("Synced to EMR") && styles.logSuccess,
-                  ]}
-                >
-                  {log}
-                </Text>
-              ))
-            )}
-          </ScrollView>
-          <View style={styles.debugButtons}>
-            <TouchableOpacity
-              style={styles.debugBtn}
-              onPress={() => {
-                const logText = debugLogs.join("\n");
-                Clipboard.setString(logText);
-                Alert.alert(
-                  "Copied!",
-                  `${debugLogs.length} log lines copied to clipboard.`
-                );
-              }}
-            >
-              <Text style={styles.debugBtnText}>Copy</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.debugBtn, styles.debugBtnGreen]}
-              onPress={async () => {
-                const logText = debugLogs.join("\n");
-                try {
-                  await Share.share({
-                    message: `CareView Debug Log (${new Date().toLocaleString()})\n\n${logText}`,
-                    title: "Debug Log",
-                  });
-                } catch (e) {
-                  // User cancelled
-                }
-              }}
-            >
-              <Text style={styles.debugBtnText}>Share</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
     </View>
   );
 }
@@ -1011,6 +915,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.1)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  headerBtnSpacer: {
+    width: 44,
+    height: 44,
   },
   headerTitle: {
     fontSize: 18,
@@ -1237,77 +1145,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "500",
   },
-  // Debug Panel Styles
-  debugPanel: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.95)",
-    padding: 16,
-    paddingTop: 60,
-  },
-  debugHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  debugTitle: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  debugScroll: {
-    flex: 1,
-    marginBottom: 10,
-  },
-  logLine: {
-    color: "#0f0",
-    fontFamily: "monospace",
-    fontSize: 11,
-    marginBottom: 3,
-  },
-  logSuccess: {
-    color: "#4caf50",
-    fontWeight: "bold",
-  },
-  logError: {
-    color: "#f44336",
-  },
-  logTarget: {
-    color: "#ffeb3b",
-    fontWeight: "bold",
-  },
-  logNative: {
-    color: "#666",
-  },
-  logFound: {
-    color: "#03a9f4",
-  },
-  logSync: {
-    color: "#9c27b0",
-  },
-  debugButtons: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  debugBtn: {
-    backgroundColor: "#333",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    alignItems: "center",
-    flex: 1,
-  },
-  debugBtnGreen: {
-    backgroundColor: "#388e3c",
-  },
-  debugBtnText: {
-    color: "#fff",
-    fontWeight: "600",
-  },
   errorText: {
     fontSize: 18,
     color: "#ff5252",
@@ -1324,4 +1161,7 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
   },
+  statusTextIdle: {
+  color: "#888",
+},
 });

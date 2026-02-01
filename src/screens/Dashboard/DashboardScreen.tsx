@@ -87,8 +87,7 @@ export default function DashboardScreen() {
   const checkUrineProteinStatus = useCallback(() => {
     const needsResponse = needsUrineProteinResponse();
     const hasDeferred = hasUrineProteinDeferredToday();
-    console.log("[Dashboard] Urine protein check:", { needsResponse, hasDeferred });
-
+    
     if (needsResponse && !hasDeferred) {
       setShowUrineProteinModal(true);
       setShowUrineProteinAlert(false);
@@ -108,10 +107,6 @@ export default function DashboardScreen() {
       checkUrineProteinStatus();
     }
   }, [dispatch, isFocused, checkUrineProteinStatus]);
-
-  useEffect(() => {
-    console.log("[Dashboard] Devices loaded:", devices?.length, devices);
-  }, [devices]);
 
   // Filter for BP and Scale readings only
   const lastBP = readings
@@ -167,14 +162,12 @@ export default function DashboardScreen() {
     return isBPHigh(reading.value, reading.value2, bpThresholds);
   };
 
-  const handleUrineProteinComplete = (result: string) => {
-    console.log("[Dashboard] Urine protein result:", result);
+  const handleUrineProteinComplete = (_result: string) => {
     setShowUrineProteinModal(false);
     setShowUrineProteinAlert(false);
   };
 
   const handleUrineProteinDefer = () => {
-    console.log("[Dashboard] Urine protein deferred");
     setShowUrineProteinModal(false);
     setShowUrineProteinAlert(true);
   };

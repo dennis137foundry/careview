@@ -73,9 +73,7 @@ export function useVitalsSync(): UseVitalsSyncResult {
 
       try {
         saveReading(fullReading);
-        console.log(`[useVitalsSync] Reading saved locally: ${readingId}`);
       } catch (error) {
-        console.error('[useVitalsSync] Failed to save reading:', error);
         return { saved: false, synced: false, readingId };
       }
 

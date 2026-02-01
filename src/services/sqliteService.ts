@@ -326,6 +326,23 @@ export function updateDeviceFriendlyName(deviceId: string, friendlyName: string)
   }
 }
 
+/**
+ * Update device name (both name and friendlyName columns)
+ * Used for renaming devices from the UI
+ */
+export function updateDeviceName(deviceId: string, newName: string) {
+  try {
+    db.execute("UPDATE devices SET name = ?, friendlyName = ? WHERE id = ?;", [
+      newName,
+      newName,
+      deviceId,
+    ]);
+    console.log("✅ Device renamed:", deviceId, "->", newName);
+  } catch (e) {
+    console.error("❌ Failed to rename device:", e);
+  }
+}
+
 export function getDevices(): DeviceRecord[] {
   try {
     const res = db.execute(
@@ -765,6 +782,7 @@ export default {
   saveDevice,
   updateDeviceBottleCode,
   updateDeviceFriendlyName,
+  updateDeviceName,  // ← Added
   getDevices,
   getDevice,
   getDeviceByType,

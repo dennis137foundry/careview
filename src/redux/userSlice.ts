@@ -109,7 +109,6 @@ const userSlice = createSlice({
     logout: (state) => {
       try {
         clearUser();
-        console.log("✅ User cleared from SQLite");
       } catch (e) {
         console.warn("⚠️ Failed to clear user:", e);
       }

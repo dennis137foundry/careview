@@ -1,5 +1,5 @@
 // src/screens/Profile/ProfileScreen.tsx
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useDispatch, useSelector } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { logout } from "../../redux/userSlice";
+import SendMessageModal from "../../components/SendMessageModal";
 import type { RootState, AppDispatch } from "../../redux/store";
 
 // Helper function
@@ -51,6 +52,8 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const user = useSelector((state: RootState) => state.user);
   const insets = useSafeAreaInsets();
+
+  const [showMessageModal, setShowMessageModal] = useState(false);
 
   const handleLogout = () => {
     Alert.alert("Log Out", "Are you sure you want to log out?", [
@@ -105,6 +108,16 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
           </View>
         </View>
 
+        {/* Send Message Button */}
+        <TouchableOpacity
+          style={styles.messageButton}
+          onPress={() => setShowMessageModal(true)}
+          activeOpacity={0.8}
+        >
+          <MaterialIcons name="chat-bubble-outline" size={22} color="#fff" />
+          <Text style={styles.messageButtonText}>Send Us A Message</Text>
+        </TouchableOpacity>
+
         {/* Info Card */}
         <View style={styles.infoCard}>
           <InfoRow
@@ -147,7 +160,7 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
             onPress={handleLogout}
           >
             <MaterialIcons name="logout" size={20} color="#e53935" />
-            <Text style={[styles.actionButtonText, { color: "#e53935" }]}>
+            <Text style={[styles.actionButtonText, styles.actionButtonTextDanger]}>
               Sign Out
             </Text>
             <MaterialIcons name="chevron-right" size={20} color="#ccc" />
@@ -159,6 +172,15 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
           <Text style={styles.versionText}>CareView v1.0.0</Text>
         </View>
       </View>
+
+      {/* Send Message Modal */}
+      <SendMessageModal
+        visible={showMessageModal}
+        onClose={() => setShowMessageModal(false)}
+        patientId={user.patientId || ""}
+        patientName={`${user.firstName || ""} ${user.lastName || ""}`.trim()}
+        patientPhone={user.phone || ""}
+      />
     </ImageBackground>
   );
 }
@@ -226,6 +248,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "500",
     color: "#0066CC",
+  },
+  // Send Message Button
+  messageButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#0066CC",
+    borderRadius: 12,
+    paddingVertical: 16,
+    marginBottom: 16,
+    gap: 10,
+    shadowColor: "#0066CC",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  messageButtonText: {
+    fontSize: 17,
+    fontWeight: "600",
+    color: "#fff",
   },
   infoCard: {
     backgroundColor: "rgba(255,255,255,0.95)",
@@ -308,5 +351,8 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 12,
     color: "rgba(0,70,140,0.4)",
+  },
+  actionButtonTextDanger: {
+    color: "#e53935",
   },
 });

@@ -22,12 +22,14 @@ import {
 
 import deviceService, { DiscoveredDevice } from "../../services/deviceService";
 import { addDevice, loadDevices } from "../../redux/deviceSlice";
+import { useToast } from "../../components/Toast";
 import type { AppDispatch, RootState } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
 
 export default function AddDeviceScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const navigation = useNavigation<any>();
+  const { showToast } = useToast();
   const existingDevices = useSelector((state: RootState) => state.devices.devices);
 
   const [scanning, setScanning] = useState(false);
@@ -157,16 +159,18 @@ export default function AddDeviceScreen() {
       dispatch(addDevice(deviceRecord));
       dispatch(loadDevices());
 
-      Alert.alert(
-        "Device Added",
-        `${friendlyName || pendingDevice.name} has been added successfully.`,
-        [
-          {
-            text: "OK",
-            onPress: () => navigation.goBack(),
-          },
-        ]
-      );
+      // ✅ Changed from Alert.alert to Toast + auto-navigate
+      showToast({
+        message: `${friendlyName || pendingDevice.name} added successfully`,
+        type: "success",
+        duration: 2500,
+      });
+      
+      // Navigate back after a short delay so user sees the toast
+      setTimeout(() => {
+        navigation.goBack();
+      }, 300);
+
     } catch (error: any) {
       console.error("[AddDevice] Add error:", error);
       Alert.alert("Error", "Failed to add device. Please try again.");

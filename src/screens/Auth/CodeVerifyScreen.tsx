@@ -14,6 +14,7 @@ import {
 import { useDispatch } from "react-redux";
 import authService from "../../services/authService";
 import { login } from "../../redux/userSlice";
+import { useToast } from "../../components/Toast";
 
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RouteProp } from "@react-navigation/native";
@@ -33,6 +34,7 @@ export default function CodeVerifyScreen({
 }: CodeVerifyScreenProps) {
   const { phone } = route.params || {};
   const dispatch = useDispatch<AppDispatch>();
+  const { showToast } = useToast();
 
   const [values, setValues] = useState<string[]>(Array(DIGITS).fill(""));
   const [busy, setBusy] = useState(false);
@@ -120,7 +122,12 @@ export default function CodeVerifyScreen({
     try {
       setBusy(true);
       await authService.sendCode(phone);
-      Alert.alert("Code sent", "A new verification code has been sent.");
+      // ✅ Changed from Alert.alert to Toast
+      showToast({
+        message: "A new verification code has been sent.",
+        type: "success",
+        duration: 3000,
+      });
     } catch (e: any) {
       console.error("[CodeVerify] Resend error:", e);
       Alert.alert(

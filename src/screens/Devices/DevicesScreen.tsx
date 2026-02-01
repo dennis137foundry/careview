@@ -14,7 +14,9 @@ import {
 } from "react-native";
 import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { loadDevices, removeDevice } from "../../redux/deviceSlice";
+import { loadDevices, removeDevice, renameDevice } from "../../redux/deviceSlice";
+import { useToast } from "../../components/Toast";
+import RenameDeviceModal from "../../components/RenameDeviceModal";
 import type { RootState, AppDispatch } from "../../redux/store";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 
@@ -36,11 +38,13 @@ function SwipeableDeviceCard({
   lastReading,
   onCapture,
   onDelete,
+  onRename,
 }: {
   device: any;
   lastReading: any;
   onCapture: () => void;
   onDelete: () => void;
+  onRename: () => void;
 }) {
   const [translateX] = useState(new Animated.Value(0));
   const [isOpen, setIsOpen] = useState(false);
@@ -97,6 +101,27 @@ function SwipeableDeviceCard({
     );
   };
 
+  const handleMenuPress = () => {
+    const typeLabel = deviceTypeLabels[device.type] || device.type;
+    
+    Alert.alert(
+      device.name,
+      `Type: ${typeLabel}\nMAC: ${device.mac || device.id}`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Rename",
+          onPress: onRename,
+        },
+        {
+          text: "Delete Device",
+          style: "destructive",
+          onPress: onDelete,
+        },
+      ]
+    );
+  };
+
   const image = deviceImages[device.type] || deviceImages.BP;
   const typeLabel = deviceTypeLabels[device.type] || device.type;
 
@@ -126,16 +151,7 @@ function SwipeableDeviceCard({
             <Text style={styles.name}>{device.name}</Text>
             <TouchableOpacity
               style={styles.moreButton}
-              onPress={() => {
-                Alert.alert(device.name, `Type: ${typeLabel}\nMAC: ${device.mac || device.id}`, [
-                  { text: "Cancel", style: "cancel" },
-                  {
-                    text: "Delete Device",
-                    style: "destructive",
-                    onPress: onDelete,
-                  },
-                ]);
-              }}
+              onPress={handleMenuPress}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
               <MaterialIcons name="more-vert" size={22} color="#888" />
@@ -189,8 +205,13 @@ function SwipeableDeviceCard({
 export default function DevicesScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
+  const { showToast } = useToast();
   const { devices, loading } = useSelector((state: RootState) => state.devices);
   const readings = useSelector((state: RootState) => state.readings.items);
+
+  // Rename modal state
+  const [renameModalVisible, setRenameModalVisible] = useState(false);
+  const [deviceToRename, setDeviceToRename] = useState<any>(null);
 
   useEffect(() => {
     dispatch(loadDevices());
@@ -202,6 +223,29 @@ export default function DevicesScreen({ navigation }: any) {
     list.sort((a: any, b: any) => b.ts - a.ts);
     return list[0];
   }
+
+  const handleRenamePress = (device: any) => {
+    setDeviceToRename(device);
+    setRenameModalVisible(true);
+  };
+
+  const handleRenameConfirm = (newName: string) => {
+    if (deviceToRename) {
+      dispatch(renameDevice({ deviceId: deviceToRename.id, newName }));
+      showToast({
+        message: `Device renamed to "${newName}"`,
+        type: "success",
+        duration: 2500,
+      });
+    }
+    setRenameModalVisible(false);
+    setDeviceToRename(null);
+  };
+
+  const handleRenameCancel = () => {
+    setRenameModalVisible(false);
+    setDeviceToRename(null);
+  };
 
   if (loading) {
     return (
@@ -274,11 +318,21 @@ export default function DevicesScreen({ navigation }: any) {
                 lastReading={last}
                 onCapture={() => navigation.navigate("Capture", { deviceId: d.id })}
                 onDelete={() => dispatch(removeDevice(d.id))}
+                onRename={() => handleRenamePress(d)}
               />
             );
           })
         )}
       </ScrollView>
+
+      {/* Rename Modal */}
+      <RenameDeviceModal
+        visible={renameModalVisible}
+        currentName={deviceToRename?.name || ""}
+        deviceType={deviceToRename?.type || "BP"}
+        onRename={handleRenameConfirm}
+        onCancel={handleRenameCancel}
+      />
     </ImageBackground>
   );
 }
