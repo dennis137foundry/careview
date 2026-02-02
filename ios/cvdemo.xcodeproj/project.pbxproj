@@ -332,7 +332,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.trinitycareview.demo;
+				PRODUCT_BUNDLE_IDENTIFIER = com.trinitycareview.app;
 				PRODUCT_NAME = cvdemo;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
