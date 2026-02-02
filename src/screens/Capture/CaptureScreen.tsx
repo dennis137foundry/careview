@@ -92,6 +92,10 @@ export default function CaptureScreen({ route, navigation }: any) {
   const waveAnim = useRef(new Animated.Value(0)).current;
   const successScale = useRef(new Animated.Value(0)).current;
   const progressAnim = useRef(new Animated.Value(0)).current;
+  const successRingScale = useRef(new Animated.Value(0.8)).current;
+  const successRingOpacity = useRef(new Animated.Value(0)).current;
+  const readingFade = useRef(new Animated.Value(0)).current;
+  const buttonSlide = useRef(new Animated.Value(40)).current;
 
   const devices = useSelector((state: RootState) => state.devices.devices);
   const device: DeviceRecord | undefined = useMemo(
@@ -157,6 +161,10 @@ export default function CaptureScreen({ route, navigation }: any) {
     waveAnim.setValue(0);
     successScale.setValue(0);
     progressAnim.setValue(0);
+    successRingScale.setValue(0.8);
+    successRingOpacity.setValue(0);
+    readingFade.setValue(0);
+    buttonSlide.setValue(40);
   }, [
     pulseAnim,
     ringRotate,
@@ -165,6 +173,10 @@ export default function CaptureScreen({ route, navigation }: any) {
     waveAnim,
     successScale,
     progressAnim,
+    successRingScale,
+    successRingOpacity,
+    readingFade,
+    buttonSlide,
   ]);
 
   // Check if daily health check is needed for BP devices
@@ -305,13 +317,50 @@ export default function CaptureScreen({ route, navigation }: any) {
   // Success animation
   const playSuccessAnimation = useCallback(() => {
     setPhase("success");
-    Animated.spring(successScale, {
-      toValue: 1,
-      friction: 4,
-      tension: 50,
-      useNativeDriver: true,
-    }).start();
-  }, [successScale]);
+    // Reset animation values
+    successRingScale.setValue(0.8);
+    successRingOpacity.setValue(0.8);
+    readingFade.setValue(0);
+    buttonSlide.setValue(40);
+
+    // Staggered animation sequence
+    Animated.sequence([
+      // 1. Checkmark badge springs in
+      Animated.spring(successScale, {
+        toValue: 1,
+        friction: 5,
+        tension: 60,
+        useNativeDriver: true,
+      }),
+      // 2. Ring ripple expands outward + reading fades in + button slides up
+      Animated.parallel([
+        Animated.timing(successRingScale, {
+          toValue: 2.2,
+          duration: 700,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(successRingOpacity, {
+          toValue: 0,
+          duration: 700,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(readingFade, {
+          toValue: 1,
+          duration: 500,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.spring(buttonSlide, {
+          toValue: 0,
+          friction: 8,
+          tension: 50,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [successScale, successRingScale, successRingOpacity, readingFade, buttonSlide]);
 
   // Listen for native debug logs
   useEffect(() => {
@@ -636,32 +685,6 @@ export default function CaptureScreen({ route, navigation }: any) {
     startCapture();
   }, [device, healthCheckCompleted, addLog, startCapture]);
 
-  // ============================================================================
-  // MEASURE AGAIN - Clean up previous session and reset for another reading
-  // ============================================================================
-  const measureAgain = useCallback(async () => {
-    addLog("Measure Again - cleaning up previous session");
-
-    // Explicitly disconnect from previous reading session.
-    // This is safe here because the device has already sent its data
-    // and we are doing this on deliberate user action, not automatically.
-    try {
-      await IHealthDevices?.stopScan?.();
-      await IHealthDevices?.disconnectAll?.();
-    } catch (_e) {}
-
-    // Reset JS state for the new measurement
-    readingReceivedRef.current = false;
-    setBusy(false);
-    setPhase("idle");
-    setLastReading(null);
-    setSyncStatus("");
-    setStatusText("");
-    targetMacRef.current = "";
-    successScale.setValue(0);
-    progressAnim.setValue(0);
-  }, [addLog, successScale, progressAnim]);
-
   const cancel = useCallback(async () => {
     addLog("Cancelled by user");
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -829,7 +852,9 @@ export default function CaptureScreen({ route, navigation }: any) {
     return null;
   };
 
-  const bottomPadding = Math.max(insets.bottom + 100, 140);
+  const bottomPadding = phase === "success" 
+    ? Math.max(insets.bottom + 16, 30) 
+    : Math.max(insets.bottom + 100, 140);
 
   return (
     <View style={styles.container}>
@@ -909,14 +934,27 @@ export default function CaptureScreen({ route, navigation }: any) {
                 style={styles.deviceImage}
               />
               {phase === "success" && (
-                <View
-                  style={[
-                    styles.successBadge,
-                    { backgroundColor: theme.primary },
-                  ]}
-                >
-                  <MaterialIcons name="check" size={24} color="#fff" />
-                </View>
+                <>
+                  {/* Expanding ring ripple */}
+                  <Animated.View
+                    style={[
+                      styles.successRing,
+                      {
+                        borderColor: theme.primary,
+                        transform: [{ scale: successRingScale }],
+                        opacity: successRingOpacity,
+                      },
+                    ]}
+                  />
+                  <Animated.View
+                    style={[
+                      styles.successBadge,
+                      { backgroundColor: theme.primary, transform: [{ scale: successScale }] },
+                    ]}
+                  >
+                    <MaterialIcons name="check" size={24} color="#fff" />
+                  </Animated.View>
+                </>
               )}
             </View>
           </View>
@@ -929,7 +967,9 @@ export default function CaptureScreen({ route, navigation }: any) {
 
           {/* Reading Display or Status */}
           {phase === "success" && lastReading ? (
-            renderReadingDisplay()
+            <Animated.View style={{ opacity: readingFade }}>
+              {renderReadingDisplay()}
+            </Animated.View>
           ) : (
             <View style={styles.statusSection}>
               <Text
@@ -990,23 +1030,7 @@ export default function CaptureScreen({ route, navigation }: any) {
             )}
 
             {phase === "success" && (
-              <View style={styles.successButtons}>
-                <TouchableOpacity
-                  onPress={measureAgain}
-                  activeOpacity={0.8}
-                  style={styles.measureAgainButton}
-                >
-                  <MaterialIcons name="refresh" size={20} color={theme.primary} />
-                  <Text
-                    style={[
-                      styles.measureAgainText,
-                      { color: theme.primary },
-                    ]}
-                  >
-                    Measure Again
-                  </Text>
-                </TouchableOpacity>
-
+              <Animated.View style={{ transform: [{ translateY: buttonSlide }], opacity: readingFade }}>
                 <TouchableOpacity onPress={done} activeOpacity={0.8}>
                   <LinearGradient
                     colors={theme.gradient}
@@ -1017,7 +1041,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                     <Text style={styles.primaryButtonText}>Done</Text>
                   </LinearGradient>
                 </TouchableOpacity>
-              </View>
+              </Animated.View>
             )}
           </View>
         </Animated.View>
@@ -1136,6 +1160,13 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "#1a1a2e",
   },
+  successRing: {
+    position: "absolute",
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    borderWidth: 2,
+  },
   deviceName: {
     fontSize: 22,
     fontWeight: "700",
@@ -1170,7 +1201,7 @@ const styles = StyleSheet.create({
   },
   readingContainer: {
     alignItems: "center",
-    marginVertical: 20,
+    marginVertical: 10,
   },
   bpReading: {
     flexDirection: "row",
@@ -1260,29 +1291,8 @@ const styles = StyleSheet.create({
   buttonContainer: {
     width: "100%",
     alignItems: "center",
-    marginTop: 32,
-    marginBottom: 20,
-  },
-  successButtons: {
-    width: "100%",
-    alignItems: "center",
-    gap: 12,
-  },
-  measureAgainButton: {
-    width: SCREEN_WIDTH - 48,
-    height: 56,
-    borderRadius: 28,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
-    gap: 8,
-  },
-  measureAgainText: {
-    fontSize: 17,
-    fontWeight: "600",
+    marginTop: 20,
+    marginBottom: 10,
   },
   primaryButton: {
     width: SCREEN_WIDTH - 48,

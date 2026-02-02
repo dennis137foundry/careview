@@ -722,6 +722,74 @@ RCT_EXPORT_MODULE();
     [self sendEventSafe:@"onConnectionStateChanged" body:@{@"mac": mac, @"type": type, @"connected": @NO}];
 }
 
+#pragma mark - SDK Device Disconnect (matches old working pattern)
+
+/**
+ * Disconnect an iHealth SDK device by calling commandDisconnectDevice
+ * directly on the device object retrieved from its controller.
+ *
+ * This is the pattern that worked in the original version. The SDK manages
+ * its own CBCentralManager internally, so our _centralManager cannot
+ * disconnect SDK devices — we must call the device's own disconnect method.
+ */
+- (void)disconnectSDKDevice:(NSString *)mac type:(NSString *)type {
+    if (!mac || !type) return;
+    [self sendDebugLog:[NSString stringWithFormat:@"🔌 SDK disconnect: %@ (%@)", mac, type]];
+    
+    @try {
+        if ([type isEqualToString:@"BP3L"]) {
+            BP3L *device = [self getBP3LWithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 BP3L commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"BP5"]) {
+            BP5 *device = [self getBP5WithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 BP5 commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"BP5S"]) {
+            BP5S *device = [self getBP5SWithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 BP5S commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"HS2"]) {
+            HS2 *device = [self getHS2WithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 HS2 commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"HS2S"]) {
+            HS2S *device = [self getHS2SWithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 HS2S commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"HS4S"]) {
+            HS4 *device = [self getHS4WithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 HS4S commandDisconnectDevice called"];
+            }
+        }
+        else if ([type hasPrefix:@"GATT_"]) {
+            // GATT devices handled by _centralManager, not here
+        }
+        else {
+            [self sendDebugLog:[NSString stringWithFormat:@"⚠️ No disconnect handler for type: %@", type]];
+        }
+    } @catch (NSException *e) {
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ SDK disconnect exception for %@: %@", type, e.reason]];
+    }
+}
+
 #pragma mark - BP Handlers
 
 - (void)handleBP3LConnected:(BP3L *)bp mac:(NSString *)mac {
@@ -901,23 +969,51 @@ RCT_EXPORT_METHOD(connectDevice:(NSString *)mac deviceType:(NSString *)deviceTyp
 }
 
 RCT_EXPORT_METHOD(disconnectDevice:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    [self sendDebugLog:[NSString stringWithFormat:@"🔌 Disconnect: %@", mac]];
+    
     NSDictionary *info = _connectedDevices[mac];
     NSString *source = info[@"source"];
+    NSString *type = info[@"type"];
     
     if ([source isEqualToString:@"BLE_GATT"] && _connectedGATTPeripheral) {
         [_centralManager cancelPeripheralConnection:_connectedGATTPeripheral];
+    } else {
+        // iHealth SDK devices — call commandDisconnectDevice directly on the device object
+        [self disconnectSDKDevice:mac type:type];
     }
+    
     [_connectedDevices removeObjectForKey:mac];
     resolve(nil);
 }
 
 RCT_EXPORT_METHOD(disconnectAll:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    [self sendDebugLog:@"🔌 Disconnect: All devices"];
+    
+    // Disconnect GATT devices
     if (_connectedGATTPeripheral) {
         [_centralManager cancelPeripheralConnection:_connectedGATTPeripheral];
         _connectedGATTPeripheral = nil;
     }
+    
+    // Disconnect iHealth SDK devices by calling commandDisconnectDevice
+    // directly on each device object (this is how the old working version did it)
+    NSDictionary *snapshot = [_connectedDevices copy];
+    for (NSString *mac in snapshot) {
+        NSDictionary *info = snapshot[mac];
+        NSString *source = info[@"source"];
+        NSString *type = info[@"type"];
+        if (![source isEqualToString:@"BLE_GATT"]) {
+            [self disconnectSDKDevice:mac type:type];
+        }
+    }
+    
     [_connectedDevices removeAllObjects];
     _targetMAC = nil;
+    _connectedGATTIdentifier = nil;
+    _connectedGATTType = nil;
+    _bpMeasurementChar = nil;
+    _weightMeasurementChar = nil;
+    
     resolve(nil);
 }
 

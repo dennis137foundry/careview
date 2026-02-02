@@ -24,6 +24,7 @@
     "react-native-bootsplash": "^6.3.11",
     "react-native-fs": "^2.20.0",
     "react-native-gifted-charts": "^1.4.64",
+    "react-native-image-picker": "^8.2.1",
     "react-native-keep-awake": "^4.0.0",
     "react-native-linear-gradient": "^2.8.3",
     "react-native-pager-view": "^6.9.1",
