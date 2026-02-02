@@ -1,5 +1,6 @@
 // src/services/authService.ts
 import { saveUser, LocalUser } from "./sqliteService";
+import { isDemoAccount, hasDemoData, seedDemoData } from "./seedDemoData";
 
 const API_BASE = "https://trinityemr.com/api/careviewapp";
 
@@ -114,6 +115,13 @@ const authService = {
       // Persist to SQLite
       saveUser(user);
       console.log("[Auth] User saved to SQLite:", user.patientId);
+
+      // Demo account: seed local DB with 60 days of sample vitals (runs once)
+      if (isDemoAccount(phone) && !hasDemoData()) {
+        console.log("[Auth] Demo account detected — seeding sample data...");
+        seedDemoData();
+        console.log("[Auth] Demo data seeding complete.");
+      }
 
       return user;
     } catch (e: any) {
