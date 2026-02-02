@@ -74,10 +74,13 @@ export default function CaptureScreen({ route, navigation }: any) {
   // ============================================================================
   const [showHealthCheckModal, setShowHealthCheckModal] = useState(false);
   const [healthCheckCompleted, setHealthCheckCompleted] = useState(false);
-  const [pendingStartAfterHealthCheck, setPendingStartAfterHealthCheck] = useState(false);
+  const [pendingStartAfterHealthCheck, setPendingStartAfterHealthCheck] =
+    useState(false);
 
   // BP Thresholds from Redux
-  const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
+  const bpThresholds = useSelector(
+    (state: RootState) => state.user.bpThresholds
+  );
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -106,21 +109,29 @@ export default function CaptureScreen({ route, navigation }: any) {
   }, []);
 
   // Check if BP reading is high based on thresholds
-  const isBPHigh = useCallback((systolic: number, diastolic: number) => {
-    const sysHigh = bpThresholds?.systolicHigh || 140;
-    const diaHigh = bpThresholds?.diastolicHigh || 90;
-    return systolic >= sysHigh || diastolic >= diaHigh;
-  }, [bpThresholds]);
+  const isBPHigh = useCallback(
+    (systolic: number, diastolic: number) => {
+      const sysHigh = bpThresholds?.systolicHigh || 140;
+      const diaHigh = bpThresholds?.diastolicHigh || 90;
+      return systolic >= sysHigh || diastolic >= diaHigh;
+    },
+    [bpThresholds]
+  );
 
-  // Reset all state to initial values
+  // ============================================================================
+  // Reset JS-only state (NO BLE operations — that caused the reconnect bug)
+  // ============================================================================
   const resetState = useCallback(() => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
 
-    IHealthDevices?.stopScan?.().catch(() => {});
-    IHealthDevices?.disconnectAll?.().catch(() => {});
+    // NOTE: We intentionally do NOT call stopScan/disconnectAll here.
+    // The old version that worked repeatedly never did BLE cleanup on
+    // state reset — the device disconnects itself after sending data.
+    // Calling disconnectAll on screen entry was corrupting the iHealth
+    // SDK's internal BLE state and preventing subsequent connections.
 
     setBusy(false);
     setPhase("idle");
@@ -161,17 +172,24 @@ export default function CaptureScreen({ route, navigation }: any) {
   }, [device, addLog]);
 
   // Handle daily health check completion
-  const handleHealthCheckComplete = useCallback((data: any) => {
-    addLog(`Health check completed: headaches=${data.hasHeadaches}, visual=${data.hasVisualDisturbances}`);
-    setShowHealthCheckModal(false);
-    setHealthCheckCompleted(true);
+  const handleHealthCheckComplete = useCallback(
+    (data: any) => {
+      addLog(
+        `Health check completed: headaches=${data.hasHeadaches}, visual=${data.hasVisualDisturbances}`
+      );
+      setShowHealthCheckModal(false);
+      setHealthCheckCompleted(true);
 
-    if (data.hasHeadaches || data.hasVisualDisturbances) {
-      addLog("Symptoms reported - care team will be notified");
-    }
-  }, [addLog]);
+      if (data.hasHeadaches || data.hasVisualDisturbances) {
+        addLog("Symptoms reported - care team will be notified");
+      }
+    },
+    [addLog]
+  );
 
-  // Reset state when screen comes into focus
+  // ============================================================================
+  // Focus effect — reset JS state on entry, BLE cleanup on EXIT only
+  // ============================================================================
   useFocusEffect(
     useCallback(() => {
       resetState();
@@ -194,9 +212,11 @@ export default function CaptureScreen({ route, navigation }: any) {
         }),
       ]).start();
 
+      // Cleanup when LEAVING the screen — this is the safe place for BLE teardown
       return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         IHealthDevices?.stopScan?.().catch(() => {});
+        IHealthDevices?.disconnectAll?.().catch(() => {});
       };
     }, [resetState, fadeAnim, scaleAnim, device])
   );
@@ -329,23 +349,26 @@ export default function CaptureScreen({ route, navigation }: any) {
   // Listen for connection state
   useEffect(() => {
     if (!emitter) return;
-    const sub = emitter.addListener("onConnectionStateChanged", (data: any) => {
-      addLog(
-        `[Connection] ${data.mac} connected=${data.connected} type=${data.type}`
-      );
+    const sub = emitter.addListener(
+      "onConnectionStateChanged",
+      (data: any) => {
+        addLog(
+          `[Connection] ${data.mac} connected=${data.connected} type=${data.type}`
+        );
 
-      if (data.connected) {
-        setPhase("measure");
-        if (device?.type === "SCALE") {
-          setStatusText("Step on the scale");
-        } else {
-          setStatusText("Keep still, measuring...");
+        if (data.connected) {
+          setPhase("measure");
+          if (device?.type === "SCALE") {
+            setStatusText("Step on the scale");
+          } else {
+            setStatusText("Keep still, measuring...");
+          }
+        } else if (busy) {
+          addLog("Device disconnected!");
+          setStatusText("Disconnected");
         }
-      } else if (busy) {
-        addLog("Device disconnected!");
-        setStatusText("Disconnected");
       }
-    });
+    );
     return () => sub.remove();
   }, [addLog, device, busy]);
 
@@ -374,10 +397,15 @@ export default function CaptureScreen({ route, navigation }: any) {
   const saveBPReading = useCallback(
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      
+
+      // Stop the scan now that we have our reading
+      IHealthDevices?.stopScan?.().catch(() => {});
+
       const isHigh = isBPHigh(data.systolic, data.diastolic);
       if (isHigh) {
-        addLog(`BP reading is HIGH (threshold: ${bpThresholds?.systolicHigh}/${bpThresholds?.diastolicHigh})`);
+        addLog(
+          `BP reading is HIGH (threshold: ${bpThresholds?.systolicHigh}/${bpThresholds?.diastolicHigh})`
+        );
       }
 
       dispatch(
@@ -402,12 +430,24 @@ export default function CaptureScreen({ route, navigation }: any) {
       playSuccessAnimation();
       syncToEMR();
     },
-    [device, dispatch, playSuccessAnimation, syncToEMR, isBPHigh, bpThresholds, addLog]
+    [
+      device,
+      dispatch,
+      playSuccessAnimation,
+      syncToEMR,
+      isBPHigh,
+      bpThresholds,
+      addLog,
+    ]
   );
 
   const saveWeightReading = useCallback(
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+      // Stop the scan now that we have our reading
+      IHealthDevices?.stopScan?.().catch(() => {});
+
       const kg = parseFloat(data.weight) || 0;
       const lbs = Math.floor(kg * 2.20462 * 10) / 10;
       dispatch(
@@ -545,6 +585,31 @@ export default function CaptureScreen({ route, navigation }: any) {
     startCapture();
   }, [device, healthCheckCompleted, addLog, startCapture]);
 
+  // ============================================================================
+  // MEASURE AGAIN - Clean up previous session and reset for another reading
+  // ============================================================================
+  const measureAgain = useCallback(async () => {
+    addLog("Measure Again - cleaning up previous session");
+
+    // Explicitly disconnect from previous reading session.
+    // This is safe here because the device has already sent its data
+    // and we are doing this on deliberate user action, not automatically.
+    try {
+      await IHealthDevices?.stopScan?.();
+      await IHealthDevices?.disconnectAll?.();
+    } catch (_e) {}
+
+    // Reset JS state for the new measurement
+    setBusy(false);
+    setPhase("idle");
+    setLastReading(null);
+    setSyncStatus("");
+    setStatusText("");
+    targetMacRef.current = "";
+    successScale.setValue(0);
+    progressAnim.setValue(0);
+  }, [addLog, successScale, progressAnim]);
+
   const cancel = useCallback(async () => {
     addLog("Cancelled by user");
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
@@ -634,22 +699,31 @@ export default function CaptureScreen({ route, navigation }: any) {
             ]}
           >
             <View style={styles.bpReading}>
-              <Text style={[
-                styles.bpValue,
-                lastReading.isHigh && styles.bpValueHigh,
-              ]}>{lastReading.systolic}</Text>
+              <Text
+                style={[
+                  styles.bpValue,
+                  lastReading.isHigh && styles.bpValueHigh,
+                ]}
+              >
+                {lastReading.systolic}
+              </Text>
               <Text style={styles.bpSeparator}>/</Text>
-              <Text style={[
-                styles.bpValue,
-                lastReading.isHigh && styles.bpValueHigh,
-              ]}>{lastReading.diastolic}</Text>
+              <Text
+                style={[
+                  styles.bpValue,
+                  lastReading.isHigh && styles.bpValueHigh,
+                ]}
+              >
+                {lastReading.diastolic}
+              </Text>
             </View>
             <Text style={styles.readingUnit}>mmHg</Text>
             {lastReading.isHigh && (
               <View style={styles.highBPBadge}>
                 <MaterialIcons name="warning" size={18} color="#FF5252" />
                 <Text style={styles.highBPText}>
-                  Above threshold ({bpThresholds?.systolicHigh}/{bpThresholds?.diastolicHigh})
+                  Above threshold ({bpThresholds?.systolicHigh}/
+                  {bpThresholds?.diastolicHigh})
                 </Text>
               </View>
             )}
@@ -798,9 +872,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           {/* Device Info */}
           <Text style={styles.deviceName}>{device.name}</Text>
           <Text style={styles.deviceType}>
-            {device.type === "BP"
-              ? "Blood Pressure Monitor"
-              : "Smart Scale"}
+            {device.type === "BP" ? "Blood Pressure Monitor" : "Smart Scale"}
           </Text>
 
           {/* Reading Display or Status */}
@@ -810,10 +882,10 @@ export default function CaptureScreen({ route, navigation }: any) {
             <View style={styles.statusSection}>
               <Text
                 style={[
-                    styles.statusText,
-                    busy ? { color: theme.secondary } : styles.statusTextIdle,
+                  styles.statusText,
+                  busy ? { color: theme.secondary } : styles.statusTextIdle,
                 ]}
-               >
+              >
                 {getPhaseMessage()}
               </Text>
               {busy && statusText && (
@@ -866,16 +938,34 @@ export default function CaptureScreen({ route, navigation }: any) {
             )}
 
             {phase === "success" && (
-              <TouchableOpacity onPress={done} activeOpacity={0.8}>
-                <LinearGradient
-                  colors={theme.gradient}
-                  style={styles.primaryButton}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
+              <View style={styles.successButtons}>
+                <TouchableOpacity
+                  onPress={measureAgain}
+                  activeOpacity={0.8}
+                  style={styles.measureAgainButton}
                 >
-                  <Text style={styles.primaryButtonText}>Done</Text>
-                </LinearGradient>
-              </TouchableOpacity>
+                  <MaterialIcons name="refresh" size={20} color={theme.primary} />
+                  <Text
+                    style={[
+                      styles.measureAgainText,
+                      { color: theme.primary },
+                    ]}
+                  >
+                    Measure Again
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={done} activeOpacity={0.8}>
+                  <LinearGradient
+                    colors={theme.gradient}
+                    style={styles.primaryButton}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                  >
+                    <Text style={styles.primaryButtonText}>Done</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         </Animated.View>
@@ -1018,6 +1108,9 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginBottom: 8,
   },
+  statusTextIdle: {
+    color: "#888",
+  },
   statusSubtext: {
     fontSize: 14,
     color: "#666",
@@ -1118,6 +1211,27 @@ const styles = StyleSheet.create({
     marginTop: 32,
     marginBottom: 20,
   },
+  successButtons: {
+    width: "100%",
+    alignItems: "center",
+    gap: 12,
+  },
+  measureAgainButton: {
+    width: SCREEN_WIDTH - 48,
+    height: 56,
+    borderRadius: 28,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.15)",
+    gap: 8,
+  },
+  measureAgainText: {
+    fontSize: 17,
+    fontWeight: "600",
+  },
   primaryButton: {
     width: SCREEN_WIDTH - 48,
     height: 56,
@@ -1161,7 +1275,4 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
   },
-  statusTextIdle: {
-  color: "#888",
-},
 });
