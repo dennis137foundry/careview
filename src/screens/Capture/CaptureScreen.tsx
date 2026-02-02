@@ -68,6 +68,8 @@ export default function CaptureScreen({ route, navigation }: any) {
   >("");
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetMacRef = useRef<string>("");
+  const readingReceivedRef = useRef<boolean>(false);
+  const busyRef = useRef<boolean>(false);
 
   // ============================================================================
   // Daily Health Check Modal State (for BP devices)
@@ -107,6 +109,11 @@ export default function CaptureScreen({ route, navigation }: any) {
       console.log(`[Capture] ${msg}`);
     }
   }, []);
+
+  // Keep busyRef in sync so event listeners always have current value
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   // Check if BP reading is high based on thresholds
   const isBPHigh = useCallback(
@@ -363,14 +370,30 @@ export default function CaptureScreen({ route, navigation }: any) {
           } else {
             setStatusText("Keep still, measuring...");
           }
-        } else if (busy) {
-          addLog("Device disconnected!");
-          setStatusText("Disconnected");
+        } else if (busyRef.current && !readingReceivedRef.current) {
+          // Unexpected disconnect — device was turned off, cuff error,
+          // moved out of range, etc. Clean up and let the user know.
+          addLog("Unexpected disconnect - no reading received");
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+          }
+          IHealthDevices?.stopScan?.().catch(() => {});
+          targetMacRef.current = "";
+          setBusy(false);
+          setPhase("idle");
+          setStatusText("");
+          Alert.alert(
+            "Device Disconnected",
+            "The connection was lost before a reading was received. Make sure your device is nearby and try again."
+          );
         }
+        // If readingReceivedRef.current is true, this is an expected
+        // disconnect after a successful save — ignore it.
       }
     );
     return () => sub.remove();
-  }, [addLog, device, busy]);
+  }, [addLog, device]);
 
   // Helper to sync after saving
   const syncToEMR = useCallback(async () => {
@@ -398,8 +421,12 @@ export default function CaptureScreen({ route, navigation }: any) {
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
-      // Stop the scan now that we have our reading
+      // Stop scan and disconnect — data is already received.
+      // This releases the GATT connection so the device turns off
+      // its green BLE light and is ready for the next reading.
+      readingReceivedRef.current = true;
       IHealthDevices?.stopScan?.().catch(() => {});
+      IHealthDevices?.disconnectAll?.().catch(() => {});
 
       const isHigh = isBPHigh(data.systolic, data.diastolic);
       if (isHigh) {
@@ -445,8 +472,12 @@ export default function CaptureScreen({ route, navigation }: any) {
     (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
-      // Stop the scan now that we have our reading
+      // Stop scan and disconnect — data is already received.
+      // This releases the GATT connection so the device powers down
+      // cleanly and is ready for the next reading.
+      readingReceivedRef.current = true;
       IHealthDevices?.stopScan?.().catch(() => {});
+      IHealthDevices?.disconnectAll?.().catch(() => {});
 
       const kg = parseFloat(data.weight) || 0;
       const lbs = Math.floor(kg * 2.20462 * 10) / 10;
@@ -482,7 +513,26 @@ export default function CaptureScreen({ route, navigation }: any) {
         saveWeightReading(data);
       }),
       emitter.addListener("onError", (data: any) => {
-        addLog(`Error: ${data.message || JSON.stringify(data)}`);
+        const msg = data.message || JSON.stringify(data);
+        addLog(`Error: ${msg}`);
+
+        // If we're actively trying to capture, reset and tell the user
+        if (busyRef.current && !readingReceivedRef.current) {
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+          }
+          IHealthDevices?.stopScan?.().catch(() => {});
+          IHealthDevices?.disconnectAll?.().catch(() => {});
+          targetMacRef.current = "";
+          setBusy(false);
+          setPhase("idle");
+          setStatusText("");
+          Alert.alert(
+            "Device Error",
+            "Something went wrong during the reading. Please try again."
+          );
+        }
       }),
     ];
 
@@ -506,6 +556,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     setLastReading(null);
     setSyncStatus("");
     successScale.setValue(0);
+    readingReceivedRef.current = false;
 
     const mac = device.mac || device.id;
     targetMacRef.current = mac;
@@ -600,6 +651,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     } catch (_e) {}
 
     // Reset JS state for the new measurement
+    readingReceivedRef.current = false;
     setBusy(false);
     setPhase("idle");
     setLastReading(null);
