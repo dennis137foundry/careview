@@ -737,18 +737,13 @@ RCT_EXPORT_MODULE();
     [self sendDebugLog:[NSString stringWithFormat:@"🔌 SDK disconnect: %@ (%@)", mac, type]];
     
     @try {
+        // Only these three have commandDisconnectDevice in the SDK.
+        // BP5, HS2S, HS4S auto-disconnect when BLE drops — no explicit method.
         if ([type isEqualToString:@"BP3L"]) {
             BP3L *device = [self getBP3LWithMac:mac];
             if (device) {
                 [device commandDisconnectDevice];
                 [self sendDebugLog:@"🔌 BP3L commandDisconnectDevice called"];
-            }
-        }
-        else if ([type isEqualToString:@"BP5"]) {
-            BP5 *device = [self getBP5WithMac:mac];
-            if (device) {
-                [device commandDisconnectDevice];
-                [self sendDebugLog:@"🔌 BP5 commandDisconnectDevice called"];
             }
         }
         else if ([type isEqualToString:@"BP5S"]) {
@@ -765,25 +760,8 @@ RCT_EXPORT_MODULE();
                 [self sendDebugLog:@"🔌 HS2 commandDisconnectDevice called"];
             }
         }
-        else if ([type isEqualToString:@"HS2S"]) {
-            HS2S *device = [self getHS2SWithMac:mac];
-            if (device) {
-                [device commandDisconnectDevice];
-                [self sendDebugLog:@"🔌 HS2S commandDisconnectDevice called"];
-            }
-        }
-        else if ([type isEqualToString:@"HS4S"]) {
-            HS4 *device = [self getHS4WithMac:mac];
-            if (device) {
-                [device commandDisconnectDevice];
-                [self sendDebugLog:@"🔌 HS4S commandDisconnectDevice called"];
-            }
-        }
-        else if ([type hasPrefix:@"GATT_"]) {
-            // GATT devices handled by _centralManager, not here
-        }
         else {
-            [self sendDebugLog:[NSString stringWithFormat:@"⚠️ No disconnect handler for type: %@", type]];
+            [self sendDebugLog:[NSString stringWithFormat:@"🔌 No explicit disconnect for %@ — will auto-disconnect", type]];
         }
     } @catch (NSException *e) {
         [self sendDebugLog:[NSString stringWithFormat:@"⚠️ SDK disconnect exception for %@: %@", type, e.reason]];
