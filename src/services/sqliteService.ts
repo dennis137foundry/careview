@@ -765,6 +765,19 @@ export function hasUrineProteinDeferredToday(): boolean {
   return true;
 }
 
+
+export function wipeAllPatientData() {
+  try {
+    db.execute("DELETE FROM readings;");
+    db.execute("DELETE FROM devices;");
+    db.execute("DELETE FROM screening_responses;");
+    db.execute("DELETE FROM app_settings;");
+  } catch (e) {
+    console.error("Failed to wipe patient data:", e);
+    throw e;
+  }
+}
+
 // ----------------------
 // Exports
 // ----------------------
@@ -803,4 +816,5 @@ export default {
   hasDailyHealthCheckToday,
   needsUrineProteinResponse,
   hasUrineProteinDeferredToday,
+  wipeAllPatientData
 };

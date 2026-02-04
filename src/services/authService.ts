@@ -1,6 +1,7 @@
 // src/services/authService.ts
-import { saveUser, LocalUser } from "./sqliteService";
-import { isDemoAccount, hasDemoData, seedDemoData } from "./seedDemoData";
+import { Alert } from "react-native";
+import { saveUser, getUser, LocalUser, wipeAllPatientData } from "./sqliteService";
+import { isDemoAccount, seedDemoData } from "./seedDemoData";
 
 const API_BASE = "https://trinityemr.com/api/careviewapp";
 
@@ -46,7 +47,7 @@ const authService = {
   /**
    * Verify the 6-digit code
    * Returns LocalUser on success, null on failure
-   * 
+   *
    * Expected API response format:
    * {
    *   success: true,
@@ -61,7 +62,7 @@ const authService = {
    *     lastName: "Smith",
    *     practiceName: "Trinity Women's Health"
    *   },
-   *   bpThresholds: {          // NEW: Physician-set BP thresholds
+   *   bpThresholds: {
    *     systolicHigh: 140,
    *     diastolicHigh: 90
    *   }
@@ -112,15 +113,46 @@ const authService = {
         diastolicHigh,
       };
 
+      // ---------------------------------------------------------------
+      // HIPAA safeguard: if a different patient was previously signed in,
+      // wipe all local data before proceeding. Same patient keeps data.
+      // ---------------------------------------------------------------
+      const previousUser = await getUser();
+      if (previousUser && previousUser.patientId !== user.patientId) {
+        console.log(
+          `[Auth] Different patient detected (was ${previousUser.patientId}, now ${user.patientId}) — wiping local data`
+        );
+        wipeAllPatientData();
+      }
+
       // Persist to SQLite
       saveUser(user);
       console.log("[Auth] User saved to SQLite:", user.patientId);
 
-      // Demo account: seed local DB with 60 days of sample vitals (runs once)
-      if (isDemoAccount(phone) && !hasDemoData()) {
-        console.log("[Auth] Demo account detected — seeding sample data...");
-        seedDemoData();
-        console.log("[Auth] Demo data seeding complete.");
+      // Demo account: prompt user to seed sample data
+      if (isDemoAccount(phone)) {
+        console.log("[Auth] Demo account detected — prompting for seed...");
+        Alert.alert(
+          "Demo Account Detected",
+          "Would you like to seed the app with sample data?",
+          [
+            {
+              text: "No",
+              style: "cancel",
+              onPress: () => {
+                console.log("[Auth] Demo seed declined by user");
+              },
+            },
+            {
+              text: "Yes",
+              onPress: () => {
+                console.log("[Auth] Seeding demo data...");
+                seedDemoData();
+                console.log("[Auth] Demo data seeding complete");
+              },
+            },
+          ],
+        );
       }
 
       return user;

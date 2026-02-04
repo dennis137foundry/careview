@@ -55,7 +55,7 @@ const InfoRow = ({
   </View>
 );
 
-export default function ProfileScreen({ navigation: _navigation }: any) {
+export default function ProfileScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const user = useSelector((state: RootState) => state.user);
   const insets = useSafeAreaInsets();
@@ -236,12 +236,23 @@ export default function ProfileScreen({ navigation: _navigation }: any) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.actionButton, styles.actionButtonLast]}
+            style={styles.actionButton}
             onPress={handleLogout}
           >
             <MaterialIcons name="logout" size={20} color="#e53935" />
             <Text style={[styles.actionButtonText, styles.logoutText]}>
               Sign Out
+            </Text>
+            <MaterialIcons name="chevron-right" size={20} color="#ccc" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionButton, styles.actionButtonLast]}
+            onPress={() => navigation.navigate("WipeData")}
+          >
+            <MaterialIcons name="delete-forever" size={20} color="#e53935" />
+            <Text style={[styles.actionButtonText, styles.logoutText]}>
+              Sign Out & Wipe Data
             </Text>
             <MaterialIcons name="chevron-right" size={20} color="#ccc" />
           </TouchableOpacity>

@@ -1,28 +1,22 @@
-﻿buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22"
-    }
-}
-
 apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
 android {
     namespace "com.ihealthdevices"
-    compileSdkVersion 34
+    compileSdkVersion safeExtGet("compileSdkVersion", 34)
 
     defaultConfig {
-        minSdkVersion 24
-        targetSdkVersion 34
+        minSdkVersion safeExtGet("minSdkVersion", 24)
+        targetSdkVersion safeExtGet("targetSdkVersion", 34)
     }
 
-    sourceSets {
-        main {
-            jniLibs.srcDirs = ["libs"]
+    buildTypes {
+        release {
+            minifyEnabled false
         }
     }
 
@@ -34,15 +28,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-}
 
-repositories {
-    google()
-    mavenCentral()
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['libs']
+        }
+    }
 }
 
 dependencies {
     implementation "com.facebook.react:react-android:+"
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
-    implementation files("libs/iHealthSDK_2.15.1.jar")
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
 }
