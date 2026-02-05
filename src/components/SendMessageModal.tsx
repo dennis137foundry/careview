@@ -24,6 +24,80 @@ interface SendMessageModalProps {
 }
 
 const API_URL = "https://trinitycareview.com/api/careviewapp/app_messenger.php";
+const REQUEST_TIMEOUT = 10000;
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1500;
+
+// ============================================================================
+// Network Helpers (same pattern as authService)
+// ============================================================================
+
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeout: number = REQUEST_TIMEOUT
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("Request timed out"));
+    }, timeout);
+
+    fetch(url, { ...options, signal: controller.signal })
+      .then((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retries: number = MAX_RETRIES
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetchWithTimeout(url, options);
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`[SendMessage] Attempt ${attempt}/${retries} failed:`, error.message);
+
+      if (attempt < retries) {
+        await wait(RETRY_DELAY);
+      }
+    }
+  }
+
+  throw lastError || new Error("Network request failed");
+}
+
+function isNetworkError(e: any): boolean {
+  const msg = e?.message?.toLowerCase() || "";
+  return (
+    msg.includes("network request failed") ||
+    msg.includes("request timed out") ||
+    msg.includes("network") ||
+    msg.includes("timeout") ||
+    msg.includes("aborted")
+  );
+}
+
+// ============================================================================
+// Component
+// ============================================================================
 
 export default function SendMessageModal({
   visible,
@@ -59,7 +133,7 @@ export default function SendMessageModal({
     setSending(true);
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetchWithRetry(API_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -81,10 +155,12 @@ export default function SendMessageModal({
       setSent(true);
     } catch (error: any) {
       console.error("[SendMessage] Error:", error);
-      Alert.alert(
-        "Unable to Send",
-        "Your message could not be sent. Please try again or contact support directly."
-      );
+
+      const alertMessage = isNetworkError(error)
+        ? "Unable to reach the server. Please check your internet connection and try again."
+        : "Your message could not be sent. Please try again or contact support directly.";
+
+      Alert.alert("Unable to Send", alertMessage);
     } finally {
       setSending(false);
     }
@@ -200,7 +276,10 @@ export default function SendMessageModal({
                 activeOpacity={0.8}
               >
                 {sending ? (
-                  <ActivityIndicator color="#fff" />
+                  <>
+                    <ActivityIndicator color="#fff" size="small" />
+                    <Text style={styles.sendButtonText}>Sending...</Text>
+                  </>
                 ) : (
                   <>
                     <MaterialIcons name="send" size={20} color="#fff" />
@@ -384,5 +463,5 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     width: 40,
-   },
+  },
 });

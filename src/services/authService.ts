@@ -4,21 +4,100 @@ import { saveUser, getUser, LocalUser, wipeAllPatientData } from "./sqliteServic
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
 
 const API_BASE = "https://trinityemr.com/api/careviewapp";
+const REQUEST_TIMEOUT = 10000; // 10 seconds
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1500; // 1.5 seconds between retries
+
+// ============================================================================
+// Network Helpers
+// ============================================================================
+
+/** Fetch with a timeout — React Native's fetch has no default timeout */
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeout: number = REQUEST_TIMEOUT
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("Request timed out"));
+    }, timeout);
+
+    fetch(url, { ...options, signal: controller.signal })
+      .then((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+/** Wait for a given number of milliseconds */
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Retry a fetch call silently up to MAX_RETRIES times.
+ * Only throws after all attempts are exhausted.
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  retries: number = MAX_RETRIES
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetchWithTimeout(url, options);
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`[Auth] Attempt ${attempt}/${retries} failed:`, error.message);
+
+      if (attempt < retries) {
+        await wait(RETRY_DELAY);
+      }
+    }
+  }
+
+  throw lastError || new Error("Network request failed");
+}
+
+/** Check if an error is a network/connectivity issue (not a server response) */
+function isNetworkError(e: any): boolean {
+  const msg = e?.message?.toLowerCase() || "";
+  return (
+    msg.includes("network request failed") ||
+    msg.includes("request timed out") ||
+    msg.includes("network") ||
+    msg.includes("timeout") ||
+    msg.includes("aborted")
+  );
+}
+
+// ============================================================================
+// Auth Service
+// ============================================================================
 
 const authService = {
   /**
    * Send verification code via SMS
-   * Returns true on success, false on failure
+   * Retries silently up to 3 times before surfacing an error.
    */
   async sendCode(phone: string): Promise<boolean> {
     try {
       console.log("[Auth] Sending code to:", phone);
 
-      const response = await fetch(`${API_BASE}/send_code.php`, {
+      const response = await fetchWithRetry(`${API_BASE}/send_code.php`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone }),
       });
 
@@ -29,7 +108,6 @@ const authService = {
         return true;
       }
 
-      // Handle specific errors
       if (data.error === "not_found") {
         throw new Error("Phone number not registered. Please contact your provider.");
       }
@@ -40,43 +118,28 @@ const authService = {
       throw new Error(data.error || "Failed to send code");
     } catch (e: any) {
       console.error("[Auth] sendCode error:", e);
+
+      if (isNetworkError(e)) {
+        throw new Error(
+          "Unable to reach the server. Please check your internet connection and try again."
+        );
+      }
+
       throw e;
     }
   },
 
   /**
    * Verify the 6-digit code
-   * Returns LocalUser on success, null on failure
-   *
-   * Expected API response format:
-   * {
-   *   success: true,
-   *   patient: {
-   *     patientId: 12345,
-   *     firstName: "Jane",
-   *     lastName: "Doe",
-   *     phone: "+15551234567"
-   *   },
-   *   provider: {
-   *     firstName: "Dr. John",
-   *     lastName: "Smith",
-   *     practiceName: "Trinity Women's Health"
-   *   },
-   *   bpThresholds: {
-   *     systolicHigh: 140,
-   *     diastolicHigh: 90
-   *   }
-   * }
+   * Retries silently up to 3 times before surfacing an error.
    */
   async verifyCode(phone: string, code: string): Promise<LocalUser | null> {
     try {
       console.log("[Auth] Verifying code for:", phone);
 
-      const response = await fetch(`${API_BASE}/verify_code.php`, {
+      const response = await fetchWithRetry(`${API_BASE}/verify_code.php`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone, code }),
       });
 
@@ -158,6 +221,13 @@ const authService = {
       return user;
     } catch (e: any) {
       console.error("[Auth] verifyCode error:", e);
+
+      if (isNetworkError(e)) {
+        throw new Error(
+          "Unable to reach the server. Please check your internet connection and try again."
+        );
+      }
+
       throw e;
     }
   },

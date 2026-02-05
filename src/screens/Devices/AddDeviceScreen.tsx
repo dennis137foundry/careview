@@ -10,6 +10,8 @@ import {
   Alert,
   Modal,
   TextInput,
+  Linking,
+  Platform,
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from "@react-navigation/native";
@@ -19,12 +21,84 @@ import {
   useCameraDevice,
   useCodeScanner,
 } from "react-native-vision-camera";
+import {
+  check,
+  request,
+  PERMISSIONS,
+  RESULTS,
+  openSettings,
+} from "react-native-permissions";
 
 import deviceService, { DiscoveredDevice } from "../../services/deviceService";
 import { addDevice, loadDevices } from "../../redux/deviceSlice";
 import { useToast } from "../../components/Toast";
 import type { AppDispatch, RootState } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
+
+// ============================================================================
+// Bluetooth Permission Helper
+// ============================================================================
+
+type BLEPermissionStatus = "granted" | "denied" | "blocked" | "unavailable";
+
+async function checkBluetoothPermission(): Promise<BLEPermissionStatus> {
+  if (Platform.OS === "ios") {
+    const result = await check(PERMISSIONS.IOS.BLUETOOTH);
+    if (result === RESULTS.GRANTED) return "granted";
+    if (result === RESULTS.BLOCKED) return "blocked";
+    if (result === RESULTS.UNAVAILABLE) return "unavailable";
+    return "denied";
+  }
+
+  // Android 12+ needs BLUETOOTH_SCAN + BLUETOOTH_CONNECT
+  if (Platform.OS === "android" && Platform.Version >= 31) {
+    const scan = await check(PERMISSIONS.ANDROID.BLUETOOTH_SCAN);
+    const connect = await check(PERMISSIONS.ANDROID.BLUETOOTH_CONNECT);
+    if (scan === RESULTS.GRANTED && connect === RESULTS.GRANTED) return "granted";
+    if (scan === RESULTS.BLOCKED || connect === RESULTS.BLOCKED) return "blocked";
+    return "denied";
+  }
+
+  // Android < 12 uses location for BLE scanning
+  if (Platform.OS === "android") {
+    const result = await check(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+    if (result === RESULTS.GRANTED) return "granted";
+    if (result === RESULTS.BLOCKED) return "blocked";
+    return "denied";
+  }
+
+  return "granted";
+}
+
+async function requestBluetoothPermission(): Promise<BLEPermissionStatus> {
+  if (Platform.OS === "ios") {
+    const result = await request(PERMISSIONS.IOS.BLUETOOTH);
+    if (result === RESULTS.GRANTED) return "granted";
+    if (result === RESULTS.BLOCKED) return "blocked";
+    return "denied";
+  }
+
+  if (Platform.OS === "android" && Platform.Version >= 31) {
+    const scan = await request(PERMISSIONS.ANDROID.BLUETOOTH_SCAN);
+    const connect = await request(PERMISSIONS.ANDROID.BLUETOOTH_CONNECT);
+    if (scan === RESULTS.GRANTED && connect === RESULTS.GRANTED) return "granted";
+    if (scan === RESULTS.BLOCKED || connect === RESULTS.BLOCKED) return "blocked";
+    return "denied";
+  }
+
+  if (Platform.OS === "android") {
+    const result = await request(PERMISSIONS.ANDROID.ACCESS_FINE_LOCATION);
+    if (result === RESULTS.GRANTED) return "granted";
+    if (result === RESULTS.BLOCKED) return "blocked";
+    return "denied";
+  }
+
+  return "granted";
+}
+
+// ============================================================================
+// Component
+// ============================================================================
 
 export default function AddDeviceScreen() {
   const dispatch = useDispatch<AppDispatch>();
@@ -36,7 +110,8 @@ export default function AddDeviceScreen() {
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [showQRScanner, setShowQRScanner] = useState(false);
-  
+  const [blePermission, setBlePermission] = useState<BLEPermissionStatus | null>(null);
+
   // Friendly name modal
   const [showNameModal, setShowNameModal] = useState(false);
   const [pendingDevice, setPendingDevice] = useState<DiscoveredDevice | null>(null);
@@ -54,6 +129,11 @@ export default function AddDeviceScreen() {
       }
     },
   });
+
+  // Check BLE permission on mount
+  useEffect(() => {
+    checkBluetoothPermission().then(setBlePermission);
+  }, []);
 
   useEffect(() => {
     // Setup event listeners
@@ -85,6 +165,20 @@ export default function AddDeviceScreen() {
   }, []);
 
   const startScan = async () => {
+    // Check / request BLE permission before scanning
+    let permission = await checkBluetoothPermission();
+
+    if (permission === "denied") {
+      permission = await requestBluetoothPermission();
+    }
+
+    setBlePermission(permission);
+
+    if (permission !== "granted") {
+      // Don't start scan — the UI will show the permission banner
+      return;
+    }
+
     setDevices([]);
     setScanning(true);
 
@@ -159,18 +253,15 @@ export default function AddDeviceScreen() {
       dispatch(addDevice(deviceRecord));
       dispatch(loadDevices());
 
-      // ✅ Changed from Alert.alert to Toast + auto-navigate
       showToast({
         message: `${friendlyName || pendingDevice.name} added successfully`,
         type: "success",
         duration: 2500,
       });
-      
-      // Navigate back after a short delay so user sees the toast
+
       setTimeout(() => {
         navigation.goBack();
       }, 300);
-
     } catch (error: any) {
       console.error("[AddDevice] Add error:", error);
       Alert.alert("Error", "Failed to add device. Please try again.");
@@ -229,6 +320,17 @@ export default function AddDeviceScreen() {
     setPendingDevice(device);
     setFriendlyName(device.name);
     setShowNameModal(true);
+  };
+
+  // Open system settings
+  const handleOpenSettings = () => {
+    if (Platform.OS === "ios") {
+      Linking.openURL("app-settings:");
+    } else {
+      openSettings().catch(() => {
+        Linking.openSettings();
+      });
+    }
   };
 
   // Get icon for device type
@@ -303,6 +405,9 @@ export default function AddDeviceScreen() {
     );
   };
 
+  // Is BLE permission blocked or unavailable?
+  const bleBlocked = blePermission === "blocked" || blePermission === "unavailable";
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -322,11 +427,40 @@ export default function AddDeviceScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Bluetooth Permission Banner */}
+      {bleBlocked && (
+        <View style={styles.permissionBanner}>
+          <View style={styles.permissionBannerContent}>
+            <MaterialIcons name="bluetooth-disabled" size={24} color="#c62828" />
+            <View style={styles.permissionBannerText}>
+              <Text style={styles.permissionTitle}>Bluetooth Access Required</Text>
+              <Text style={styles.permissionMessage}>
+                CareView needs Bluetooth to connect to your blood pressure monitor and scale.
+                Please enable Bluetooth access in Settings.
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.permissionButton}
+            onPress={handleOpenSettings}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="settings" size={18} color="#fff" />
+            <Text style={styles.permissionButtonText}>Open Settings</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Scan Controls */}
       <View style={styles.scanControls}>
         <TouchableOpacity
-          style={[styles.scanButton, scanning && styles.scanButtonActive]}
+          style={[
+            styles.scanButton,
+            scanning && styles.scanButtonActive,
+            bleBlocked && styles.scanButtonDisabled,
+          ]}
           onPress={scanning ? stopScan : startScan}
+          disabled={bleBlocked}
           activeOpacity={0.8}
         >
           {scanning ? (
@@ -343,7 +477,9 @@ export default function AddDeviceScreen() {
         </TouchableOpacity>
 
         <Text style={styles.scanHint}>
-          {scanning
+          {bleBlocked
+            ? "Enable Bluetooth access above to scan for devices"
+            : scanning
             ? "Turn on your device and put it in pairing mode"
             : "Tap to scan for nearby BP monitors and scales"}
         </Text>
@@ -361,6 +497,14 @@ export default function AddDeviceScreen() {
               <>
                 <ActivityIndicator size="large" color="#00509f" />
                 <Text style={styles.emptyText}>Searching for devices...</Text>
+              </>
+            ) : bleBlocked ? (
+              <>
+                <MaterialIcons name="bluetooth-disabled" size={48} color="#ccc" />
+                <Text style={styles.emptyText}>Bluetooth access is turned off</Text>
+                <Text style={styles.emptyHint}>
+                  Enable Bluetooth access in your device settings to scan for and connect to your health devices
+                </Text>
               </>
             ) : (
               <>
@@ -506,6 +650,50 @@ const styles = StyleSheet.create({
   qrButton: {
     padding: 8,
   },
+  // Bluetooth Permission Banner
+  permissionBanner: {
+    backgroundColor: "#fff8e1",
+    borderBottomWidth: 1,
+    borderBottomColor: "#ffe082",
+    padding: 16,
+  },
+  permissionBannerContent: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    marginBottom: 12,
+  },
+  permissionBannerText: {
+    flex: 1,
+  },
+  permissionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#c62828",
+    marginBottom: 4,
+  },
+  permissionMessage: {
+    fontSize: 13,
+    color: "#5d4037",
+    lineHeight: 18,
+  },
+  permissionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#00509f",
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    gap: 6,
+    alignSelf: "center",
+  },
+  permissionButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  // Scan Controls
   scanControls: {
     padding: 20,
     alignItems: "center",
@@ -525,6 +713,9 @@ const styles = StyleSheet.create({
   },
   scanButtonActive: {
     backgroundColor: "#c62828",
+  },
+  scanButtonDisabled: {
+    backgroundColor: "#bbb",
   },
   scanButtonText: {
     color: "#fff",
