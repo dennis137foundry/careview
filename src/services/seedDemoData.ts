@@ -20,7 +20,7 @@
 // All seeded readings are marked synced = true so they don't trigger uploads.
 // ============================================================================
 
-import { saveReading } from "./sqliteService";
+import { saveReading, saveDevice } from "./sqliteService";
 import type { DailyHealthCheckData, UrineProteinData } from "./sqliteService";
 
 const DEMO_PHONE = "5550001234";
@@ -57,6 +57,34 @@ function makeTimestamp(daysAgo: number, hour: number, minuteJitter: number = 30)
 function lerp(start: number, end: number, dayIndex: number): number {
   const t = dayIndex / DAYS;
   return start + (end - start) * t;
+}
+
+// ============================================================================
+// Demo Devices Seeder
+// ============================================================================
+
+function seedDemoDevices(): void {
+  saveDevice({
+    id: "demo_bp5s",
+    name: "iHealth BP5S",
+    type: "BP",
+    mac: "AA:BB:CC:DD:EE:01",
+    model: "BP5S",
+    friendlyName: "Blood Pressure Monitor",
+    source: "iHealthSDK",
+  });
+
+  saveDevice({
+    id: "demo_hs2s",
+    name: "iHealth HS2S",
+    type: "SCALE",
+    mac: "AA:BB:CC:DD:EE:02",
+    model: "HS2S",
+    friendlyName: "Smart Scale",
+    source: "iHealthSDK",
+  });
+
+  console.log("📱 Demo devices seeded (BP5S, HS2S)");
 }
 
 // ============================================================================
@@ -154,63 +182,6 @@ function seedWeight(): number {
       unit: "lbs",
       ts: ts,
       synced: true,
-    });
-    count++;
-  }
-
-  return count;
-}
-
-// ============================================================================
-// Blood Glucose Seeder
-// ============================================================================
-// Pattern: mostly normal fasting (80–95), occasional postprandial (100–130)
-// ~1 reading per day, ~25% missed days
-// Meal timing varies by time of day
-
-function seedGlucose(): number {
-  let count = 0;
-
-  const mealTimings = [
-    { id: "fasting", hour: 6 },
-    { id: "pre_breakfast", hour: 7 },
-    { id: "post_breakfast", hour: 9 },
-    { id: "pre_lunch", hour: 11 },
-    { id: "post_lunch", hour: 13 },
-    { id: "pre_dinner", hour: 17 },
-    { id: "post_dinner", hour: 19 },
-    { id: "bedtime", hour: 21 },
-  ];
-
-  for (let day = DAYS; day >= 0; day--) {
-    // ~25% chance of skipping
-    if (chance(0.25)) continue;
-
-    // Pick a random meal timing for this day
-    const timing = mealTimings[randInt(0, mealTimings.length - 1)];
-
-    // Fasting/pre-meal: 78–98, Post-meal: 95–135
-    const isPostMeal = timing.id.startsWith("post_") || timing.id === "bedtime";
-    const baseGlucose = isPostMeal ? randFloat(95, 135) : randFloat(78, 98);
-
-    // Slight upward trend in later weeks (gestational insulin resistance)
-    const trendAdj = lerp(0, 8, DAYS - day);
-    const glucose = Math.round(baseGlucose + trendAdj);
-
-    const ts = makeTimestamp(day, timing.hour);
-
-    saveReading({
-      id: `demo_bg_${day}`,
-      deviceId: "demo_bg5s",
-      deviceName: "iHealth BG5S",
-      type: "BG" as any, // BG type for glucose
-      value: glucose,
-      unit: "mg/dL",
-      ts: ts,
-      synced: true,
-      measurementCondition: timing.id
-        .replace(/_/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase()), // "post_breakfast" → "Post Breakfast"
     });
     count++;
   }
@@ -371,6 +342,7 @@ function clearDemoData(): void {
   try {
     db.execute("DELETE FROM readings WHERE id LIKE 'demo_%';");
     db.execute("DELETE FROM screening_responses WHERE id LIKE 'demo_%';");
+    db.execute("DELETE FROM devices WHERE id LIKE 'demo_%';");
     console.log("🗑  Cleared previous demo data");
   } catch (e) {
     console.error("❌ Failed to clear demo data:", e);
@@ -387,9 +359,11 @@ export function seedDemoData(): void {
   // Clear any previous demo data first
   clearDemoData();
 
+  // Seed demo devices so the Devices tab isn't empty
+  seedDemoDevices();
+
   const bpCount = seedBloodPressure();
   const weightCount = seedWeight();
-  const glucoseCount = seedGlucose();
   const checkCount = seedDailyHealthChecks();
   const urineCount = seedUrineProtein();
 
@@ -398,7 +372,6 @@ export function seedDemoData(): void {
   console.log("============================================");
   console.log(`  BP readings:          ${bpCount}`);
   console.log(`  Weight readings:      ${weightCount}`);
-  console.log(`  Glucose readings:     ${glucoseCount}`);
   console.log(`  Daily health checks:  ${checkCount}`);
   console.log(`  Urine protein:        ${urineCount}`);
   console.log("============================================");

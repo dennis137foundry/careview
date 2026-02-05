@@ -6,6 +6,7 @@ import {
   ImageBackground,
   StyleSheet,
   TouchableOpacity,
+  ScrollView,
   StatusBar,
   Alert,
 } from "react-native";
@@ -65,24 +66,23 @@ export default function WipeDataScreen({ navigation }: any) {
     >
       <StatusBar barStyle="dark-content" />
 
-      <View
-        style={[
-          styles.container,
-          { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 20 },
-        ]}
-      >
-        {/* Header with back button */}
-        <View style={styles.headerRow}>
-          <TouchableOpacity
-            onPress={() => navigation.goBack()}
-            style={styles.backButton}
-            activeOpacity={0.7}
-          >
-            <MaterialIcons name="arrow-back" size={24} color="#00468c" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Sign Out & Wipe Data</Text>
-        </View>
+      {/* Fixed header above scroll */}
+      <View style={[styles.headerRow, { paddingTop: insets.top + 16 }]}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#00468c" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Sign Out & Wipe Data</Text>
+      </View>
 
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Warning icon */}
         <View style={styles.warningIconContainer}>
           <MaterialIcons name="warning" size={48} color="#e53935" />
@@ -175,7 +175,7 @@ export default function WipeDataScreen({ navigation }: any) {
             {wiping ? "Wiping Data..." : "Wipe Data & Sign Out"}
           </Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </ImageBackground>
   );
 }
@@ -193,6 +193,7 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
+    paddingHorizontal: 20,
     marginBottom: 20,
   },
   backButton: {
