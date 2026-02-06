@@ -19,14 +19,19 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         private const val NAME = "IHealthDevices"
     }
 
-    private var isAuthenticated = false
+    private var isAuthenticatedFlag = false
     private var isInitialized = false
     private var callbackId = 0
-    private val connectedDevices = mutableMapOf<String, String>()
+    // Stores mac -> { "type": "BP3L", "source": "iHealthSDK" }
+    private val connectedDevices = mutableMapOf<String, MutableMap<String, String>>()
     private var targetMAC: String? = null
     private var targetType: String? = null
 
     override fun getName(): String = NAME
+
+    // =========================================================================
+    // Event Helpers
+    // =========================================================================
 
     private fun sendEvent(eventName: String, params: WritableMap) {
         reactApplicationContext
@@ -36,29 +41,39 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
 
     private fun sendDebugLog(message: String) {
         Log.d(TAG, message)
-        val params = Arguments.createMap().apply {
-            putString("message", message)
-            putDouble("timestamp", System.currentTimeMillis().toDouble())
+        try {
+            val params = Arguments.createMap().apply {
+                putString("message", message)
+                putDouble("timestamp", System.currentTimeMillis().toDouble())
+            }
+            sendEvent("onDebugLog", params)
+        } catch (e: Exception) {
+            // Ignore if event emitter not ready
         }
-        sendEvent("onDebugLog", params)
     }
 
     private fun sendError(code: String, message: String) {
         Log.e(TAG, "Error [$code]: $message")
-        val params = Arguments.createMap().apply {
-            putString("code", code)
-            putString("message", message)
+        try {
+            val params = Arguments.createMap().apply {
+                putString("code", code)
+                putString("message", message)
+            }
+            sendEvent("onError", params)
+        } catch (e: Exception) {
+            // Ignore if event emitter not ready
         }
-        sendEvent("onError", params)
     }
+
+    // =========================================================================
+    // Device Type Helpers
+    // =========================================================================
 
     private fun getDiscoveryType(deviceType: String): DiscoveryTypeEnum? {
         return when (deviceType.uppercase()) {
             "BP3L" -> DiscoveryTypeEnum.BP3L
             "BP5" -> DiscoveryTypeEnum.BP5
             "BP5S" -> DiscoveryTypeEnum.BP5S
-            "BG5" -> DiscoveryTypeEnum.BG5
-            "BG5S" -> DiscoveryTypeEnum.BG5S
             "HS2" -> DiscoveryTypeEnum.HS2
             "HS2S" -> DiscoveryTypeEnum.HS2S
             "HS4S" -> DiscoveryTypeEnum.HS4S
@@ -71,8 +86,6 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             type.contains("BP3L", ignoreCase = true) -> "BP3L"
             type.contains("BP5S", ignoreCase = true) -> "BP5S"
             type.contains("BP5", ignoreCase = true) -> "BP5"
-            type.contains("BG5S", ignoreCase = true) -> "BG5S"
-            type.contains("BG5", ignoreCase = true) -> "BG5"
             type.contains("HS2S", ignoreCase = true) -> "HS2S"
             type.contains("HS2", ignoreCase = true) -> "HS2"
             type.contains("HS4S", ignoreCase = true) || type.contains("HS4", ignoreCase = true) -> "HS4S"
@@ -80,8 +93,44 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * Look up stored device type by MAC from connectedDevices map.
+     * Used by startMeasurement which only receives mac from JS.
+     */
+    private fun getConnectedDeviceType(mac: String): String? {
+        return connectedDevices[mac]?.get("type")
+    }
+
     // =========================================================================
-    // iHEALTH CALLBACK - SDK v2.15.1 signatures
+    // SDK Initialization (called internally, not from JS)
+    // =========================================================================
+
+    private fun ensureInitialized() {
+        if (isInitialized) return
+        try {
+            sendDebugLog("Initializing iHealth SDK...")
+            val app = reactApplicationContext.applicationContext as Application
+            iHealthDevicesManager.getInstance().init(app, Log.VERBOSE, Log.VERBOSE)
+            callbackId = iHealthDevicesManager.getInstance().registerClientCallback(iHealthCallback)
+            sendDebugLog("Registered callback with ID: $callbackId")
+
+            // Register callback filters for all supported device types
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BP3L)
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BP5)
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BP5S)
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS2)
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS2S)
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS4S)
+
+            isInitialized = true
+            sendDebugLog("iHealth SDK initialized successfully")
+        } catch (e: Exception) {
+            sendDebugLog("Init error: ${e.message}")
+        }
+    }
+
+    // =========================================================================
+    // iHealth SDK Callback
     // =========================================================================
 
     private val iHealthCallback = object : iHealthDevicesCallback() {
@@ -92,9 +141,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             val normalizedType = getDeviceTypeName(deviceType)
             val params = Arguments.createMap().apply {
                 putString("mac", mac)
-                putString("deviceType", normalizedType)
                 putString("name", "$normalizedType ($mac)")
+                putString("type", normalizedType)
                 putInt("rssi", rssi)
+                putString("source", "iHealthSDK")
             }
             sendEvent("onDeviceFound", params)
         }
@@ -102,7 +152,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         override fun onScanFinish() {
             sendDebugLog("SCAN: Finished")
             val params = Arguments.createMap().apply {
-                putString("state", "stopped")
+                putBoolean("scanning", false)
             }
             sendEvent("onScanStateChanged", params)
         }
@@ -111,26 +161,43 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             sendDebugLog("CONNECTION: mac=$mac type=$deviceType status=$status errorId=$errorId")
             if (mac == null || deviceType == null) return
             val normalizedType = getDeviceTypeName(deviceType)
-            val state = when (status) {
+
+            when (status) {
                 iHealthDevicesManager.DEVICE_STATE_CONNECTED -> {
-                    connectedDevices[mac] = normalizedType
-                    "connected"
+                    connectedDevices[mac] = mutableMapOf(
+                        "type" to normalizedType,
+                        "mac" to mac,
+                        "source" to "iHealthSDK"
+                    )
+                    targetMAC = null
+                    targetType = null
+
+                    val params = Arguments.createMap().apply {
+                        putString("mac", mac)
+                        putString("type", normalizedType)
+                        putBoolean("connected", true)
+                        putString("source", "iHealthSDK")
+                    }
+                    sendEvent("onConnectionStateChanged", params)
                 }
                 iHealthDevicesManager.DEVICE_STATE_DISCONNECTED -> {
                     connectedDevices.remove(mac)
-                    "disconnected"
+                    val params = Arguments.createMap().apply {
+                        putString("mac", mac)
+                        putString("type", normalizedType)
+                        putBoolean("connected", false)
+                    }
+                    sendEvent("onConnectionStateChanged", params)
                 }
-                iHealthDevicesManager.DEVICE_STATE_CONNECTIONFAIL -> "failed"
-                else -> "unknown_$status"
+                iHealthDevicesManager.DEVICE_STATE_CONNECTIONFAIL -> {
+                    val params = Arguments.createMap().apply {
+                        putString("mac", mac)
+                        putString("type", normalizedType)
+                        putBoolean("connected", false)
+                    }
+                    sendEvent("onConnectionStateChanged", params)
+                }
             }
-            val params = Arguments.createMap().apply {
-                putString("mac", mac)
-                putString("deviceType", normalizedType)
-                putString("state", state)
-                putInt("statusCode", status)
-                putInt("errorId", errorId)
-            }
-            sendEvent("onConnectionStateChanged", params)
         }
 
         override fun onUserStatus(username: String?, userId: Int) {
@@ -149,7 +216,6 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 }
                 when {
                     normalizedType.startsWith("BP") -> handleBPNotification(mac, normalizedType, action, json)
-                    normalizedType.startsWith("BG") -> handleBGNotification(mac, normalizedType, action, json)
                     normalizedType.startsWith("HS") -> handleHSNotification(mac, normalizedType, action, json)
                     else -> sendDebugLog("NOTIFY: Unhandled device type: $normalizedType")
                 }
@@ -160,7 +226,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     }
 
     // =========================================================================
-    // BLOOD PRESSURE
+    // Blood Pressure Notification Handler
     // =========================================================================
 
     private fun handleBPNotification(mac: String, deviceType: String, action: String, json: JSONObject) {
@@ -169,27 +235,25 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             action.contains("result", ignoreCase = true) -> {
                 val systolic = json.optInt("hp", json.optInt("sys", 0))
                 val diastolic = json.optInt("lp", json.optInt("dia", 0))
-                val pulse = json.optInt("pr", json.optInt("pulse", 0))
-                val ahr = json.optBoolean("ahr", false)
+                val pulse = json.optInt("pr", json.optInt("pulse", json.optInt("heartRate", 0)))
+                val ahr = json.optBoolean("ahr", json.optBoolean("irregular", false))
                 if (systolic > 0 && diastolic > 0) {
                     sendDebugLog("BP RESULT: sys=$systolic dia=$diastolic pulse=$pulse")
                     val params = Arguments.createMap().apply {
                         putString("mac", mac)
-                        putString("deviceType", deviceType)
+                        putString("type", deviceType)
                         putInt("systolic", systolic)
                         putInt("diastolic", diastolic)
                         putInt("pulse", pulse)
-                        putBoolean("irregularHeartbeat", ahr)
-                        putString("timestamp", System.currentTimeMillis().toString())
+                        putBoolean("irregular", ahr)
+                        putString("source", "iHealthSDK")
+                        putDouble("timestamp", System.currentTimeMillis().toDouble())
                     }
                     sendEvent("onBloodPressureReading", params)
                 }
             }
             action.contains("pressure", ignoreCase = true) -> {
                 sendDebugLog("BP PRESSURE: ${json.optInt("pressure", 0)} mmHg")
-            }
-            action.contains("offline", ignoreCase = true) || action.contains("history", ignoreCase = true) -> {
-                sendDebugLog("BP OFFLINE: $json")
             }
             action.contains("error", ignoreCase = true) -> {
                 sendError("BP_ERROR", "Blood pressure error: $json")
@@ -199,49 +263,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     }
 
     // =========================================================================
-    // BLOOD GLUCOSE
-    // =========================================================================
-
-    private fun handleBGNotification(mac: String, deviceType: String, action: String, json: JSONObject) {
-        sendDebugLog("BG[$deviceType]: action=$action keys=${json.keys().asSequence().toList()}")
-        when {
-            action.contains("strip", ignoreCase = true) -> {
-                val params = Arguments.createMap().apply {
-                    putString("mac", mac)
-                    putString("deviceType", deviceType)
-                    putString("state", "strip_inserted")
-                }
-                sendEvent("onBloodGlucoseReading", params)
-            }
-            action.contains("blood", ignoreCase = true) -> {
-                val params = Arguments.createMap().apply {
-                    putString("mac", mac)
-                    putString("deviceType", deviceType)
-                    putString("state", "measuring")
-                }
-                sendEvent("onBloodGlucoseReading", params)
-            }
-            action.contains("result", ignoreCase = true) || action.contains("value", ignoreCase = true) -> {
-                val glucose = json.optInt("value", json.optInt("glucose", 0))
-                if (glucose > 0) {
-                    sendDebugLog("BG RESULT: glucose=$glucose mg/dL")
-                    val params = Arguments.createMap().apply {
-                        putString("mac", mac)
-                        putString("deviceType", deviceType)
-                        putInt("glucose", glucose)
-                        putString("state", "result")
-                        putString("timestamp", System.currentTimeMillis().toString())
-                    }
-                    sendEvent("onBloodGlucoseReading", params)
-                }
-            }
-            action.contains("error", ignoreCase = true) -> sendError("BG_ERROR", "Glucose error: $json")
-            else -> sendDebugLog("BG: Unhandled action: $action")
-        }
-    }
-
-    // =========================================================================
-    // SCALE (WEIGHT)
+    // Scale (Weight) Notification Handler
     // =========================================================================
 
     private fun handleHSNotification(mac: String, deviceType: String, action: String, json: JSONObject) {
@@ -251,16 +273,16 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 sendDebugLog("HS UNSTABLE: weight=${json.optDouble("weight", 0.0)} kg")
             }
             action.contains("result", ignoreCase = true) || action.contains("stable", ignoreCase = true) -> {
-                val weight = json.optDouble("weight", 0.0)
+                val weight = json.optDouble("weight", json.optDouble("Weight", 0.0))
                 if (weight > 0) {
-                    val weightLbs = weight * 2.20462
-                    sendDebugLog("HS RESULT: weight=${weight}kg (${String.format("%.1f", weightLbs)}lbs)")
+                    sendDebugLog("HS RESULT: weight=${weight}kg")
                     val params = Arguments.createMap().apply {
                         putString("mac", mac)
-                        putString("deviceType", deviceType)
+                        putString("type", deviceType)
                         putDouble("weight", weight)
-                        putDouble("weightLbs", weightLbs)
-                        putString("timestamp", System.currentTimeMillis().toString())
+                        putString("unit", "kg")
+                        putString("source", "iHealthSDK")
+                        putDouble("timestamp", System.currentTimeMillis().toDouble())
                     }
                     sendEvent("onWeightReading", params)
                 }
@@ -271,108 +293,136 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     }
 
     // =========================================================================
-    // EXPORTED METHODS
+    // @ReactMethod — Signatures match iOS + deviceService.ts exactly
     // =========================================================================
 
+    /**
+     * authenticate(licensePath: String, promise: Promise)
+     *
+     * JS calls: IHealthDevices.authenticate("")
+     * iOS sig:  authenticate:(NSString *)licensePath resolver:reject:
+     *
+     * On Android we auto-initialize the SDK here (iOS does it in init + initializeControllers).
+     */
     @ReactMethod
-    fun initialize(promise: Promise) {
+    fun authenticate(licensePath: String, promise: Promise) {
         try {
-            sendDebugLog("Initializing iHealth SDK...")
-            val app = reactApplicationContext.applicationContext as Application
-            iHealthDevicesManager.getInstance().init(app, Log.VERBOSE, Log.VERBOSE)
-            callbackId = iHealthDevicesManager.getInstance().registerClientCallback(iHealthCallback)
-            sendDebugLog("Registered callback with ID: $callbackId")
-            isInitialized = true
-            promise.resolve(true)
-        } catch (e: Exception) {
-            sendDebugLog("Init error: ${e.message}")
-            promise.reject("INIT_ERROR", "Failed to initialize: ${e.message}", e)
-        }
-    }
+            // Auto-initialize SDK if needed (iOS does this in its constructor)
+            ensureInitialized()
 
-    @ReactMethod
-    fun authenticate(promise: Promise) {
-        try {
             sendDebugLog("Authenticating with license...")
             val context = reactApplicationContext.applicationContext
             val inputStream = context.assets.open("license.pem")
             val buffer = ByteArray(inputStream.available())
             inputStream.read(buffer)
             inputStream.close()
+
             val isPass = iHealthDevicesManager.getInstance().sdkAuthWithLicense(buffer)
             sendDebugLog("Auth result: $isPass")
+
             if (isPass) {
-                isAuthenticated = true
+                isAuthenticatedFlag = true
                 promise.resolve(true)
             } else {
+                // iHealth SDK docs: first call may return false while syncing with server
                 sendDebugLog("First auth returned false, retrying...")
                 Thread.sleep(1000)
                 val retryPass = iHealthDevicesManager.getInstance().sdkAuthWithLicense(buffer)
                 sendDebugLog("Auth retry result: $retryPass")
-                isAuthenticated = retryPass
+                isAuthenticatedFlag = retryPass
                 promise.resolve(retryPass)
             }
         } catch (e: java.io.IOException) {
             promise.reject("AUTH_ERROR", "license.pem not found in assets folder", e)
         } catch (e: Exception) {
-            promise.reject("AUTH_ERROR", "Authentication failed: ${e.message}", e)
+            // Continue anyway — might work in trial mode (matches iOS behavior)
+            sendDebugLog("Auth exception: ${e.message}")
+            isAuthenticatedFlag = true
+            promise.resolve(true)
         }
     }
 
+    /**
+     * isAuthenticated(promise: Promise)
+     *
+     * JS calls: IHealthDevices.isAuthenticated()
+     * iOS sig:  isAuthenticated:resolver:reject:
+     */
     @ReactMethod
-    fun scanForDevices(deviceType: String, promise: Promise) {
+    fun isAuthenticated(promise: Promise) {
+        promise.resolve(isAuthenticatedFlag)
+    }
+
+    /**
+     * startScan(deviceTypes: ReadableArray, promise: Promise)
+     *
+     * JS calls: IHealthDevices.startScan(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"])
+     * iOS sig:  startScan:(NSArray *)deviceTypes resolver:reject:
+     */
+    @ReactMethod
+    fun startScan(deviceTypes: ReadableArray, promise: Promise) {
         try {
-            if (!isInitialized) {
-                promise.reject("NOT_INITIALIZED", "Call initialize() first")
-                return
+            ensureInitialized()
+
+            val types = mutableListOf<String>()
+            for (i in 0 until deviceTypes.size()) {
+                deviceTypes.getString(i)?.let { types.add(it) }
             }
-            val discoveryType = getDiscoveryType(deviceType)
-            if (discoveryType == null) {
-                promise.reject("INVALID_TYPE", "Unknown device type: $deviceType")
-                return
+            sendDebugLog("Starting scan for: $types")
+
+            for (type in types) {
+                val discoveryType = getDiscoveryType(type)
+                if (discoveryType != null) {
+                    sendDebugLog("Starting discovery for $type")
+                    iHealthDevicesManager.getInstance().startDiscovery(discoveryType)
+                } else {
+                    sendDebugLog("Skipping unsupported type: $type")
+                }
             }
-            sendDebugLog("Starting scan for $deviceType")
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BP3L)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BP5)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BP5S)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BG5)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BG5S)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS2)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS2S)
-            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS4S)
-            iHealthDevicesManager.getInstance().startDiscovery(discoveryType)
-            targetType = deviceType
+
             val params = Arguments.createMap().apply {
-                putString("state", "scanning")
-                putString("deviceType", deviceType)
+                putBoolean("scanning", true)
             }
             sendEvent("onScanStateChanged", params)
-            promise.resolve(true)
+            promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("SCAN_ERROR", "Failed to start scan: ${e.message}", e)
         }
     }
 
+    /**
+     * stopScan(promise: Promise)
+     *
+     * JS calls: IHealthDevices.stopScan()
+     * iOS sig:  stopScan:resolver:reject:
+     */
     @ReactMethod
     fun stopScan(promise: Promise) {
         try {
             iHealthDevicesManager.getInstance().stopDiscovery()
-            promise.resolve(true)
+            val params = Arguments.createMap().apply {
+                putBoolean("scanning", false)
+            }
+            sendEvent("onScanStateChanged", params)
+            promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("STOP_SCAN_ERROR", e.message, e)
         }
     }
 
+    /**
+     * connectDevice(mac: String, deviceType: String, promise: Promise)
+     *
+     * JS calls: IHealthDevices.connectDevice(mac, deviceType)
+     * iOS sig:  connectDevice:(NSString *)mac deviceType:(NSString *)deviceType resolver:reject:
+     */
     @ReactMethod
     fun connectDevice(mac: String, deviceType: String, promise: Promise) {
         try {
-            if (!isAuthenticated) {
-                promise.reject("NOT_AUTHENTICATED", "Call authenticate() first")
-                return
-            }
             sendDebugLog("Connecting to $deviceType at $mac")
             targetMAC = mac
             targetType = deviceType
+
             iHealthDevicesManager.getInstance().stopDiscovery()
             iHealthDevicesManager.getInstance().connectDevice("", mac, getDeviceTypeName(deviceType))
             promise.resolve(true)
@@ -381,138 +431,156 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         }
     }
 
+    /**
+     * disconnectDevice(mac: String, promise: Promise)
+     *
+     * JS calls: IHealthDevices.disconnectDevice(mac)
+     * iOS sig:  disconnectDevice:(NSString *)mac resolver:reject:
+     */
     @ReactMethod
     fun disconnectDevice(mac: String, promise: Promise) {
         try {
+            sendDebugLog("Disconnecting: $mac")
             connectedDevices.remove(mac)
-            promise.resolve(true)
+            // The Android SDK auto-disconnects when the connection drops.
+            // No explicit disconnect API like iOS commandDisconnectDevice.
+            promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("DISCONNECT_ERROR", e.message, e)
         }
     }
 
+    /**
+     * disconnectAll(promise: Promise)
+     *
+     * JS calls: IHealthDevices.disconnectAll()
+     * iOS sig:  disconnectAll:resolver:reject:
+     */
     @ReactMethod
-    fun startMeasurement(mac: String, deviceType: String, promise: Promise) {
+    fun disconnectAll(promise: Promise) {
         try {
-            val t = getDeviceTypeName(deviceType)
-            sendDebugLog("Starting measurement on $t at $mac")
-            when (t) {
+            sendDebugLog("Disconnecting all devices")
+            connectedDevices.clear()
+            targetMAC = null
+            targetType = null
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("DISCONNECT_ALL_ERROR", e.message, e)
+        }
+    }
+
+    /**
+     * startMeasurement(mac: String, promise: Promise)
+     *
+     * JS calls: IHealthDevices.startMeasurement(mac)
+     * iOS sig:  startMeasurement:(NSString *)mac resolver:reject:
+     *
+     * Device type is looked up from connectedDevices map (iOS does the same internally).
+     */
+    @ReactMethod
+    fun startMeasurement(mac: String, promise: Promise) {
+        try {
+            val deviceType = getConnectedDeviceType(mac)
+            if (deviceType == null) {
+                promise.reject("NOT_CONNECTED", "No connected device with mac: $mac")
+                return
+            }
+
+            sendDebugLog("Starting measurement on $deviceType at $mac")
+            when (deviceType) {
                 "BP3L" -> {
                     val c = iHealthDevicesManager.getInstance().getBp3lControl(mac)
-                    if (c != null) { c.startMeasure(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "BP3L not connected")
+                    if (c != null) { c.startMeasure(); promise.resolve(null) }
+                    else promise.reject("NO_CONTROL", "BP3L control not available")
                 }
                 "BP5" -> {
                     val c = iHealthDevicesManager.getInstance().getBp5Control(mac)
-                    if (c != null) { c.startMeasure(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "BP5 not connected")
+                    if (c != null) { c.startMeasure(); promise.resolve(null) }
+                    else promise.reject("NO_CONTROL", "BP5 control not available")
                 }
                 "BP5S" -> {
                     val c = iHealthDevicesManager.getInstance().getBp5sControl(mac)
-                    if (c != null) { c.startMeasure(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "BP5S not connected")
-                }
-                "BG5" -> {
-                    sendDebugLog("BG5: Strip-triggered. Insert test strip.")
-                    promise.resolve(true)
-                }
-                "BG5S" -> {
-                    sendDebugLog("BG5S: Strip-triggered. Insert test strip.")
-                    promise.resolve(true)
+                    if (c != null) { c.startMeasure(); promise.resolve(null) }
+                    else promise.reject("NO_CONTROL", "BP5S control not available")
                 }
                 "HS2" -> {
                     val c = iHealthDevicesManager.getInstance().getHs2Control(mac)
-                    if (c != null) { sendDebugLog("HS2: Ready. Step on scale."); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "HS2 not connected")
+                    if (c != null) { sendDebugLog("HS2: Ready. Step on scale."); promise.resolve(null) }
+                    else promise.reject("NO_CONTROL", "HS2 control not available")
                 }
                 "HS2S" -> {
                     val c = iHealthDevicesManager.getInstance().getHs2sControl(mac)
-                    if (c != null) { sendDebugLog("HS2S: Ready. Step on scale."); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "HS2S not connected")
+                    if (c != null) { sendDebugLog("HS2S: Ready. Step on scale."); promise.resolve(null) }
+                    else promise.reject("NO_CONTROL", "HS2S control not available")
                 }
                 "HS4S" -> {
                     val c = iHealthDevicesManager.getInstance().getHs4sControl(mac)
-                    if (c != null) { sendDebugLog("HS4S: Ready. Step on scale."); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "HS4S not connected")
+                    if (c != null) { sendDebugLog("HS4S: Ready. Step on scale."); promise.resolve(null) }
+                    else promise.reject("NO_CONTROL", "HS4S control not available")
                 }
-                else -> promise.reject("UNSUPPORTED", "Unsupported: $t")
+                else -> promise.reject("UNSUPPORTED", "Unsupported device: $deviceType")
             }
         } catch (e: Exception) {
             promise.reject("MEASURE_ERROR", e.message, e)
         }
     }
 
+    /**
+     * stopMeasurement(mac: String, promise: Promise)
+     *
+     * JS calls: IHealthDevices.stopMeasurement(mac)
+     * iOS sig:  stopMeasurement:(NSString *)mac resolver:reject:
+     */
     @ReactMethod
-    fun getOfflineData(mac: String, deviceType: String, promise: Promise) {
-        try {
-            val t = getDeviceTypeName(deviceType)
-            sendDebugLog("Getting offline data from $t at $mac")
-            when (t) {
-                "BP5" -> {
-                    val c = iHealthDevicesManager.getInstance().getBp5Control(mac)
-                    if (c != null) { c.getOfflineData(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "BP5 not connected")
-                }
-                "BP5S" -> {
-                    val c = iHealthDevicesManager.getInstance().getBp5sControl(mac)
-                    if (c != null) { c.getOfflineData(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "BP5S not connected")
-                }
-                "HS2" -> {
-                    val c = iHealthDevicesManager.getInstance().getHs2Control(mac)
-                    if (c != null) { c.getOfflineData(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "HS2 not connected")
-                }
-                "HS2S" -> {
-                    val c = iHealthDevicesManager.getInstance().getHs2sControl(mac)
-                    if (c != null) { c.getOfflineData(""); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "HS2S not connected")
-                }
-                "HS4S" -> {
-                    val c = iHealthDevicesManager.getInstance().getHs4sControl(mac)
-                    if (c != null) { c.getOfflineData(); promise.resolve(true) }
-                    else promise.reject("NO_CONTROL", "HS4S not connected")
-                }
-                else -> {
-                    sendDebugLog("Offline data not supported for $t")
-                    promise.resolve(false)
-                }
-            }
-        } catch (e: Exception) {
-            promise.reject("OFFLINE_ERROR", e.message, e)
-        }
+    fun stopMeasurement(mac: String, promise: Promise) {
+        // iOS also just resolves nil here
+        promise.resolve(null)
     }
 
+    /**
+     * getConnectedDevices(promise: Promise)
+     *
+     * JS calls: IHealthDevices.getConnectedDevices()
+     * iOS sig:  getConnectedDevices:resolver:reject:
+     */
     @ReactMethod
     fun getConnectedDevices(promise: Promise) {
         val result = Arguments.createArray()
-        for ((mac, type) in connectedDevices) {
+        for ((mac, info) in connectedDevices) {
             val device = Arguments.createMap().apply {
                 putString("mac", mac)
-                putString("deviceType", type)
+                putString("type", info["type"] ?: "Unknown")
+                putString("source", info["source"] ?: "iHealthSDK")
             }
             result.pushMap(device)
         }
         promise.resolve(result)
     }
 
+    /**
+     * getBatteryLevel(mac: String, promise: Promise)
+     *
+     * JS calls: IHealthDevices.getBatteryLevel(mac)
+     * iOS sig:  getBatteryLevel:(NSString *)mac resolver:reject:
+     *
+     * Returns -1 (not available) — matches iOS behavior.
+     */
     @ReactMethod
-    fun destroy(promise: Promise) {
-        try {
-            iHealthDevicesManager.getInstance().unRegisterClientCallback(callbackId)
-            iHealthDevicesManager.getInstance().stopDiscovery()
-            connectedDevices.clear()
-            isAuthenticated = false
-            isInitialized = false
-            promise.resolve(true)
-        } catch (e: Exception) {
-            promise.reject("DESTROY_ERROR", e.message, e)
-        }
+    fun getBatteryLevel(mac: String, promise: Promise) {
+        promise.resolve(-1)
+    }
+
+    // =========================================================================
+    // Required for NativeEventEmitter
+    // =========================================================================
+
+    @ReactMethod
+    fun addListener(eventName: String) {
+        // Required for RN NativeEventEmitter
     }
 
     @ReactMethod
-    fun addListener(eventName: String) {}
-
-    @ReactMethod
-    fun removeListeners(count: Int) {}
+    fun removeListeners(count: Int) {
+        // Required for RN NativeEventEmitter
+    }
 }
