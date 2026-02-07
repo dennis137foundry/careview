@@ -39,4 +39,11 @@ android {
 dependencies {
     implementation "com.facebook.react:react-android:+"
     implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+
+    // Required by iHealth SDK internally
+    implementation 'com.alibaba:fastjson:1.2.48'
+    implementation 'com.squareup.okhttp3:okhttp:3.12.1'
+    implementation 'com.squareup.okio:okio:1.15.0'
+    implementation 'com.google.code.gson:gson:2.8.5'
+    implementation 'org.greenrobot:greendao:3.2.2'
 }
