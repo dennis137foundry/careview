@@ -76,8 +76,6 @@ export default function CaptureScreen({ route, navigation }: any) {
   // ============================================================================
   const [showHealthCheckModal, setShowHealthCheckModal] = useState(false);
   const [healthCheckCompleted, setHealthCheckCompleted] = useState(false);
-  const [pendingStartAfterHealthCheck, setPendingStartAfterHealthCheck] =
-    useState(false);
 
   // BP Thresholds from Redux
   const bpThresholds = useSelector(
@@ -152,7 +150,6 @@ export default function CaptureScreen({ route, navigation }: any) {
     targetMacRef.current = "";
 
     setShowHealthCheckModal(false);
-    setPendingStartAfterHealthCheck(false);
 
     pulseAnim.setValue(1);
     ringRotate.setValue(0);
@@ -190,22 +187,6 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
   }, [device, addLog]);
 
-  // Handle daily health check completion
-  const handleHealthCheckComplete = useCallback(
-    (data: any) => {
-      addLog(
-        `Health check completed: headaches=${data.hasHeadaches}, visual=${data.hasVisualDisturbances}`
-      );
-      setShowHealthCheckModal(false);
-      setHealthCheckCompleted(true);
-
-      if (data.hasHeadaches || data.hasVisualDisturbances) {
-        addLog("Symptoms reported - care team will be notified");
-      }
-    },
-    [addLog]
-  );
-
   // ============================================================================
   // Focus effect — reset JS state on entry, BLE cleanup on EXIT only
   // ============================================================================
@@ -236,6 +217,8 @@ export default function CaptureScreen({ route, navigation }: any) {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
         IHealthDevices?.stopScan?.().catch(() => {});
         IHealthDevices?.disconnectAll?.().catch(() => {});
+        // Allow screen to sleep when leaving capture
+        IHealthDevices?.allowSleep?.();
       };
     }, [resetState, fadeAnim, scaleAnim, device])
   );
@@ -428,6 +411,7 @@ export default function CaptureScreen({ route, navigation }: any) {
             timeoutRef.current = null;
           }
           IHealthDevices?.stopScan?.().catch(() => {});
+          IHealthDevices?.allowSleep?.();
           targetMacRef.current = "";
           setBusy(false);
           setPhase("idle");
@@ -476,6 +460,8 @@ export default function CaptureScreen({ route, navigation }: any) {
       readingReceivedRef.current = true;
       IHealthDevices?.stopScan?.().catch(() => {});
       IHealthDevices?.disconnectAll?.().catch(() => {});
+      // Allow screen to sleep now that reading is complete
+      IHealthDevices?.allowSleep?.();
 
       const isHigh = isBPHigh(data.systolic, data.diastolic);
       if (isHigh) {
@@ -527,6 +513,8 @@ export default function CaptureScreen({ route, navigation }: any) {
       readingReceivedRef.current = true;
       IHealthDevices?.stopScan?.().catch(() => {});
       IHealthDevices?.disconnectAll?.().catch(() => {});
+      // Allow screen to sleep now that reading is complete
+      IHealthDevices?.allowSleep?.();
 
       const kg = parseFloat(data.weight) || 0;
       const lbs = Math.floor(kg * 2.20462 * 10) / 10;
@@ -573,6 +561,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           }
           IHealthDevices?.stopScan?.().catch(() => {});
           IHealthDevices?.disconnectAll?.().catch(() => {});
+          IHealthDevices?.allowSleep?.();
           targetMacRef.current = "";
           setBusy(false);
           setPhase("idle");
@@ -600,6 +589,9 @@ export default function CaptureScreen({ route, navigation }: any) {
       Alert.alert("Error", "Native module not available");
       return;
     }
+
+    // Prevent screen from sleeping during capture
+    IHealthDevices.keepAwake?.();
 
     setBusy(true);
     setLastReading(null);
@@ -642,6 +634,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     } catch (e: any) {
       addLog(`Scan error: ${e.message}`);
       Alert.alert("Scan Error", e.message);
+      IHealthDevices?.allowSleep?.();
       setBusy(false);
       setPhase("idle");
       return;
@@ -650,6 +643,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     timeoutRef.current = setTimeout(() => {
       addLog("Timeout - no reading received");
       IHealthDevices.stopScan?.().catch(() => {});
+      IHealthDevices?.allowSleep?.();
       setBusy(false);
       setPhase("idle");
       setStatusText("");
@@ -660,16 +654,26 @@ export default function CaptureScreen({ route, navigation }: any) {
     }, 90000);
   }, [device, addLog, successScale]);
 
-  // Auto-start capture after health check completes
-  useEffect(() => {
-    if (healthCheckCompleted && pendingStartAfterHealthCheck) {
-      setPendingStartAfterHealthCheck(false);
-      const timer = setTimeout(() => {
+  // Handle daily health check completion — auto-start capture
+  const handleHealthCheckComplete = useCallback(
+    (data: any) => {
+      addLog(
+        `Health check completed: headaches=${data.hasHeadaches}, visual=${data.hasVisualDisturbances}`
+      );
+      setShowHealthCheckModal(false);
+      setHealthCheckCompleted(true);
+
+      if (data.hasHeadaches || data.hasVisualDisturbances) {
+        addLog("Symptoms reported - care team will be notified");
+      }
+
+      // Auto-start capture after health check
+      setTimeout(() => {
         startCapture();
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [healthCheckCompleted, pendingStartAfterHealthCheck, startCapture]);
+      }, 400);
+    },
+    [addLog, startCapture]
+  );
 
   // ============================================================================
   // START - Entry point that checks for health check first
@@ -677,7 +681,6 @@ export default function CaptureScreen({ route, navigation }: any) {
   const start = useCallback(async () => {
     if (device?.type === "BP" && !healthCheckCompleted) {
       addLog("Daily health check required before BP measurement");
-      setPendingStartAfterHealthCheck(true);
       setShowHealthCheckModal(true);
       return;
     }
@@ -693,12 +696,14 @@ export default function CaptureScreen({ route, navigation }: any) {
       await IHealthDevices?.stopScan?.();
       await IHealthDevices?.disconnectAll?.();
     } catch (_e) {}
+    IHealthDevices?.allowSleep?.();
     setBusy(false);
     setPhase("idle");
     setStatusText("");
   }, [addLog]);
 
   const done = useCallback(() => {
+    IHealthDevices?.allowSleep?.();
     navigation.goBack();
   }, [navigation]);
 

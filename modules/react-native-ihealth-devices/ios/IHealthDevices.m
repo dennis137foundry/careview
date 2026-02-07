@@ -1016,6 +1016,18 @@ RCT_EXPORT_METHOD(getBatteryLevel:(NSString *)mac resolver:(RCTPromiseResolveBlo
     resolve(@(-1));
 }
 
+RCT_EXPORT_METHOD(keepAwake) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [UIApplication sharedApplication].idleTimerDisabled = YES;
+  });
+}
+
+RCT_EXPORT_METHOD(allowSleep) {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [UIApplication sharedApplication].idleTimerDisabled = NO;
+  });
+}
+
 - (HealthDeviceType)deviceTypeFromString:(NSString *)type {
     if ([type isEqualToString:@"BP3L"]) return HealthDeviceType_BP3L;
     if ([type isEqualToString:@"BP5"]) return HealthDeviceType_BP5;
