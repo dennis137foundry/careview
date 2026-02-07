@@ -11,6 +11,7 @@ import {
   Modal,
   TextInput,
   Platform,
+  PermissionsAndroid,
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from "@react-navigation/native";
@@ -90,6 +91,58 @@ export default function AddDeviceScreen() {
   }, []);
 
   const startScan = async () => {
+    // Android requires runtime permission requests for BLE scanning.
+    // This block only runs on Android — iOS is not affected.
+    if (Platform.OS === "android") {
+      try {
+        const permissions: string[] = [
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        ];
+
+        // Android 12+ (API 31+) needs BLUETOOTH_SCAN and BLUETOOTH_CONNECT
+        if (Platform.Version >= 31) {
+          permissions.push(
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+          );
+        }
+
+        const granted = await PermissionsAndroid.requestMultiple(permissions as any);
+        console.log("[AddDevice] Android permissions:", granted);
+
+        // Check if any critical permission was denied
+        const locationGranted =
+          granted[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] ===
+          PermissionsAndroid.RESULTS.GRANTED;
+
+        if (!locationGranted) {
+          Alert.alert(
+            "Permission Required",
+            "Location permission is needed to scan for Bluetooth devices. Please grant it in Settings."
+          );
+          return;
+        }
+
+        if (Platform.Version >= 31) {
+          const btGranted =
+            granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] ===
+              PermissionsAndroid.RESULTS.GRANTED &&
+            granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] ===
+              PermissionsAndroid.RESULTS.GRANTED;
+
+          if (!btGranted) {
+            Alert.alert(
+              "Permission Required",
+              "Bluetooth permission is needed to scan for devices. Please grant it in Settings."
+            );
+            return;
+          }
+        }
+      } catch (e: any) {
+        console.error("[AddDevice] Permission request error:", e);
+      }
+    }
+
     setDevices([]);
     setScanning(true);
 
