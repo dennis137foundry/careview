@@ -26,12 +26,12 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.cvdemo"
+    namespace "com.trinitycareview.app"
     defaultConfig {
-        applicationId "com.cvdemo"
+        applicationId "com.trinitycareview.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 4
+        versionCode 5
         versionName "1.0"
         multiDexEnabled true
 
