@@ -26,13 +26,13 @@ export function initDB() {
   // Migration: Add BP threshold columns if they don't exist
   try {
     db.execute("ALTER TABLE user ADD COLUMN systolicHigh INTEGER DEFAULT 140;");
-    console.log("✅ Added 'systolicHigh' column to user");
+    console.log("[DB] Added 'systolicHigh' column to user");
   } catch (e) {
     // Column already exists
   }
   try {
     db.execute("ALTER TABLE user ADD COLUMN diastolicHigh INTEGER DEFAULT 90;");
-    console.log("✅ Added 'diastolicHigh' column to user");
+    console.log("[DB] Added 'diastolicHigh' column to user");
   } catch (e) {
     // Column already exists
   }
@@ -61,37 +61,37 @@ export function initDB() {
   // Migration: Add missing columns if table already existed with old schema
   try {
     db.execute("ALTER TABLE devices ADD COLUMN type TEXT;");
-    console.log("✅ Added 'type' column to devices");
+    console.log("[DB] Added 'type' column to devices");
   } catch (e) {
     // Column already exists
   }
   try {
     db.execute("ALTER TABLE devices ADD COLUMN mac TEXT;");
-    console.log("✅ Added 'mac' column to devices");
+    console.log("[DB] Added 'mac' column to devices");
   } catch (e) {
     // Column already exists
   }
   try {
     db.execute("ALTER TABLE devices ADD COLUMN model TEXT;");
-    console.log("✅ Added 'model' column to devices");
+    console.log("[DB] Added 'model' column to devices");
   } catch (e) {
     // Column already exists
   }
   try {
     db.execute("ALTER TABLE devices ADD COLUMN bottleCode TEXT;");
-    console.log("✅ Added 'bottleCode' column to devices");
+    console.log("[DB] Added 'bottleCode' column to devices");
   } catch (e) {
     // Column already exists
   }
   try {
     db.execute("ALTER TABLE devices ADD COLUMN friendlyName TEXT;");
-    console.log("✅ Added 'friendlyName' column to devices");
+    console.log("[DB] Added 'friendlyName' column to devices");
   } catch (e) {
     // Column already exists
   }
   try {
     db.execute("ALTER TABLE devices ADD COLUMN source TEXT DEFAULT 'iHealthSDK';");
-    console.log("✅ Added 'source' column to devices");
+    console.log("[DB] Added 'source' column to devices");
   } catch (e) {
     // Column already exists
   }
@@ -116,7 +116,7 @@ export function initDB() {
   // Migration: Add synced column if table already existed
   try {
     db.execute("ALTER TABLE readings ADD COLUMN synced INTEGER DEFAULT 0;");
-    console.log("✅ Added 'synced' column to readings");
+    console.log("[DB] Added 'synced' column to readings");
   } catch (e) {
     // Column already exists
   }
@@ -124,14 +124,13 @@ export function initDB() {
   // Migration: Add measurementCondition column
   try {
     db.execute("ALTER TABLE readings ADD COLUMN measurementCondition TEXT;");
-    console.log("✅ Added 'measurementCondition' column to readings");
+    console.log("[DB] Added 'measurementCondition' column to readings");
   } catch (e) {
     // Column already exists
   }
 
   // =====================================================================
-  // NEW: Screening Responses Table
-  // For tracking daily health checks and urine protein responses
+  // Screening responses table (daily health checks, urine protein results)
   // =====================================================================
   db.execute(`
     CREATE TABLE IF NOT EXISTS screening_responses (
@@ -143,7 +142,7 @@ export function initDB() {
     );
   `);
 
-  console.log("✅ Database initialized");
+  console.log("[DB] Database initialized");
 }
 
 // ----------------------
@@ -180,18 +179,18 @@ export function saveUser(u: LocalUser) {
         u.diastolicHigh ?? 90,
       ]
     );
-    console.log("✅ User saved:", u.patientId);
+    console.log("[DB] User saved:", u.patientId);
   } catch (e) {
-    console.error("❌ Failed to save user:", e);
+    console.error("[DB] Failed to save user:", e);
   }
 }
 
 export function clearUser() {
   try {
     db.execute("DELETE FROM user;");
-    console.log("✅ User table cleared");
+    console.log("[DB] User table cleared");
   } catch (e) {
-    console.error("❌ Failed to clear user:", e);
+    console.error("[DB] Failed to clear user:", e);
   }
 }
 
@@ -204,7 +203,7 @@ export async function getUser(): Promise<LocalUser | null> {
 
     return res.rows.item(0) as LocalUser;
   } catch (e) {
-    console.error("❌ Failed to get user:", e);
+    console.error("[DB] Failed to get user:", e);
     return null;
   }
 }
@@ -227,7 +226,7 @@ export function getAppSetting(key: string): string | null {
     }
     return null;
   } catch (e) {
-    console.error("❌ Failed to get app setting:", key, e);
+    console.error("[DB] Failed to get app setting:", key, e);
     return null;
   }
 }
@@ -241,9 +240,9 @@ export function setAppSetting(key: string, value: string): void {
       "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?);",
       [key, value]
     );
-    console.log("✅ App setting saved:", key);
+    console.log("[DB] App setting saved:", key);
   } catch (e) {
-    console.error("❌ Failed to set app setting:", key, e);
+    console.error("[DB] Failed to set app setting:", key, e);
   }
 }
 
@@ -261,7 +260,7 @@ export function getIsFirstLaunch(): boolean {
  */
 export function setFirstLaunchComplete(): void {
   setAppSetting("has_launched", "1");
-  console.log("✅ First launch complete flag set");
+  console.log("[DB] First launch flag set");
 }
 
 // ----------------------
@@ -282,7 +281,7 @@ export type DeviceRecord = {
 
 export function saveDevice(device: DeviceRecord) {
   try {
-    console.log("💾 Saving device:", JSON.stringify(device));
+    console.log("[DB] Saving device:", JSON.stringify(device));
     db.execute(
       "INSERT OR REPLACE INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
       [
@@ -296,9 +295,9 @@ export function saveDevice(device: DeviceRecord) {
         device.source || "iHealthSDK",
       ]
     );
-    console.log("✅ Device saved:", device.id);
+    console.log("[DB] Device saved:", device.id);
   } catch (e) {
-    console.error("❌ Failed to save device:", e);
+    console.error("[DB] Failed to save device:", e);
   }
 }
 
@@ -308,9 +307,9 @@ export function updateDeviceBottleCode(deviceId: string, bottleCode: string) {
       bottleCode,
       deviceId,
     ]);
-    console.log("✅ Bottle code updated for device:", deviceId);
+    console.log("[DB] Bottle code updated for device:", deviceId);
   } catch (e) {
-    console.error("❌ Failed to update bottle code:", e);
+    console.error("[DB] Failed to update bottle code:", e);
   }
 }
 
@@ -320,9 +319,9 @@ export function updateDeviceFriendlyName(deviceId: string, friendlyName: string)
       friendlyName,
       deviceId,
     ]);
-    console.log("✅ Friendly name updated for device:", deviceId);
+    console.log("[DB] Friendly name updated for device:", deviceId);
   } catch (e) {
-    console.error("❌ Failed to update friendly name:", e);
+    console.error("[DB] Failed to update friendly name:", e);
   }
 }
 
@@ -337,9 +336,9 @@ export function updateDeviceName(deviceId: string, newName: string) {
       newName,
       deviceId,
     ]);
-    console.log("✅ Device renamed:", deviceId, "->", newName);
+    console.log("[DB] Device renamed:", deviceId, "->", newName);
   } catch (e) {
-    console.error("❌ Failed to rename device:", e);
+    console.error("[DB] Failed to rename device:", e);
   }
 }
 
@@ -354,10 +353,10 @@ export function getDevices(): DeviceRecord[] {
         out.push(res.rows.item(i) as DeviceRecord);
       }
     }
-    console.log("📱 Loaded devices:", out.length);
+    console.log("[DB] Loaded devices:", out.length);
     return out;
   } catch (e) {
-    console.error("❌ Failed to get devices:", e);
+    console.error("[DB] Failed to get devices:", e);
     return [];
   }
 }
@@ -373,7 +372,7 @@ export function getDevice(id: string): DeviceRecord | null {
     }
     return null;
   } catch (e) {
-    console.error("❌ Failed to get device:", e);
+    console.error("[DB] Failed to get device:", e);
     return null;
   }
 }
@@ -389,7 +388,7 @@ export function getDeviceByType(type: "BP" | "SCALE"): DeviceRecord | null {
     }
     return null;
   } catch (e) {
-    console.error("❌ Failed to get device by type:", e);
+    console.error("[DB] Failed to get device by type:", e);
     return null;
   }
 }
@@ -397,9 +396,9 @@ export function getDeviceByType(type: "BP" | "SCALE"): DeviceRecord | null {
 export function removeDevice(id: string) {
   try {
     db.execute("DELETE FROM devices WHERE id = ?;", [id]);
-    console.log("✅ Device removed:", id);
+    console.log("[DB] Device removed:", id);
   } catch (e) {
-    console.error("❌ Failed to remove device:", e);
+    console.error("[DB] Failed to remove device:", e);
   }
 }
 
@@ -444,13 +443,13 @@ export function saveReading(
       ]
     );
     console.log(
-      "✅ Reading saved:",
+      "[DB] Reading saved:",
       id,
       "measurementCondition:",
       r.measurementCondition
     );
   } catch (e) {
-    console.error("❌ Failed to save reading:", e);
+    console.error("[DB] Failed to save reading:", e);
   }
 }
 
@@ -469,7 +468,7 @@ export function getAllReadings(): SavedReading[] {
     }
     return out;
   } catch (e) {
-    console.error("❌ Failed to get readings:", e);
+    console.error("[DB] Failed to get readings:", e);
     return [];
   }
 }
@@ -494,10 +493,10 @@ export function getUnsyncedReadings(): SavedReading[] {
         } as SavedReading);
       }
     }
-    console.log("📤 Unsynced readings:", out.length);
+    console.log("[DB] Unsynced readings:", out.length);
     return out;
   } catch (e) {
-    console.error("❌ Failed to get unsynced readings:", e);
+    console.error("[DB] Failed to get unsynced readings:", e);
     return [];
   }
 }
@@ -506,9 +505,9 @@ export function getUnsyncedReadings(): SavedReading[] {
 export function markReadingSynced(id: string) {
   try {
     db.execute("UPDATE readings SET synced = 1 WHERE id = ?;", [id]);
-    console.log("✅ Reading marked as synced:", id);
+    console.log("[DB] Reading marked as synced:", id);
   } catch (e) {
-    console.error("❌ Failed to mark reading as synced:", e);
+    console.error("[DB] Failed to mark reading as synced:", e);
   }
 }
 
@@ -521,9 +520,9 @@ export function markReadingsSynced(ids: string[]) {
       `UPDATE readings SET synced = 1 WHERE id IN (${placeholders});`,
       ids
     );
-    console.log("✅ Marked", ids.length, "readings as synced");
+    console.log("[DB] Marked", ids.length, "readings as synced");
   } catch (e) {
-    console.error("❌ Failed to mark readings as synced:", e);
+    console.error("[DB] Failed to mark readings as synced:", e);
   }
 }
 
@@ -538,7 +537,7 @@ export function getUnsyncedCount(): number {
     }
     return 0;
   } catch (e) {
-    console.error("❌ Failed to get unsynced count:", e);
+    console.error("[DB] Failed to get unsynced count:", e);
     return 0;
   }
 }
@@ -587,10 +586,10 @@ export function saveScreeningResponse(
       "INSERT INTO screening_responses (id, type, timestamp, data, synced) VALUES (?, ?, ?, ?, 0);",
       [id, type, timestamp, dataJson]
     );
-    console.log("✅ Screening response saved:", type, id);
+    console.log("[DB] Screening response saved:", type, id);
     return id;
   } catch (e) {
-    console.error("❌ Failed to save screening response:", e);
+    console.error("[DB] Failed to save screening response:", e);
     return "";
   }
 }
@@ -618,7 +617,7 @@ export function getLastScreeningResponse(
     }
     return null;
   } catch (e) {
-    console.error("❌ Failed to get last screening response:", e);
+    console.error("[DB] Failed to get last screening response:", e);
     return null;
   }
 }
@@ -651,7 +650,7 @@ export function getScreeningResponsesInRange(
     }
     return out;
   } catch (e) {
-    console.error("❌ Failed to get screening responses in range:", e);
+    console.error("[DB] Failed to get screening responses in range:", e);
     return [];
   }
 }
@@ -679,7 +678,7 @@ export function getUnsyncedScreeningResponses(): ScreeningResponse[] {
     }
     return out;
   } catch (e) {
-    console.error("❌ Failed to get unsynced screening responses:", e);
+    console.error("[DB] Failed to get unsynced screening responses:", e);
     return [];
   }
 }
@@ -690,9 +689,9 @@ export function getUnsyncedScreeningResponses(): ScreeningResponse[] {
 export function markScreeningResponseSynced(id: string) {
   try {
     db.execute("UPDATE screening_responses SET synced = 1 WHERE id = ?;", [id]);
-    console.log("✅ Screening response marked as synced:", id);
+    console.log("[DB] Screening response marked as synced:", id);
   } catch (e) {
-    console.error("❌ Failed to mark screening response as synced:", e);
+    console.error("[DB] Failed to mark screening response as synced:", e);
   }
 }
 
@@ -795,7 +794,7 @@ export default {
   saveDevice,
   updateDeviceBottleCode,
   updateDeviceFriendlyName,
-  updateDeviceName,  // ← Added
+  updateDeviceName,
   getDevices,
   getDevice,
   getDeviceByType,

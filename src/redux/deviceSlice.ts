@@ -5,7 +5,7 @@ import {
   removeDevice as removeDeviceFromDB,
   updateDeviceBottleCode as updateBottleCodeInDB,
   updateDeviceFriendlyName as updateFriendlyNameInDB,
-  updateDeviceName as updateNameInDB,  // ← Add this import
+  updateDeviceName as updateNameInDB,
   DeviceRecord 
 } from "../services/sqliteService";
 
@@ -61,7 +61,7 @@ const deviceSlice = createSlice({
         device.friendlyName = friendlyName;
       }
     },
-    // ✅ NEW: Rename device (updates both name and friendlyName)
+    // Rename device (updates both name and friendlyName)
     renameDevice: (state, action: PayloadAction<{ deviceId: string; newName: string }>) => {
       const { deviceId, newName } = action.payload;
       const device = state.devices.find(d => d.id === deviceId);
@@ -85,7 +85,7 @@ export const {
   removeDevice, 
   updateBottleCode, 
   updateFriendlyName,
-  renameDevice,  // ← Export the new action
+  renameDevice,
 } = deviceSlice.actions;
 
 export default deviceSlice.reducer;

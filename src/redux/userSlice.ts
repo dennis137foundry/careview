@@ -46,7 +46,7 @@ export const loadUser = createAsyncThunk("user/loadUser", async () => {
     const user = await getUser();
     return user; // LocalUser | null
   } catch (e) {
-    console.error("❌ Failed to load user:", e);
+    console.error("[User] Failed to load user:", e);
     return null;
   }
 });

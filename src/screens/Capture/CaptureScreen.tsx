@@ -390,7 +390,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     if (!emitter) return;
     const sub = emitter.addListener(
       "onConnectionStateChanged",
-      (data: any) => {
+      async (data: any) => {
         addLog(
           `[Connection] ${data.mac} connected=${data.connected} type=${data.type}`
         );
@@ -401,6 +401,17 @@ export default function CaptureScreen({ route, navigation }: any) {
             setStatusText("Step on the scale");
           } else {
             setStatusText("Keep still, measuring...");
+          }
+
+          // iOS starts measurement automatically in the native layer when
+          // the device connects. On Android the native module exposes a
+          // no-op stub for this method on iOS, so calling it on both
+          // platforms is safe — it only does real work on Android.
+          try {
+            await IHealthDevices.startMeasurement(data.mac);
+            addLog(`startMeasurement called for ${data.mac}`);
+          } catch (e: any) {
+            addLog(`startMeasurement error: ${e.message}`);
           }
         } else if (busyRef.current && !readingReceivedRef.current) {
           // Unexpected disconnect — device was turned off, cuff error,

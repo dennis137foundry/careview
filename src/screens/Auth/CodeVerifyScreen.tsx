@@ -122,7 +122,7 @@ export default function CodeVerifyScreen({
     try {
       setBusy(true);
       await authService.sendCode(phone);
-      // ✅ Changed from Alert.alert to Toast
+      // Show confirmation as a toast instead of blocking alert
       showToast({
         message: "A new verification code has been sent.",
         type: "success",

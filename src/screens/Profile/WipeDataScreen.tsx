@@ -52,7 +52,7 @@ export default function WipeDataScreen({ navigation }: any) {
       // Dispatch logout (clears user table + resets Redux → navigates to Auth)
       dispatch(logout());
     } catch (error) {
-      console.error("❌ Wipe failed:", error);
+      console.error("[WipeData] Wipe failed:", error);
       setWiping(false);
       Alert.alert("Error", "Unable to wipe data. Please try again.");
     }

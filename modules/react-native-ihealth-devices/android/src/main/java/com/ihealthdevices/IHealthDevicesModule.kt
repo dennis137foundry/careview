@@ -1,6 +1,11 @@
 package com.ihealthdevices
 
 import android.app.Application
+import android.content.Context
+import android.location.LocationManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -17,6 +22,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     companion object {
         private const val TAG = "IHealthDevices"
         private const val NAME = "IHealthDevices"
+        // Seconds each device type gets to be discovered before moving to next
+        private const val SCAN_WINDOW_MS = 3000L
     }
 
     private var isAuthenticatedFlag = false
@@ -26,6 +33,14 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     private val connectedDevices = mutableMapOf<String, MutableMap<String, String>>()
     private var targetMAC: String? = null
     private var targetType: String? = null
+
+    // Timer-based sequential scan
+    private val scanHandler = Handler(Looper.getMainLooper())
+    private var scanTypesList = listOf<String>()
+    private var currentScanIndex = 0
+    private var isScanningActive = false
+
+    private val scanNextRunnable = Runnable { advanceToNextType() }
 
     override fun getName(): String = NAME
 
@@ -102,6 +117,47 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     }
 
     // =========================================================================
+    // Timer-Based Sequential Scan
+    // =========================================================================
+
+    /**
+     * Start discovery for the current type, then schedule the next one
+     * after SCAN_WINDOW_MS. Each type gets a fixed time window.
+     * This avoids race conditions from onScanFinish callbacks.
+     */
+    private fun advanceToNextType() {
+        if (!isScanningActive) return
+
+        // Stop previous discovery before starting next
+        try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
+
+        if (currentScanIndex >= scanTypesList.size) {
+            isScanningActive = false
+            sendDebugLog("SCAN: All ${scanTypesList.size} types complete")
+            val params = Arguments.createMap().apply {
+                putBoolean("scanning", false)
+            }
+            sendEvent("onScanStateChanged", params)
+            return
+        }
+
+        val type = scanTypesList[currentScanIndex]
+        currentScanIndex++
+        val discoveryType = getDiscoveryType(type)
+
+        if (discoveryType != null) {
+            sendDebugLog("Scanning for $type (${scanTypesList.size - currentScanIndex} types after this)")
+            iHealthDevicesManager.getInstance().startDiscovery(discoveryType)
+            // Schedule next type after the scan window
+            scanHandler.postDelayed(scanNextRunnable, SCAN_WINDOW_MS)
+        } else {
+            sendDebugLog("Skipping unsupported type: $type")
+            // Immediately try next type
+            advanceToNextType()
+        }
+    }
+
+    // =========================================================================
     // SDK Initialization (called internally, not from JS)
     // =========================================================================
 
@@ -150,11 +206,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         }
 
         override fun onScanFinish() {
-            sendDebugLog("SCAN: Finished")
-            val params = Arguments.createMap().apply {
-                putBoolean("scanning", false)
-            }
-            sendEvent("onScanStateChanged", params)
+            // Timer handles scan chaining — do not chain from here
+            sendDebugLog("SCAN: SDK reported scan finished")
         }
 
         override fun onDeviceConnectionStateChange(mac: String?, deviceType: String?, status: Int, errorId: Int) {
@@ -233,10 +286,12 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         sendDebugLog("BP[$deviceType]: action=$action keys=${json.keys().asSequence().toList()}")
         when {
             action.contains("result", ignoreCase = true) -> {
-                val systolic = json.optInt("hp", json.optInt("sys", 0))
-                val diastolic = json.optInt("lp", json.optInt("dia", 0))
-                val pulse = json.optInt("pr", json.optInt("pulse", json.optInt("heartRate", 0)))
-                val ahr = json.optBoolean("ahr", json.optBoolean("irregular", false))
+                // iHealth Android SDK sends uppercase keys (HP, LP, PR, AHR).
+                // Fallback to lowercase variants for defensive compatibility.
+                val systolic = json.optInt("HP", json.optInt("hp", json.optInt("sys", 0)))
+                val diastolic = json.optInt("LP", json.optInt("lp", json.optInt("dia", 0)))
+                val pulse = json.optInt("PR", json.optInt("pr", json.optInt("pulse", json.optInt("heartRate", 0))))
+                val ahr = json.optBoolean("AHR", json.optBoolean("ahr", json.optBoolean("irregular", false)))
                 if (systolic > 0 && diastolic > 0) {
                     sendDebugLog("BP RESULT: sys=$systolic dia=$diastolic pulse=$pulse")
                     val params = Arguments.createMap().apply {
@@ -358,11 +413,21 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
      *
      * JS calls: IHealthDevices.startScan(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"])
      * iOS sig:  startScan:(NSArray *)deviceTypes resolver:reject:
+     *
+     * Android iHealth SDK only supports discovering one DiscoveryTypeEnum at a time.
+     * We scan each type sequentially using a timer. Each type gets SCAN_WINDOW_MS
+     * milliseconds before we move to the next. This avoids race conditions from
+     * onScanFinish callbacks firing unpredictably.
      */
     @ReactMethod
     fun startScan(deviceTypes: ReadableArray, promise: Promise) {
         try {
             ensureInitialized()
+
+            // Cancel any in-progress scan
+            scanHandler.removeCallbacks(scanNextRunnable)
+            isScanningActive = false
+            try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
 
             val types = mutableListOf<String>()
             for (i in 0 until deviceTypes.size()) {
@@ -370,20 +435,32 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             }
             sendDebugLog("Starting scan for: $types")
 
-            for (type in types) {
-                val discoveryType = getDiscoveryType(type)
-                if (discoveryType != null) {
-                    sendDebugLog("Starting discovery for $type")
-                    iHealthDevicesManager.getInstance().startDiscovery(discoveryType)
-                } else {
-                    sendDebugLog("Skipping unsupported type: $type")
-                }
+            // Android requires Location Services (GPS toggle) to be ON for BLE scanning.
+            // This is true even when ACCESS_FINE_LOCATION permission is granted.
+            // On Android 12+ with neverForLocation flag this check is technically not required,
+            // but older devices (API 23-30) still need it.
+            val lm = reactApplicationContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val locationEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                lm.isLocationEnabled
+            } else {
+                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
             }
+            if (!locationEnabled) {
+                promise.reject("LOCATION_DISABLED", "Location Services must be enabled to scan for Bluetooth devices. Please turn on Location in Settings.")
+                return
+            }
+
+            scanTypesList = types.toList()
+            currentScanIndex = 0
+            isScanningActive = true
 
             val params = Arguments.createMap().apply {
                 putBoolean("scanning", true)
             }
             sendEvent("onScanStateChanged", params)
+
+            // Begin scanning first type
+            advanceToNextType()
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("SCAN_ERROR", "Failed to start scan: ${e.message}", e)
@@ -399,6 +476,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun stopScan(promise: Promise) {
         try {
+            isScanningActive = false
+            scanHandler.removeCallbacks(scanNextRunnable)
             iHealthDevicesManager.getInstance().stopDiscovery()
             val params = Arguments.createMap().apply {
                 putBoolean("scanning", false)
@@ -423,7 +502,11 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             targetMAC = mac
             targetType = deviceType
 
+            // Stop scanning before connecting
+            isScanningActive = false
+            scanHandler.removeCallbacks(scanNextRunnable)
             iHealthDevicesManager.getInstance().stopDiscovery()
+
             iHealthDevicesManager.getInstance().connectDevice("", mac, getDeviceTypeName(deviceType))
             promise.resolve(true)
         } catch (e: Exception) {

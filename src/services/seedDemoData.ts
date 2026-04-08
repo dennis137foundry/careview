@@ -84,7 +84,7 @@ function seedDemoDevices(): void {
     source: "iHealthSDK",
   });
 
-  console.log("📱 Demo devices seeded (BP5S, HS2S)");
+  console.log("[Demo] Devices seeded (BP5S, HS2S)");
 }
 
 // ============================================================================
@@ -330,7 +330,7 @@ function saveScreeningResponseWithTimestamp(
       [id, type, timestamp, dataJson]
     );
   } catch (e) {
-    console.error("❌ Failed to save demo screening response:", e);
+    console.error("[Demo] Failed to save screening response:", e);
   }
 }
 
@@ -343,9 +343,9 @@ function clearDemoData(): void {
     db.execute("DELETE FROM readings WHERE id LIKE 'demo_%';");
     db.execute("DELETE FROM screening_responses WHERE id LIKE 'demo_%';");
     db.execute("DELETE FROM devices WHERE id LIKE 'demo_%';");
-    console.log("🗑  Cleared previous demo data");
+    console.log("[Demo] Cleared previous demo data");
   } catch (e) {
-    console.error("❌ Failed to clear demo data:", e);
+    console.error("[Demo] Failed to clear demo data:", e);
   }
 }
 
@@ -354,7 +354,7 @@ function clearDemoData(): void {
 // ============================================================================
 
 export function seedDemoData(): void {
-  console.log("🌱 Seeding demo data (60 days)...");
+  console.log("[Demo] Seeding demo data (60 days)...");
 
   // Clear any previous demo data first
   clearDemoData();

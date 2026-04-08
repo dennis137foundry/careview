@@ -83,8 +83,14 @@ export default function DashboardScreen() {
     }
   }, []);
 
-  // Check for urine protein modal on focus
+  // Check for urine protein modal on focus (only if a device has been added)
   const checkUrineProteinStatus = useCallback(() => {
+    if (devices.length === 0) {
+      setShowUrineProteinModal(false);
+      setShowUrineProteinAlert(false);
+      return;
+    }
+
     const needsResponse = needsUrineProteinResponse();
     const hasDeferred = hasUrineProteinDeferredToday();
     
@@ -98,7 +104,7 @@ export default function DashboardScreen() {
       setShowUrineProteinModal(false);
       setShowUrineProteinAlert(false);
     }
-  }, []);
+  }, [devices.length]);
 
   useEffect(() => {
     if (isFocused) {

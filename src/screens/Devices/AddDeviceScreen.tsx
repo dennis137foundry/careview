@@ -42,6 +42,7 @@ export default function AddDeviceScreen() {
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [showQRScanner, setShowQRScanner] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
 
   // Friendly name modal
   const [showNameModal, setShowNameModal] = useState(false);
@@ -79,7 +80,8 @@ export default function AddDeviceScreen() {
     });
 
     const debugSub = deviceService.onDebugLog((event) => {
-      console.log("[AddDevice] Debug:", event.message);
+    console.log("[AddDevice] Debug:", event.message);
+    setDebugLogs((prev) => [...prev.slice(-20), event.message]);
     });
 
     subscriptionsRef.current = [deviceFoundSub, scanStateSub, debugSub];
@@ -406,6 +408,20 @@ export default function AddDeviceScreen() {
             : "Tap to scan for nearby BP monitors and scales"}
         </Text>
       </View>
+
+        {debugLogs.length > 0 && (
+        <View style={{ backgroundColor: '#1a1a2e', maxHeight: 200, padding: 8 }}>
+            <FlatList
+            data={debugLogs}
+            renderItem={({ item }) => (
+                <Text style={{ color: '#0f0', fontSize: 11, fontFamily: 'monospace' }}>{item}</Text>
+            )}
+            keyExtractor={(_, i) => `log-${i}`}
+            nestedScrollEnabled
+            />
+        </View>
+        )}
+
 
       {/* Device List */}
       <FlatList

@@ -356,7 +356,7 @@ export async function syncReading(reading: SavedReading): Promise<boolean> {
         retryCount: 0,
       });
       updatePendingCounts();
-      console.log(`[VitalsSync] ✅ Reading ${reading.id} synced`);
+      console.log(`[VitalsSync] Reading ${reading.id} synced`);
       return true;
     }
 
@@ -367,7 +367,7 @@ export async function syncReading(reading: SavedReading): Promise<boolean> {
     return false;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    console.error(`[VitalsSync] ❌ Sync failed: ${message}`);
+    console.error(`[VitalsSync] Sync failed: ${message}`);
     updateState({
       status: "error",
       lastError: message,
