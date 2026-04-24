@@ -25,10 +25,19 @@ import {
   getUnsyncedCount,
   getUnsyncedScreeningResponses,
   markScreeningResponseSynced,
+  getDevice,
+  getDevicesWithoutEmrUnitId,
+  updateDeviceEmrUnits,
   SavedReading,
   ScreeningResponse,
 } from "./sqliteService";
 import { store } from "../redux/store";
+import { setDeviceEmrUnits } from "../redux/deviceSlice";
+import {
+  registerDeviceWithEmr,
+  normalizeMac,
+} from "./deviceRegistrationService";
+import { authedFetch } from "./authToken";
 
 // ============================================================================
 // Configuration
@@ -51,6 +60,10 @@ const CONFIG = {
 
   // Background sync interval (ms)
   backgroundSyncInterval: 60000, // 1 minute
+
+  // Per-request timeout (ms). React Native's fetch has no default timeout —
+  // without this, a stuck request blocks the entire sync loop.
+  requestTimeout: 15000, // 15 seconds
 };
 
 // ============================================================================
@@ -73,6 +86,12 @@ interface VitalPayload {
   recorded_date?: string;
   measurement_condition?: string | null;
   notes?: string | null;
+  // EMR inventory unit id (inventory_units.id). Populated for readings
+  // from devices that have been registered via device_register.php.
+  // Omitted from the payload entirely (not sent as null) for devices
+  // that haven't registered yet — the server treats the absence as
+  // "legacy reading, store with patient_vitals.unit_id = NULL".
+  unit_id?: number;
 }
 
 interface SyncResponse {
@@ -210,6 +229,42 @@ export function initNetworkMonitoring(): () => void {
 }
 
 // ============================================================================
+// Network Helpers
+// ============================================================================
+
+/**
+ * fetch() wrapped with an AbortController-backed timeout AND the JWT
+ * auth wrapper. React Native's fetch has no default timeout, so a stuck
+ * connection would otherwise hang the sync loop ~60s. The auth wrapper
+ * adds Authorization: Bearer and handles 401 refresh transparently;
+ * the legacy X-API-Key header stays in place during the transition so
+ * an old server or rotated-JWT edge case still works.
+ */
+function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeout: number = CONFIG.requestTimeout
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("Request timed out"));
+    }, timeout);
+
+    authedFetch(url, { ...options, signal: controller.signal })
+      .then((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+// ============================================================================
 // API Communication - Vitals
 // ============================================================================
 
@@ -220,9 +275,13 @@ async function sendVitalsToApi(payload: SyncPayload): Promise<SyncResponse> {
   console.log(
     `[VitalsSync] Sending ${payload.vitals.length} readings to API...`
   );
-  console.log(`[VitalsSync] Payload:`, JSON.stringify(payload, null, 2));
+  // Payload contains vitals values, patient_id, and device details — PHI.
+  // Gated to dev builds only; production logcat should not see raw readings.
+  if (__DEV__) {
+    console.log(`[VitalsSync] Payload:`, JSON.stringify(payload, null, 2));
+  }
 
-  const response = await fetch(CONFIG.vitalsApiUrl, {
+  const response = await fetchWithTimeout(CONFIG.vitalsApiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -247,6 +306,11 @@ async function sendVitalsToApi(payload: SyncPayload): Promise<SyncResponse> {
  * - BP: heartRate -> measurement_condition (e.g., "72 bpm")
  * - BG: measurementCondition -> measurement_condition (meal timing)
  * - SCALE: no measurement_condition
+ *
+ * If the source device has been registered with the EMR inventory,
+ * the payload includes unit_id so the server can attribute the
+ * reading to that specific physical device. Otherwise unit_id is
+ * omitted and the server stores patient_vitals.unit_id = NULL.
  */
 function readingToPayload(reading: SavedReading): VitalPayload {
   let measurementCondition: string | null = null;
@@ -256,7 +320,18 @@ function readingToPayload(reading: SavedReading): VitalPayload {
     measurementCondition = `${reading.heartRate} bpm`;
   }
 
-  return {
+  // Look up the source device so we can attach its EMR unit_id if
+  // registered. Omitted from payload when null (do NOT send null —
+  // server distinguishes "field absent" from "explicit null").
+  let unitId: number | undefined;
+  if (reading.deviceId) {
+    const device = getDevice(reading.deviceId);
+    if (device?.emrUnitId != null) {
+      unitId = device.emrUnitId;
+    }
+  }
+
+  const payload: VitalPayload = {
     id: reading.id,
     type: reading.type,
     value: reading.value ?? null,
@@ -266,6 +341,10 @@ function readingToPayload(reading: SavedReading): VitalPayload {
     ts: reading.ts,
     measurement_condition: measurementCondition,
   };
+  if (unitId !== undefined) {
+    payload.unit_id = unitId;
+  }
+  return payload;
 }
 
 // ============================================================================
@@ -281,9 +360,13 @@ async function sendScreeningToApi(
   console.log(
     `[ScreeningSync] Sending ${payload.responses.length} responses to API...`
   );
-  console.log(`[ScreeningSync] Payload:`, JSON.stringify(payload, null, 2));
+  // Payload contains screening answers (headache/visual/protein) and
+  // patient_id — PHI. Gated to dev only.
+  if (__DEV__) {
+    console.log(`[ScreeningSync] Payload:`, JSON.stringify(payload, null, 2));
+  }
 
-  const response = await fetch(CONFIG.screeningApiUrl, {
+  const response = await fetchWithTimeout(CONFIG.screeningApiUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -364,7 +447,14 @@ export async function syncReading(reading: SavedReading): Promise<boolean> {
       throw new Error(result.results.errors[0]?.error || "Unknown error");
     }
 
-    return false;
+    // Unexpected response shape: server returned 2xx/207 but summary shows
+    // 0 inserted, 0 duplicates, and 0 errors. Without this throw the reading
+    // would stay synced=0 forever with no retry scheduled — it'd sit pending
+    // until the next background tick and then loop silently. Raising here
+    // routes through the catch below, which schedules exponential backoff.
+    throw new Error(
+      "Unexpected API response: 0 inserted, 0 duplicates, 0 errors"
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     console.error(`[VitalsSync] Sync failed: ${message}`);
@@ -608,6 +698,75 @@ export async function syncPendingScreening(): Promise<{
 // ============================================================================
 
 /**
+ * Retry any device-registration calls that didn't complete on initial pair.
+ * A device is considered "pending registration" if its row exists in SQLite
+ * but emrUnitId is still NULL. That happens when device_register.php was
+ * offline/timed-out/5xx when the nurse added the device. This sweep re-
+ * attempts registration on each background tick; once it succeeds, the
+ * unit_id flows into subsequent vitals_sync payloads automatically.
+ *
+ * 409 / 422 / 401 responses are considered terminal here — retrying won't
+ * help until a nurse/admin intervenes, so we log and move on.
+ */
+export async function syncPendingDeviceRegistrations(): Promise<void> {
+  if (!isOnline) return;
+
+  const user = await getUser();
+  if (!user?.patientId) return;
+
+  const pending = getDevicesWithoutEmrUnitId();
+  if (pending.length === 0) return;
+
+  console.log(
+    `[DeviceRegister] Retrying ${pending.length} pending registration(s)...`
+  );
+
+  for (const device of pending) {
+    const category = device.type; // "BP" | "SCALE"
+    const result = await registerDeviceWithEmr({
+      patient_id: parseInt(user.patientId, 10),
+      mac: normalizeMac(device.mac),
+      category,
+      cuff_size:
+        category === "BP"
+          ? (device.cuffSize as "STANDARD" | "LARGE" | "XXL" | undefined) ??
+            "STANDARD"
+          : undefined,
+      model: device.model ?? device.type,
+      name: device.name,
+      friendly_name: device.friendlyName ?? device.name,
+      source: device.source ?? "iHealthSDK",
+    });
+
+    if (result.kind === "success") {
+      const monitor = result.data.units.find((u) => u.role !== "accessory");
+      const accessory = result.data.units.find((u) => u.role === "accessory");
+      if (monitor) {
+        updateDeviceEmrUnits(
+          device.id,
+          monitor.unit_id,
+          accessory?.unit_id ?? null
+        );
+        store.dispatch(
+          setDeviceEmrUnits({
+            deviceId: device.id,
+            emrUnitId: monitor.unit_id,
+            emrAccessoryUnitId: accessory?.unit_id ?? null,
+          })
+        );
+      }
+    } else if (result.kind === "conflict" || result.kind === "fatal") {
+      // Won't succeed on retry. Leave emrUnitId null; readings still sync
+      // without unit_id. User/admin must resolve via EMR admin UI.
+      console.warn(
+        `[DeviceRegister] Giving up on ${device.id}: ${result.kind} — ${result.message}`
+      );
+    }
+    // "retry" kind: silently leave for the next sweep.
+  }
+}
+
+/**
  * Sync all pending data (vitals + screening)
  */
 export async function syncAllPending(): Promise<{
@@ -627,6 +786,11 @@ export async function syncAllPending(): Promise<{
   }
 
   updateState({ status: "syncing", lastSyncAttempt: new Date() });
+
+  // Retry any device registrations that didn't complete on initial pair
+  // (offline, 5xx, etc.). Runs before vitals so readings have a chance to
+  // pick up unit_id on this same sweep.
+  await syncPendingDeviceRegistrations();
 
   // Sync vitals first
   const vitalsResult = await syncPendingReadings();

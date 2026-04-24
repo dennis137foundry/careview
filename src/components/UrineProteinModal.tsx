@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { saveScreeningResponse } from "../services/sqliteService";
-import { syncScreeningResponses } from "../services/screeningSyncService";
+import { syncPendingScreening } from "../services/vitalsSyncService";
 
 // Urine protein test result options
 const PROTEIN_OPTIONS = [
@@ -50,33 +50,49 @@ export default function UrineProteinModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-  if (!selectedResult) return;
+    if (!selectedResult) return;
 
-  setSubmitting(true);
+    setSubmitting(true);
 
-  // Save to local DB
-  saveScreeningResponse("urine_protein_result", { result: selectedResult });
+    // Save to local DB. If this throws, the patient's test result never
+    // left the phone — keep the modal open so they can retry.
+    try {
+      saveScreeningResponse("urine_protein_result", { result: selectedResult });
+    } catch (err) {
+      console.error("[UrineProtein] Failed to save screening response:", err);
+      setSubmitting(false);
+      // Keep modal open so the user can retry.
+      return;
+    }
 
-  // Trigger background sync to EMR
-  syncScreeningResponses().catch((err) => {
-    console.error("[UrineProtein] Background sync error:", err);
-  });
+    // Trigger background sync to EMR
+    syncPendingScreening().catch((err) => {
+      console.error("[UrineProtein] Background sync error:", err);
+    });
 
-  setSubmitting(false);
-  onComplete(selectedResult);
-};
+    setSubmitting(false);
+    onComplete(selectedResult);
+  };
 
-// Also in defer handler:
-const handleDefer = () => {
-  saveScreeningResponse("urine_protein_deferred", { deferred: true });
-  
-  // Sync deferrals too (they get marked synced locally)
-  syncScreeningResponses().catch((err) => {
-    console.error("[UrineProtein] Background sync error:", err);
-  });
-  
-  onDefer();
-};
+  // Also in defer handler:
+  const handleDefer = () => {
+    // Deferral is pure local UI memory ("don't re-prompt today"). If the
+    // save fails, silently fall through — the modal will still prompt
+    // again next time per the existing deferred-today logic.
+    try {
+      saveScreeningResponse("urine_protein_deferred", { deferred: true });
+    } catch (err) {
+      console.error("[UrineProtein] Failed to save deferral:", err);
+      // Intentionally swallow — non-clinical data, will retry next prompt.
+    }
+
+    // Sync deferrals too (they get marked synced locally)
+    syncPendingScreening().catch((err) => {
+      console.error("[UrineProtein] Background sync error:", err);
+    });
+
+    onDefer();
+  };
 
   return (
     <Modal

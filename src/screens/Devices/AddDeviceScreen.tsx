@@ -23,10 +23,14 @@ import {
 } from "react-native-vision-camera";
 
 import deviceService, { DiscoveredDevice } from "../../services/deviceService";
-import { addDevice, loadDevices } from "../../redux/deviceSlice";
+import { addDevice, loadDevices, setDeviceEmrUnits, removeDevice as removeDeviceAction } from "../../redux/deviceSlice";
 import { useToast } from "../../components/Toast";
 import type { AppDispatch, RootState } from "../../redux/store";
-import type { DeviceRecord } from "../../services/sqliteService";
+import type { DeviceRecord, CuffSize } from "../../services/sqliteService";
+import {
+  registerDeviceWithEmr,
+  normalizeMac,
+} from "../../services/deviceRegistrationService";
 
 // ============================================================================
 // Component
@@ -42,7 +46,12 @@ export default function AddDeviceScreen() {
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [showQRScanner, setShowQRScanner] = useState(false);
-  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+
+  const patientId = useSelector((state: RootState) => state.user.patientId);
+
+  // Cuff-size picker modal (BP devices only — scales skip this step)
+  const [showCuffModal, setShowCuffModal] = useState(false);
+  const [pendingCuffSize, setPendingCuffSize] = useState<CuffSize | null>(null);
 
   // Friendly name modal
   const [showNameModal, setShowNameModal] = useState(false);
@@ -65,7 +74,10 @@ export default function AddDeviceScreen() {
   useEffect(() => {
     // Setup event listeners
     const deviceFoundSub = deviceService.onDeviceFound((device) => {
-      console.log("[AddDevice] Device found:", device.name, device.type, device.source);
+      // Device name can include advertised identifier; dev only.
+      if (__DEV__) {
+        console.log("[AddDevice] Device found:", device.name, device.type, device.source);
+      }
       setDevices((prev) => {
         // Avoid duplicates by MAC
         if (prev.find((d) => d.mac === device.mac)) {
@@ -80,8 +92,10 @@ export default function AddDeviceScreen() {
     });
 
     const debugSub = deviceService.onDebugLog((event) => {
-    console.log("[AddDevice] Debug:", event.message);
-    setDebugLogs((prev) => [...prev.slice(-20), event.message]);
+      // Native BLE debug events — dev console only, no UI surface in production.
+      if (__DEV__) {
+        console.log("[AddDevice] Debug:", event.message);
+      }
     });
 
     subscriptionsRef.current = [deviceFoundSub, scanStateSub, debugSub];
@@ -174,7 +188,8 @@ export default function AddDeviceScreen() {
     return existingDevices.some((d) => d.type === category);
   };
 
-  // Handle device selection - show name modal
+  // Handle device selection — BP devices get a cuff-size picker first,
+  // scales skip straight to the friendly-name modal.
   const handleSelectDevice = (device: DiscoveredDevice) => {
     const category = device.category || deviceService.getCategory(device.type);
 
@@ -188,39 +203,113 @@ export default function AddDeviceScreen() {
       return;
     }
 
-    // Show friendly name modal
     setPendingDevice(device);
     setFriendlyName(device.name || deviceService.getFriendlyTypeName(device.type));
+
+    if (category === "BP") {
+      // Ask the nurse which cuff is on this monitor. The BLE hardware
+      // can't self-report this — it's a physical accessory.
+      setPendingCuffSize(null);
+      setShowCuffModal(true);
+    } else {
+      // Scales: no cuff size, go straight to naming.
+      setPendingCuffSize(null);
+      setShowNameModal(true);
+    }
+  };
+
+  // Nurse picks a cuff size → dismiss cuff modal, open name modal.
+  const handleCuffSizeSelected = (size: CuffSize) => {
+    setPendingCuffSize(size);
+    setShowCuffModal(false);
     setShowNameModal(true);
   };
 
-  // Confirm device addition with friendly name
+  // Confirm device addition: save locally, then register with the EMR
+  // inventory. Registration failures are handled per error tier:
+  //   409 conflict    → roll back local pairing, show server's message
+  //   5xx / network   → keep paired locally, background sweep retries
+  //   401 / 422       → keep paired locally but log; won't succeed
+  //   200             → store unit IDs, continue
   const confirmAddDevice = async () => {
     if (!pendingDevice) return;
 
     setShowNameModal(false);
     setConnecting(pendingDevice.mac);
 
+    const category = pendingDevice.category || deviceService.getCategory(pendingDevice.type);
+    const normalizedMac = normalizeMac(pendingDevice.mac);
+    const localId = `device_${normalizedMac}`;
+    const finalFriendlyName = friendlyName.trim() || pendingDevice.name || pendingDevice.type;
+
+    const deviceRecord: DeviceRecord = {
+      id: localId,
+      name: pendingDevice.name || pendingDevice.type,
+      type: category,
+      mac: pendingDevice.mac,
+      model: pendingDevice.type,
+      friendlyName: finalFriendlyName,
+      source: pendingDevice.source,
+      cuffSize: category === "BP" ? (pendingCuffSize ?? "STANDARD") : null,
+      emrUnitId: null,
+      emrAccessoryUnitId: null,
+    };
+
     try {
       await stopScan();
 
-      const category = pendingDevice.category || deviceService.getCategory(pendingDevice.type);
-
-      const deviceRecord: DeviceRecord = {
-        id: `device_${pendingDevice.mac.replace(/[:-]/g, "")}`,
-        name: pendingDevice.name || pendingDevice.type,
-        type: category,
-        mac: pendingDevice.mac,
-        model: pendingDevice.type,
-        friendlyName: friendlyName.trim() || undefined,
-        source: pendingDevice.source,
-      };
-
+      // 1. Save locally first — offline-safe. Registration can retry later.
       dispatch(addDevice(deviceRecord));
+
+      // 2. Register with EMR inventory.
+      if (!patientId) {
+        // No logged-in patient — shouldn't reach this screen without one,
+        // but handle defensively. Leave the device paired locally; the
+        // background sweep will register it once a patient is available.
+        console.warn("[AddDevice] No patientId — skipping EMR registration");
+      } else {
+        const result = await registerDeviceWithEmr({
+          patient_id: parseInt(patientId, 10),
+          mac: normalizedMac,
+          category,
+          cuff_size:
+            category === "BP" ? (pendingCuffSize ?? "STANDARD") : undefined,
+          model: pendingDevice.type,
+          name: deviceRecord.name,
+          friendly_name: finalFriendlyName,
+          source: pendingDevice.source ?? "iHealthSDK",
+        });
+
+        if (result.kind === "success") {
+          const monitor = result.data.units.find((u) => u.role !== "accessory");
+          const accessory = result.data.units.find((u) => u.role === "accessory");
+          if (monitor) {
+            dispatch(
+              setDeviceEmrUnits({
+                deviceId: localId,
+                emrUnitId: monitor.unit_id,
+                emrAccessoryUnitId: accessory?.unit_id ?? null,
+              })
+            );
+          }
+        } else if (result.kind === "conflict") {
+          // Roll back local save. Device isn't available for this patient.
+          dispatch(removeDeviceAction(localId));
+          Alert.alert("Device Not Available", result.message);
+          return;
+        } else if (result.kind === "fatal") {
+          // Bad payload or bad auth. Leave paired locally but log.
+          // Readings from this device will still sync to EMR with
+          // unit_id=NULL until an admin sorts it out.
+          console.error("[AddDevice] fatal register error:", result.message);
+        }
+        // retry kind: intentionally silent — background sweep will retry.
+      }
+
       dispatch(loadDevices());
 
       showToast({
-        message: `${friendlyName || pendingDevice.name} added successfully`,
+        message: `${finalFriendlyName} added successfully`,
         type: "success",
         duration: 2500,
       });
@@ -230,10 +319,13 @@ export default function AddDeviceScreen() {
       }, 300);
     } catch (error: any) {
       console.error("[AddDevice] Add error:", error);
+      // Roll back the local save on unexpected errors in the local path.
+      dispatch(removeDeviceAction(localId));
       Alert.alert("Error", "Failed to add device. Please try again.");
     } finally {
       setConnecting(null);
       setPendingDevice(null);
+      setPendingCuffSize(null);
       setFriendlyName("");
     }
   };
@@ -241,7 +333,10 @@ export default function AddDeviceScreen() {
   // Handle QR code scan
   const handleQRCode = (code: string) => {
     setShowQRScanner(false);
-    console.log("[AddDevice] QR Code scanned:", code);
+    // QR code contains device serial — dev only.
+    if (__DEV__) {
+      console.log("[AddDevice] QR Code scanned:", code);
+    }
 
     // Expected format: "TYPE:MAC" e.g., "BP3L:A4C1386B2E90"
     const parts = code.split(":");
@@ -341,7 +436,7 @@ export default function AddDeviceScreen() {
               </View>
             )}
           </View>
-          <Text style={styles.deviceMac}>{item.mac}</Text>
+          <Text style={styles.deviceMac}>Serial: {item.mac}</Text>
           <Text style={styles.deviceType}>
             {deviceService.getFriendlyTypeName(item.type)}
           </Text>
@@ -409,20 +504,6 @@ export default function AddDeviceScreen() {
         </Text>
       </View>
 
-        {debugLogs.length > 0 && (
-        <View style={{ backgroundColor: '#1a1a2e', maxHeight: 200, padding: 8 }}>
-            <FlatList
-            data={debugLogs}
-            renderItem={({ item }) => (
-                <Text style={{ color: '#0f0', fontSize: 11, fontFamily: 'monospace' }}>{item}</Text>
-            )}
-            keyExtractor={(_, i) => `log-${i}`}
-            nestedScrollEnabled
-            />
-        </View>
-        )}
-
-
       {/* Device List */}
       <FlatList
         data={devices}
@@ -486,6 +567,68 @@ export default function AddDeviceScreen() {
         </View>
       </Modal>
 
+      {/* Cuff Size Modal — BP devices only */}
+      <Modal visible={showCuffModal} transparent animationType="fade">
+        <View style={styles.nameModalOverlay}>
+          <View style={styles.nameModalContainer}>
+            <Text style={styles.nameModalTitle}>Select Cuff Size</Text>
+            <Text style={styles.nameModalSubtitle}>
+              Which cuff is attached to this blood-pressure monitor?
+            </Text>
+
+            <TouchableOpacity
+              style={styles.cuffOption}
+              onPress={() => handleCuffSizeSelected("STANDARD")}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="radio-button-unchecked" size={22} color="#00509f" />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.cuffOptionTitle}>Standard cuff</Text>
+                <Text style={styles.cuffOptionSub}>Fits most adults</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#999" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cuffOption}
+              onPress={() => handleCuffSizeSelected("LARGE")}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="radio-button-unchecked" size={22} color="#00509f" />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.cuffOptionTitle}>Large cuff</Text>
+                <Text style={styles.cuffOptionSub}>For larger upper arms</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#999" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cuffOption}
+              onPress={() => handleCuffSizeSelected("XXL")}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="radio-button-unchecked" size={22} color="#00509f" />
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.cuffOptionTitle}>XXL cuff (accessory)</Text>
+                <Text style={styles.cuffOptionSub}>Oversized cuff on a Standard monitor</Text>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color="#999" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.nameModalCancel, { marginTop: 16 }]}
+              onPress={() => {
+                setShowCuffModal(false);
+                setPendingDevice(null);
+                setPendingCuffSize(null);
+              }}
+            >
+              <Text style={styles.nameModalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Friendly Name Modal */}
       <Modal visible={showNameModal} transparent animationType="fade">
         <View style={styles.nameModalOverlay}>
@@ -518,7 +661,7 @@ export default function AddDeviceScreen() {
                   <Text style={styles.previewType}>
                     {deviceService.getFriendlyTypeName(pendingDevice.type)}
                   </Text>
-                  <Text style={styles.previewMac}>{pendingDevice.mac}</Text>
+                  <Text style={styles.previewMac}>Serial: {pendingDevice.mac}</Text>
                 </View>
                 {pendingDevice.source === "BLE_GATT" && (
                   <View style={styles.sourceBadge}>
@@ -853,5 +996,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#fff",
+  },
+  cuffOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#e0e0e0",
+    backgroundColor: "#fafafa",
+    marginBottom: 10,
+  },
+  cuffOptionTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#333",
+  },
+  cuffOptionSub: {
+    fontSize: 12,
+    color: "#666",
+    marginTop: 2,
   },
 });

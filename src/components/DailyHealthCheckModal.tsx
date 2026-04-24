@@ -14,7 +14,7 @@ import {
   saveScreeningResponse,
   DailyHealthCheckData,
 } from "../services/sqliteService";
-import { syncScreeningResponses } from "../services/screeningSyncService";
+import { syncPendingScreening } from "../services/vitalsSyncService";
 
 interface DailyHealthCheckModalProps {
   visible: boolean;
@@ -69,33 +69,45 @@ export default function DailyHealthCheckModal({
   const canSubmit = hasHeadaches !== null && hasVisualDisturbances !== null;
 
   const handleSubmit = async () => {
-  if (!canSubmit) return;
+    if (!canSubmit) return;
 
-  setSubmitting(true);
+    setSubmitting(true);
 
-  const data: DailyHealthCheckData = {
-    hasHeadaches: hasHeadaches!,
-    hasVisualDisturbances: hasVisualDisturbances!,
-    details: details.trim() || undefined,
+    const data: DailyHealthCheckData = {
+      hasHeadaches: hasHeadaches!,
+      hasVisualDisturbances: hasVisualDisturbances!,
+      details: details.trim() || undefined,
+    };
+
+    // Save to local DB. If this throws, the patient's answer never left
+    // the phone — keep the modal open so they can retry. Silently
+    // advancing to the BP-capture screen on a failed save is a data-loss
+    // path and breaks the preeclampsia-screening contract.
+    try {
+      saveScreeningResponse("daily_health_check", data);
+    } catch (err) {
+      console.error("[DailyHealthCheck] Failed to save screening response:", err);
+      setSubmitting(false);
+      // Keep modal open. Could add a toast provider reference here later —
+      // for now, errors are visible in the logs and the modal stays
+      // open so the user can try again.
+      return;
+    }
+
+    // Trigger background sync to EMR
+    syncPendingScreening().catch((err) => {
+      console.error("[DailyHealthCheck] Background sync error:", err);
+    });
+
+    setSubmitting(false);
+
+    // Reset for next time
+    setHasHeadaches(null);
+    setHasVisualDisturbances(null);
+    setDetails("");
+
+    onComplete(data);
   };
-
-  // Save to local DB
-  saveScreeningResponse("daily_health_check", data);
-
-  // Trigger background sync to EMR
-  syncScreeningResponses().catch((err) => {
-    console.error("[DailyHealthCheck] Background sync error:", err);
-  });
-
-  setSubmitting(false);
-
-  // Reset for next time
-  setHasHeadaches(null);
-  setHasVisualDisturbances(null);
-  setDetails("");
-
-  onComplete(data);
-};
 
   return (
     <Modal

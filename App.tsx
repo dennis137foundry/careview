@@ -10,6 +10,7 @@ import { store } from "./src/redux/store";
 import { initDB } from "./src/services/sqliteService";
 import { loadUser } from "./src/redux/userSlice";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
+import { loadAuthTokensFromStorage } from "./src/services/authToken";
 import AppNavigator from "./src/navigation/AppNavigator";
 import { ToastProvider } from "./src/components/Toast";
 
@@ -27,6 +28,9 @@ function RootApp() {
     const init = async () => {
       initDB();
       await dispatch(loadUser());
+      // Hydrate the in-memory JWT cache from SQLite so the first sync
+      // attempt after launch already has a Bearer header available.
+      await loadAuthTokensFromStorage();
 
       // Initialize vitals sync service (monitors network, retries failed syncs)
       cleanupSync = initializeVitalsSync();

@@ -1,12 +1,13 @@
 import { createSlice, PayloadAction, createAsyncThunk } from "@reduxjs/toolkit";
-import { 
-  getDevices, 
-  saveDevice as saveDeviceToDB, 
+import {
+  getDevices,
+  saveDevice as saveDeviceToDB,
   removeDevice as removeDeviceFromDB,
   updateDeviceBottleCode as updateBottleCodeInDB,
   updateDeviceFriendlyName as updateFriendlyNameInDB,
   updateDeviceName as updateNameInDB,
-  DeviceRecord 
+  updateDeviceEmrUnits as updateEmrUnitsInDB,
+  DeviceRecord
 } from "../services/sqliteService";
 
 interface DeviceState {
@@ -71,6 +72,24 @@ const deviceSlice = createSlice({
         updateNameInDB(deviceId, newName);
       }
     },
+    // Populate EMR inventory-unit IDs after device_register.php succeeds.
+    // emrAccessoryUnitId is only set for XXL-cuff BP pairs.
+    setDeviceEmrUnits: (
+      state,
+      action: PayloadAction<{
+        deviceId: string;
+        emrUnitId: number;
+        emrAccessoryUnitId?: number | null;
+      }>
+    ) => {
+      const { deviceId, emrUnitId, emrAccessoryUnitId } = action.payload;
+      const device = state.devices.find(d => d.id === deviceId);
+      if (device) {
+        device.emrUnitId = emrUnitId;
+        device.emrAccessoryUnitId = emrAccessoryUnitId ?? null;
+        updateEmrUnitsInDB(deviceId, emrUnitId, emrAccessoryUnitId ?? null);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(loadDevices.fulfilled, (state, action) => {
@@ -80,12 +99,13 @@ const deviceSlice = createSlice({
   },
 });
 
-export const { 
-  addDevice, 
-  removeDevice, 
-  updateBottleCode, 
+export const {
+  addDevice,
+  removeDevice,
+  updateBottleCode,
   updateFriendlyName,
   renameDevice,
+  setDeviceEmrUnits,
 } = deviceSlice.actions;
 
 export default deviceSlice.reducer;

@@ -60,7 +60,10 @@ export default function ScanQRScreen({ navigation, route }: any) {
       isProcessingRef.current = true;
       setScanned(true);
 
-      console.log("📷 QR Code scanned:", value);
+      // QR contents can include a device serial — dev only.
+      if (__DEV__) {
+        console.log("📷 QR Code scanned:", value);
+      }
 
       if (isUpdatingExisting) {
         Alert.alert(

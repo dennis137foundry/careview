@@ -8,7 +8,7 @@ const db = open({ name: "trinity.db" });
 // ----------------------
 
 export function initDB() {
-  // Create user table with all fields including BP thresholds
+  // Create user table with all fields including BP thresholds + auth tokens
   db.execute(`
     CREATE TABLE IF NOT EXISTS user (
       patientId TEXT PRIMARY KEY,
@@ -19,7 +19,9 @@ export function initDB() {
       providerLastName TEXT,
       providerPracticeName TEXT,
       systolicHigh INTEGER DEFAULT 140,
-      diastolicHigh INTEGER DEFAULT 90
+      diastolicHigh INTEGER DEFAULT 90,
+      authToken TEXT,
+      refreshToken TEXT
     );
   `);
 
@@ -36,8 +38,22 @@ export function initDB() {
   } catch (e) {
     // Column already exists
   }
+  // Migration: JWT + refresh token storage (Wave 5 auth migration)
+  try {
+    db.execute("ALTER TABLE user ADD COLUMN authToken TEXT;");
+    console.log("[DB] Added 'authToken' column to user");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE user ADD COLUMN refreshToken TEXT;");
+    console.log("[DB] Added 'refreshToken' column to user");
+  } catch (e) {
+    // Column already exists
+  }
 
-  // Create devices table with all columns including friendlyName and source
+  // Create devices table with all columns including friendlyName, source,
+  // EMR inventory-unit IDs, and cuff size (BP only).
   db.execute(`
     CREATE TABLE IF NOT EXISTS devices (
       id TEXT PRIMARY KEY,
@@ -47,7 +63,10 @@ export function initDB() {
       model TEXT,
       bottleCode TEXT,
       friendlyName TEXT,
-      source TEXT DEFAULT 'iHealthSDK'
+      source TEXT DEFAULT 'iHealthSDK',
+      emrUnitId INTEGER DEFAULT NULL,
+      emrAccessoryUnitId INTEGER DEFAULT NULL,
+      cuffSize TEXT DEFAULT NULL
     );
   `);
 
@@ -92,6 +111,24 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE devices ADD COLUMN source TEXT DEFAULT 'iHealthSDK';");
     console.log("[DB] Added 'source' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN emrUnitId INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'emrUnitId' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN emrAccessoryUnitId INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'emrAccessoryUnitId' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN cuffSize TEXT DEFAULT NULL;");
+    console.log("[DB] Added 'cuffSize' column to devices");
   } catch (e) {
     // Column already exists
   }
@@ -158,31 +195,49 @@ export interface LocalUser {
   providerPracticeName: string;
   systolicHigh?: number;
   diastolicHigh?: number;
+  authToken?: string | null;
+  refreshToken?: string | null;
 }
 
 export function saveUser(u: LocalUser) {
-  try {
-    db.execute("DELETE FROM user;");
-    db.execute(
-      `INSERT INTO user 
-       (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        u.patientId,
-        u.firstName,
-        u.lastName,
-        u.phone,
-        u.providerFirstName,
-        u.providerLastName,
-        u.providerPracticeName,
-        u.systolicHigh ?? 140,
-        u.diastolicHigh ?? 90,
-      ]
-    );
+  // Writes throw on failure. Callers (authService.verifyCode) must catch and
+  // surface to the user — a silently-failed user save masked as login success
+  // leads to HIPAA leaks and orphaned sync state.
+  db.execute("DELETE FROM user;");
+  db.execute(
+    `INSERT INTO user
+     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+    [
+      u.patientId,
+      u.firstName,
+      u.lastName,
+      u.phone,
+      u.providerFirstName,
+      u.providerLastName,
+      u.providerPracticeName,
+      u.systolicHigh ?? 140,
+      u.diastolicHigh ?? 90,
+      u.authToken ?? null,
+      u.refreshToken ?? null,
+    ]
+  );
+  // Patient ID — dev only.
+  if (__DEV__) {
     console.log("[DB] User saved:", u.patientId);
-  } catch (e) {
-    console.error("[DB] Failed to save user:", e);
   }
+}
+
+/**
+ * Update only the auth tokens on the existing user row. Called after a
+ * successful refresh_token.php rotation. Throws on failure — stale
+ * tokens in SQLite would cause every subsequent request to 401.
+ */
+export function updateAuthTokens(authToken: string | null, refreshToken: string | null) {
+  db.execute("UPDATE user SET authToken = ?, refreshToken = ?;", [
+    authToken,
+    refreshToken,
+  ]);
 }
 
 export function clearUser() {
@@ -197,7 +252,7 @@ export function clearUser() {
 export async function getUser(): Promise<LocalUser | null> {
   try {
     const res = db.execute(
-      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh FROM user LIMIT 1;"
+      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken FROM user LIMIT 1;"
     );
     if (!res.rows || res.rows.length === 0) return null;
 
@@ -268,6 +323,8 @@ export function setFirstLaunchComplete(): void {
 // ----------------------
 export type DeviceSource = "iHealthSDK" | "BLE_GATT";
 
+export type CuffSize = "STANDARD" | "LARGE" | "XXL";
+
 export type DeviceRecord = {
   id: string;
   name: string;
@@ -277,13 +334,24 @@ export type DeviceRecord = {
   bottleCode?: string; // Legacy - was for BG5 test strips
   friendlyName?: string; // User-customizable display name
   source?: DeviceSource; // 'iHealthSDK' or 'BLE_GATT'
+
+  // EMR inventory linkage (populated after successful device_register.php
+  // call). NULL until registration succeeds; readings can still sync
+  // without a unit_id while registration is pending.
+  emrUnitId?: number | null;
+  emrAccessoryUnitId?: number | null; // XXL cuffs register as a second unit
+  cuffSize?: CuffSize | null; // BP only; null for scales
 };
 
 export function saveDevice(device: DeviceRecord) {
   try {
-    console.log("[DB] Saving device:", JSON.stringify(device));
+    // Full device payload includes MAC / serial and friendly name
+    // (sometimes the patient's name or room). PHI — dev only.
+    if (__DEV__) {
+      console.log("[DB] Saving device:", JSON.stringify(device));
+    }
     db.execute(
-      "INSERT OR REPLACE INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
+      "INSERT OR REPLACE INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
       [
         device.id,
         device.name,
@@ -293,11 +361,61 @@ export function saveDevice(device: DeviceRecord) {
         device.bottleCode || null,
         device.friendlyName || null,
         device.source || "iHealthSDK",
+        device.emrUnitId ?? null,
+        device.emrAccessoryUnitId ?? null,
+        device.cuffSize ?? null,
       ]
     );
-    console.log("[DB] Device saved:", device.id);
+    if (__DEV__) {
+      console.log("[DB] Device saved:", device.id);
+    }
   } catch (e) {
     console.error("[DB] Failed to save device:", e);
+  }
+}
+
+/**
+ * Populate the EMR inventory-unit IDs on an existing device row after
+ * device_register.php returns them. emrAccessoryUnitId is only set for
+ * XXL-cuff BP registrations; pass null for everything else.
+ */
+export function updateDeviceEmrUnits(
+  deviceId: string,
+  emrUnitId: number | null,
+  emrAccessoryUnitId: number | null
+) {
+  try {
+    db.execute(
+      "UPDATE devices SET emrUnitId = ?, emrAccessoryUnitId = ? WHERE id = ?;",
+      [emrUnitId, emrAccessoryUnitId, deviceId]
+    );
+    if (__DEV__) {
+      console.log("[DB] EMR unit IDs updated for device:", deviceId);
+    }
+  } catch (e) {
+    console.error("[DB] Failed to update EMR unit IDs:", e);
+  }
+}
+
+/**
+ * Devices paired locally but not yet registered with the EMR inventory.
+ * Picked up by the background sync sweep to retry device_register.php.
+ */
+export function getDevicesWithoutEmrUnitId(): DeviceRecord[] {
+  try {
+    const res = db.execute(
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE emrUnitId IS NULL;"
+    );
+    const out: DeviceRecord[] = [];
+    if (res.rows) {
+      for (let i = 0; i < res.rows.length; i++) {
+        out.push(res.rows.item(i) as DeviceRecord);
+      }
+    }
+    return out;
+  } catch (e) {
+    console.error("[DB] Failed to get devices without emrUnitId:", e);
+    return [];
   }
 }
 
@@ -345,7 +463,7 @@ export function updateDeviceName(deviceId: string, newName: string) {
 export function getDevices(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source FROM devices ORDER BY name;"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices ORDER BY name;"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -364,7 +482,7 @@ export function getDevices(): DeviceRecord[] {
 export function getDevice(id: string): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source FROM devices WHERE id = ?;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE id = ?;",
       [id]
     );
     if (res.rows && res.rows.length > 0) {
@@ -380,7 +498,7 @@ export function getDevice(id: string): DeviceRecord | null {
 export function getDeviceByType(type: "BP" | "SCALE"): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source FROM devices WHERE type = ? LIMIT 1;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE type = ? LIMIT 1;",
       [type]
     );
     if (res.rows && res.rows.length > 0) {
@@ -422,34 +540,37 @@ export type SavedReading = {
 export function saveReading(
   r: Omit<SavedReading, "id" | "ts"> & { id?: string; ts?: number }
 ) {
+  // Writes throw on failure. A silently-failed reading save looks like
+  // success to the capture flow, hands off a nothing-row to the sync loop,
+  // and loses the patient's measurement. Callers must catch + surface.
   const id =
     r.id || `reading_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const ts = r.ts || Date.now();
-  try {
-    db.execute(
-      "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-      [
-        id,
-        r.deviceId,
-        r.deviceName,
-        r.type,
-        r.value ?? null,
-        r.value2 ?? null,
-        r.heartRate ?? null,
-        r.unit,
-        ts,
-        r.synced ? 1 : 0,
-        r.measurementCondition ?? null,
-      ]
-    );
+  db.execute(
+    "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+    [
+      id,
+      r.deviceId,
+      r.deviceName,
+      r.type,
+      r.value ?? null,
+      r.value2 ?? null,
+      r.heartRate ?? null,
+      r.unit,
+      ts,
+      r.synced ? 1 : 0,
+      r.measurementCondition ?? null,
+    ]
+  );
+  // Reading ID + measurement_condition (contains pulse for BP) — PHI.
+  // Dev only.
+  if (__DEV__) {
     console.log(
       "[DB] Reading saved:",
       id,
       "measurementCondition:",
       r.measurementCondition
     );
-  } catch (e) {
-    console.error("[DB] Failed to save reading:", e);
   }
 }
 
@@ -577,21 +698,22 @@ export function saveScreeningResponse(
   type: ScreeningType,
   data: DailyHealthCheckData | UrineProteinData
 ): string {
+  // Writes throw on failure. Callers (DailyHealthCheckModal, UrineProteinModal)
+  // must catch and keep the modal open — otherwise the patient sees a
+  // success screen while their clinical answer never leaves the phone.
   const id = `screening_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const timestamp = Date.now();
   const dataJson = JSON.stringify(data);
 
-  try {
-    db.execute(
-      "INSERT INTO screening_responses (id, type, timestamp, data, synced) VALUES (?, ?, ?, ?, 0);",
-      [id, type, timestamp, dataJson]
-    );
+  db.execute(
+    "INSERT INTO screening_responses (id, type, timestamp, data, synced) VALUES (?, ?, ?, ?, 0);",
+    [id, type, timestamp, dataJson]
+  );
+  // Screening IDs link to PHI in the EMR — dev only.
+  if (__DEV__) {
     console.log("[DB] Screening response saved:", type, id);
-    return id;
-  } catch (e) {
-    console.error("[DB] Failed to save screening response:", e);
-    return "";
   }
+  return id;
 }
 
 /**
@@ -766,11 +888,15 @@ export function hasUrineProteinDeferredToday(): boolean {
 
 
 export function wipeAllPatientData() {
+  // Called when a different patient logs in (HIPAA). Must clear every table
+  // that holds prior-patient data, including the `user` row itself — leaving
+  // the old user row in place is a PII leak if the subsequent saveUser fails.
   try {
     db.execute("DELETE FROM readings;");
     db.execute("DELETE FROM devices;");
     db.execute("DELETE FROM screening_responses;");
     db.execute("DELETE FROM app_settings;");
+    db.execute("DELETE FROM user;");
   } catch (e) {
     console.error("Failed to wipe patient data:", e);
     throw e;

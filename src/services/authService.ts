@@ -2,6 +2,7 @@
 import { Alert } from "react-native";
 import { saveUser, getUser, LocalUser, wipeAllPatientData } from "./sqliteService";
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
+import { setAuthTokens, clearAuthTokens } from "./authToken";
 
 const API_BASE = "https://trinityemr.com/api/careviewapp";
 const REQUEST_TIMEOUT = 10000; // 10 seconds
@@ -93,7 +94,10 @@ const authService = {
    */
   async sendCode(phone: string): Promise<boolean> {
     try {
-      console.log("[Auth] Sending code to:", phone);
+      // Phone number is PHI — dev builds only.
+      if (__DEV__) {
+        console.log("[Auth] Sending code to:", phone);
+      }
 
       const response = await fetchWithRetry(`${API_BASE}/send_code.php`, {
         method: "POST",
@@ -102,7 +106,10 @@ const authService = {
       });
 
       const data = await response.json();
-      console.log("[Auth] send_code response:", data);
+      // Response may echo patientId — dev builds only.
+      if (__DEV__) {
+        console.log("[Auth] send_code response:", data);
+      }
 
       if (data.success) {
         return true;
@@ -135,7 +142,10 @@ const authService = {
    */
   async verifyCode(phone: string, code: string): Promise<LocalUser | null> {
     try {
-      console.log("[Auth] Verifying code for:", phone);
+      // Phone is PHI — dev builds only.
+      if (__DEV__) {
+        console.log("[Auth] Verifying code for:", phone);
+      }
 
       const response = await fetchWithRetry(`${API_BASE}/verify_code.php`, {
         method: "POST",
@@ -144,7 +154,11 @@ const authService = {
       });
 
       const data = await response.json();
-      console.log("[Auth] verify_code response:", data);
+      // Response contains full patient + provider + thresholds — PHI.
+      // Dev builds only.
+      if (__DEV__) {
+        console.log("[Auth] verify_code response:", data);
+      }
 
       if (!data.success) {
         if (data.error === "invalid_or_expired_code") {
@@ -161,9 +175,14 @@ const authService = {
       const systolicHigh = bpThresholds.systolicHigh ?? 140;
       const diastolicHigh = bpThresholds.diastolicHigh ?? 90;
 
-      console.log("[Auth] BP Thresholds from server:", { systolicHigh, diastolicHigh });
+      // Per-patient thresholds — PHI. Dev builds only.
+      if (__DEV__) {
+        console.log("[Auth] BP Thresholds from server:", { systolicHigh, diastolicHigh });
+      }
 
-      // Build LocalUser from response
+      // Build LocalUser from response. JWT + refresh token come from the
+      // server's auth response and get persisted alongside the rest of the
+      // user row so they survive app restarts.
       const user: LocalUser = {
         patientId: String(data.patient.patientId),
         firstName: data.patient.firstName || "",
@@ -174,23 +193,48 @@ const authService = {
         providerPracticeName: data.provider?.practiceName || "",
         systolicHigh,
         diastolicHigh,
+        authToken: data.token ?? null,
+        refreshToken: data.refreshToken ?? null,
       };
 
       // ---------------------------------------------------------------
       // HIPAA safeguard: if a different patient was previously signed in,
       // wipe all local data before proceeding. Same patient keeps data.
+      //
+      // Both wipe and save can throw. We must NOT advance to the Main
+      // navigator if either fails — a half-wiped DB with the old patient's
+      // readings and the new patient's user row is exactly the HIPAA
+      // leak the safeguard exists to prevent.
       // ---------------------------------------------------------------
-      const previousUser = await getUser();
-      if (previousUser && previousUser.patientId !== user.patientId) {
-        console.log(
-          `[Auth] Different patient detected (was ${previousUser.patientId}, now ${user.patientId}) — wiping local data`
+      try {
+        const previousUser = await getUser();
+        if (previousUser && previousUser.patientId !== user.patientId) {
+          // Patient IDs in this log — dev only.
+          if (__DEV__) {
+            console.log(
+              `[Auth] Different patient detected (was ${previousUser.patientId}, now ${user.patientId}) — wiping local data`
+            );
+          }
+          wipeAllPatientData();
+          // Clear cached in-memory tokens too so no stale Bearer header
+          // fires between the wipe and the new saveUser below.
+          clearAuthTokens();
+        }
+        saveUser(user);
+        // Hydrate the in-memory token cache from the just-issued pair.
+        if (user.authToken && user.refreshToken) {
+          setAuthTokens(user.authToken, user.refreshToken);
+        }
+        // Patient ID — dev only.
+        if (__DEV__) {
+          console.log("[Auth] User saved to SQLite:", user.patientId);
+        }
+      } catch (dbError: any) {
+        console.error("[Auth] Failed to persist user or wipe prior data:", dbError);
+        throw new Error(
+          "Unable to complete sign-in due to a local storage error. Please try again, and contact support if the problem persists."
         );
-        wipeAllPatientData();
       }
-
-      // Persist to SQLite
-      saveUser(user);
-      console.log("[Auth] User saved to SQLite:", user.patientId);
 
       // Demo account: prompt user to seed sample data
       if (isDemoAccount(phone)) {

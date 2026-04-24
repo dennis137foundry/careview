@@ -65,7 +65,7 @@ class IHealthDevicesManager {
     return eventEmitter.addListener('onScanStateChanged', (data: any) => callback(data.scanning));
   }
 
-  async connect(mac: string, deviceType: DeviceType, options: ConnectOptions = {}): Promise<boolean> {
+  async connect(mac: string, deviceType: DeviceType, _options: ConnectOptions = {}): Promise<boolean> {
     const success = await NativeIHealthDevices.connectDevice(mac, deviceType);
     if (success) {
       this.connectedDevices.set(mac, { mac, name: '', type: deviceType, connectionType: this.getConnectionType(deviceType) });

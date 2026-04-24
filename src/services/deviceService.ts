@@ -70,7 +70,9 @@ export interface DebugLogEvent {
 const IHEALTH_DEVICE_TYPES = ["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"];
 
 /**
- * Map device type string to category
+ * Map device type string to category. Throws on unknown types instead of
+ * silently defaulting — a future device class silently miscategorized as BP
+ * would route readings to the wrong table and corrupt clinical data.
  */
 function getDeviceCategory(type: string): DeviceCategory {
   const upperType = type.toUpperCase();
@@ -80,7 +82,7 @@ function getDeviceCategory(type: string): DeviceCategory {
   if (upperType.includes("HS") || upperType.includes("SCALE") || upperType.includes("WEIGHT")) {
     return "SCALE";
   }
-  return "BP"; // Default
+  throw new Error(`Unknown device type: "${type}". Cannot classify as BP or SCALE.`);
 }
 
 /**
@@ -148,7 +150,10 @@ const deviceService = {
    */
   connect: async (mac: string, deviceType: string): Promise<boolean> => {
     try {
-      console.log("[deviceService] Connecting to:", mac, deviceType);
+      // MAC is the device serial — dev only.
+      if (__DEV__) {
+        console.log("[deviceService] Connecting to:", mac, deviceType);
+      }
       const result = await IHealthDevices.connectDevice(mac, deviceType);
       return result === true;
     } catch (error) {

@@ -24,6 +24,7 @@ import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
 import { hasDailyHealthCheckToday } from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
+import { useToast } from "../../components/Toast";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -55,6 +56,7 @@ const deviceThemes: Record<
 export default function CaptureScreen({ route, navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
+  const { showToast } = useToast();
   const { deviceId } = route.params ?? {};
 
   const [busy, setBusy] = useState(false);
@@ -462,7 +464,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   // Save functions
   const saveBPReading = useCallback(
-    (data: any) => {
+    async (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
       // Stop scan and disconnect — data is already received.
@@ -481,17 +483,30 @@ export default function CaptureScreen({ route, navigation }: any) {
         );
       }
 
-      dispatch(
-        addReadingAndPersist({
-          type: "BP",
-          deviceId: device?.id || "",
-          deviceName: device?.name || "BP Monitor",
-          value: data.systolic,
-          value2: data.diastolic,
-          heartRate: data.pulse,
-          unit: "mmHg",
-        })
-      );
+      try {
+        await dispatch(
+          addReadingAndPersist({
+            type: "BP",
+            deviceId: device?.id || "",
+            deviceName: device?.name || "BP Monitor",
+            value: data.systolic,
+            value2: data.diastolic,
+            heartRate: data.pulse,
+            unit: "mmHg",
+          })
+        ).unwrap();
+      } catch (err) {
+        console.error("[Capture] Failed to save BP reading:", err);
+        setBusy(false);
+        setStatusText("");
+        showToast({
+          message: "Couldn't save your reading. Please try again.",
+          type: "error",
+          duration: 4000,
+        });
+        return;
+      }
+
       setLastReading({
         systolic: data.systolic,
         diastolic: data.diastolic,
@@ -511,11 +526,12 @@ export default function CaptureScreen({ route, navigation }: any) {
       isBPHigh,
       bpThresholds,
       addLog,
+      showToast,
     ]
   );
 
   const saveWeightReading = useCallback(
-    (data: any) => {
+    async (data: any) => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
       // Stop scan and disconnect — data is already received.
@@ -529,22 +545,36 @@ export default function CaptureScreen({ route, navigation }: any) {
 
       const kg = parseFloat(data.weight) || 0;
       const lbs = Math.floor(kg * 2.20462 * 10) / 10;
-      dispatch(
-        addReadingAndPersist({
-          type: "SCALE",
-          deviceId: device?.id || "",
-          deviceName: device?.name || "Scale",
-          value: lbs,
-          unit: "lbs",
-        })
-      );
+
+      try {
+        await dispatch(
+          addReadingAndPersist({
+            type: "SCALE",
+            deviceId: device?.id || "",
+            deviceName: device?.name || "Scale",
+            value: lbs,
+            unit: "lbs",
+          })
+        ).unwrap();
+      } catch (err) {
+        console.error("[Capture] Failed to save weight reading:", err);
+        setBusy(false);
+        setStatusText("");
+        showToast({
+          message: "Couldn't save your reading. Please try again.",
+          type: "error",
+          duration: 4000,
+        });
+        return;
+      }
+
       setLastReading({ weight: lbs, kg });
       setStatusText(`${lbs} lbs`);
       setBusy(false);
       playSuccessAnimation();
       syncToEMR();
     },
-    [device, dispatch, playSuccessAnimation, syncToEMR]
+    [device, dispatch, playSuccessAnimation, syncToEMR, showToast]
   );
 
   // Listen for readings
