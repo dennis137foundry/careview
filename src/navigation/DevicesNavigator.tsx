@@ -5,6 +5,7 @@ import DevicesScreen from "../screens/Devices/DevicesScreen";
 import AddDeviceScreen from "../screens/Devices/AddDeviceScreen";
 import CaptureScreen from "../screens/Capture/CaptureScreen";
 import ScanQRScreen from "../screens/Devices/ScanQRScreen";
+import BG5SDebugScreen from "../screens/Devices/BG5SDebugScreen";
 
 export type DevicesStackParamList = {
   DevicesMain: undefined;
@@ -18,6 +19,7 @@ export type DevicesStackParamList = {
     deviceName?: string;
     returnTo?: 'AddDevice' | 'Capture';
   } | undefined;
+  BG5SDebug: undefined;
   Capture: { 
     deviceId: string;
     bottleCode?: string;
@@ -43,6 +45,11 @@ export default function DevicesNavigator() {
         name="ScanQR"
         component={ScanQRScreen}
         options={{ title: "Scan QR Code" }}
+      />
+      <Stack.Screen
+        name="BG5SDebug"
+        component={BG5SDebugScreen}
+        options={{ title: "BG5S Debug" }}
       />
       <Stack.Screen
         name="Capture"

@@ -278,14 +278,23 @@ export default function DevicesScreen({ navigation }: any) {
         {/* Header Row */}
         <View style={styles.headerRow}>
           <Text style={styles.title}>Your Devices</Text>
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => navigation.navigate("AddDevice")}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="add" size={20} color="#fff" />
-            <Text style={styles.addButtonText}>Add</Text>
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.debugButton}
+              onPress={() => navigation.navigate("BG5SDebug")}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="bug-report" size={20} color="#00509f" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.addButton}
+              onPress={() => navigation.navigate("AddDevice")}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="add" size={20} color="#fff" />
+              <Text style={styles.addButtonText}>Add</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Device List or Empty State */}
@@ -362,6 +371,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 16,
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  debugButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(0, 80, 159, 0.18)",
   },
   title: {
     fontSize: 28,

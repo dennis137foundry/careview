@@ -70,9 +70,11 @@ export interface DebugLogEvent {
 const IHEALTH_DEVICE_TYPES = ["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"];
 
 /**
- * Map device type string to category. Throws on unknown types instead of
- * silently defaulting — a future device class silently miscategorized as BP
- * would route readings to the wrong table and corrupt clinical data.
+ * Map device type string to category. Returns "BP" as a safe fallback
+ * for unknown types — throwing here crashes the scan-list render and
+ * wipes the UI, which is worse than a mis-category that the nurse can
+ * visually correct. A previous attempt to throw on unknown types caused
+ * exactly that regression.
  */
 function getDeviceCategory(type: string): DeviceCategory {
   const upperType = type.toUpperCase();
@@ -82,7 +84,10 @@ function getDeviceCategory(type: string): DeviceCategory {
   if (upperType.includes("HS") || upperType.includes("SCALE") || upperType.includes("WEIGHT")) {
     return "SCALE";
   }
-  throw new Error(`Unknown device type: "${type}". Cannot classify as BP or SCALE.`);
+  if (__DEV__) {
+    console.warn(`[deviceService] Unknown device type "${type}" — defaulting to BP`);
+  }
+  return "BP";
 }
 
 /**

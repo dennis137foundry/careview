@@ -36,6 +36,11 @@
 #import "Headers/HS4Controller.h"
 #import "Headers/HSMacroFile.h"
 
+// Glucose meter (iHealth SDK only, used by the TestFlight diagnostic screen)
+#import "Headers/BG5S.h"
+#import "Headers/BG5SController.h"
+#import "Headers/BGMacroFile.h"
+
 // ============================================================================
 // BLE GATT Service UUIDs (Bluetooth SIG Standard)
 // ============================================================================
@@ -50,7 +55,7 @@ static NSString * const kBLEBPFeatureCharUUID = @"2A49";        // Blood Pressur
 static NSString * const kBLEWeightMeasurementCharUUID = @"2A9D"; // Weight Measurement
 static NSString * const kBLEWeightFeatureCharUUID = @"2A9E";     // Weight Scale Feature
 
-@interface IHealthDevices () <CBCentralManagerDelegate, CBPeripheralDelegate>
+@interface IHealthDevices () <CBCentralManagerDelegate, CBPeripheralDelegate, BG5SDelegate>
 @end
 
 @implementation IHealthDevices {
@@ -67,6 +72,7 @@ static NSString * const kBLEWeightFeatureCharUUID = @"2A9E";     // Weight Scale
     BOOL _scanningForGATT;
     NSMutableDictionary *_discoveredGATTDevices;
     NSMutableDictionary *_gattPeripherals;
+    NSString *_bg5sDebugMac;
     
     // Connected GATT peripheral tracking
     CBPeripheral *_connectedGATTPeripheral;
@@ -116,7 +122,8 @@ RCT_EXPORT_MODULE();
 
 - (NSArray<NSString *> *)supportedEvents {
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
-             @"onBloodPressureReading", @"onWeightReading", @"onError", @"onDebugLog"];
+             @"onBloodPressureReading", @"onWeightReading", @"onBloodGlucoseReading",
+             @"onGlucoseMeterEvent", @"onError", @"onDebugLog"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -142,6 +149,25 @@ RCT_EXPORT_MODULE();
     if (_hasListeners) {
         [self sendEventWithName:name body:body];
     }
+}
+
+- (void)sendBG5SEvent:(NSString *)stage mac:(NSString *)mac message:(NSString *)message extra:(NSDictionary *)extra {
+    NSMutableDictionary *body = [@{
+        @"stage": stage ?: @"unknown",
+        @"mac": mac ?: @"",
+        @"type": @"BG5S",
+        @"message": message ?: @"",
+        @"source": @"iHealthSDK",
+        @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+    } mutableCopy];
+    if (extra) {
+        [body addEntriesFromDictionary:extra];
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self sendDebugLog:[NSString stringWithFormat:@"BG5S %@: %@", stage ?: @"event", message ?: @""]];
+        [self sendEventSafe:@"onGlucoseMeterEvent" body:body];
+    });
 }
 
 #pragma mark - CoreBluetooth Delegate (BLE GATT)
@@ -546,6 +572,7 @@ RCT_EXPORT_MODULE();
     [HS2Controller shareIHHs2Controller];
     [HS2SController shareIHHS2SController];
     [HS4Controller shareIHHs4Controller];
+    [BG5SController sharedController];
     
     _controllersInitialized = YES;
     [self sendDebugLog:@"🎮 All controllers initialized!"];
@@ -568,6 +595,27 @@ RCT_EXPORT_MODULE();
 - (BP5S *)getBP5SWithMac:(NSString *)mac {
     NSArray *devices = [[BP5SController sharedController] getAllCurrentInstance];
     for (BP5S *d in devices) if ([mac isEqualToString:d.serialNumber]) return d;
+    return nil;
+}
+
+- (NSString *)bg5sConnectedDeviceSummary {
+    NSArray *devices = [[BG5SController sharedController] getAllCurrentInstace];
+    NSMutableArray *serials = [NSMutableArray new];
+    for (BG5S *d in devices) {
+        if (d.serialNumber) [serials addObject:d.serialNumber];
+    }
+    return serials.count > 0 ? [serials componentsJoinedByString:@", "] : @"none";
+}
+
+- (BG5S *)getBG5SWithMac:(NSString *)mac {
+    NSArray *devices = [[BG5SController sharedController] getAllCurrentInstace];
+    NSString *target = [mac uppercaseString];
+    for (BG5S *d in devices) {
+        if ([[d.serialNumber uppercaseString] isEqualToString:target]) {
+            d.delegate = self;
+            return d;
+        }
+    }
     return nil;
 }
 
@@ -609,6 +657,12 @@ RCT_EXPORT_MODULE();
     [center addObserver:self selector:@selector(onConnected:) name:@"BP5SConnectNoti" object:nil];
     [center addObserver:self selector:@selector(onDisconnected:) name:@"BP5SDisConnectNoti" object:nil];
 
+    // BG5S glucose meter (diagnostic path only)
+    [center addObserver:self selector:@selector(onBG5SDiscover:) name:kNotificationNameBG5SDidDiscover object:nil];
+    [center addObserver:self selector:@selector(onBG5SConnected:) name:kNotificationNameBG5SConnectSuccess object:nil];
+    [center addObserver:self selector:@selector(onBG5SConnectFailed:) name:kNotificationNameBG5SConnectFail object:nil];
+    [center addObserver:self selector:@selector(onBG5SDisconnected:) name:kNotificationNameBG5SDidDisConnect object:nil];
+
     // HS2
     [center addObserver:self selector:@selector(onDiscover:) name:@"HS2Discover" object:nil];
     [center addObserver:self selector:@selector(onConnected:) name:@"HS2ConnectNoti" object:nil];
@@ -628,6 +682,7 @@ RCT_EXPORT_MODULE();
 }
 
 - (NSString *)typeFromName:(NSString *)name {
+    if ([name containsString:@"BG5S"]) return @"BG5S";
     if ([name containsString:@"BP3L"]) return @"BP3L";
     if ([name containsString:@"BP5S"]) return @"BP5S";
     if ([name containsString:@"BP5"]) return @"BP5";
@@ -722,6 +777,78 @@ RCT_EXPORT_MODULE();
     [self sendEventSafe:@"onConnectionStateChanged" body:@{@"mac": mac, @"type": type, @"connected": @NO}];
 }
 
+#pragma mark - BG5S Diagnostic Notification Handlers
+
+- (void)onBG5SDiscover:(NSNotification *)notification {
+    NSDictionary *info = notification.userInfo ?: @{};
+    NSString *mac = [self getMacFromNotification:notification forType:@"BG5S"];
+    [self sendBG5SEvent:@"discover" mac:mac message:@"SDK-only BG5S discovery notification" extra:@{
+        @"raw": info.description ?: @""
+    }];
+    [self sendEventSafe:@"onDeviceFound" body:@{
+        @"mac": mac ?: @"",
+        @"name": info[@"DeviceName"] ?: @"BG5S",
+        @"type": @"BG5S",
+        @"rssi": info[@"RSSI"] ?: @(-50),
+        @"source": @"iHealthSDK"
+    }];
+}
+
+- (void)onBG5SConnected:(NSNotification *)notification {
+    NSDictionary *info = notification.userInfo ?: @{};
+    NSString *mac = [self getMacFromNotification:notification forType:@"BG5S"];
+    _bg5sDebugMac = mac;
+    _connectedDevices[mac] = @{@"type": @"BG5S", @"mac": mac ?: @"", @"source": @"iHealthSDK"};
+
+    [self sendBG5SEvent:@"connected" mac:mac message:@"SDK-only BG5S connect notification" extra:@{
+        @"raw": info.description ?: @"",
+        @"connectedInstances": [self bg5sConnectedDeviceSummary]
+    }];
+
+    [self sendEventSafe:@"onConnectionStateChanged" body:@{
+        @"mac": mac ?: @"",
+        @"type": @"BG5S",
+        @"connected": @YES,
+        @"source": @"iHealthSDK"
+    }];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        BG5S *device = [self getBG5SWithMac:mac];
+        if (device) {
+            [self handleBG5SConnected:device mac:mac];
+        } else {
+            [self sendBG5SEvent:@"control_missing" mac:mac message:@"Connected notification fired, but BG5SController has no matching instance yet" extra:@{
+                @"connectedInstances": [self bg5sConnectedDeviceSummary]
+            }];
+        }
+    });
+}
+
+- (void)onBG5SConnectFailed:(NSNotification *)notification {
+    NSDictionary *info = notification.userInfo ?: @{};
+    NSString *mac = [self getMacFromNotification:notification forType:@"BG5S"];
+    NSString *message = [NSString stringWithFormat:@"SDK-only BG5S connect failed: %@", info.description ?: @""];
+    [self sendBG5SEvent:@"connect_failed" mac:mac message:message extra:@{@"raw": info.description ?: @""}];
+    [self sendEventSafe:@"onError" body:@{
+        @"mac": mac ?: @"",
+        @"type": @"BG5S",
+        @"code": @"BG5S_CONNECT_FAILED",
+        @"message": message
+    }];
+}
+
+- (void)onBG5SDisconnected:(NSNotification *)notification {
+    NSString *mac = [self getMacFromNotification:notification forType:@"BG5S"];
+    [_connectedDevices removeObjectForKey:mac];
+    [self sendBG5SEvent:@"disconnected" mac:mac message:@"SDK-only BG5S disconnect notification" extra:nil];
+    [self sendEventSafe:@"onConnectionStateChanged" body:@{
+        @"mac": mac ?: @"",
+        @"type": @"BG5S",
+        @"connected": @NO,
+        @"source": @"iHealthSDK"
+    }];
+}
+
 #pragma mark - SDK Device Disconnect (matches old working pattern)
 
 /**
@@ -734,6 +861,22 @@ RCT_EXPORT_MODULE();
  */
 - (void)disconnectSDKDevice:(NSString *)mac type:(NSString *)type {
     if (!mac || !type) return;
+    if ([type isEqualToString:@"BG5S"]) {
+        @try {
+            BG5S *device = [self getBG5SWithMac:mac];
+            if (device) {
+                [device disconnectDevice];
+                [self sendBG5SEvent:@"disconnect_command" mac:mac message:@"BG5S disconnectDevice called" extra:nil];
+            } else {
+                [self sendBG5SEvent:@"disconnect_no_device" mac:mac message:@"No BG5S instance available for disconnectDevice" extra:@{
+                    @"connectedInstances": [self bg5sConnectedDeviceSummary]
+                }];
+            }
+        } @catch (NSException *e) {
+            [self sendBG5SEvent:@"disconnect_exception" mac:mac message:e.reason ?: @"BG5S disconnect exception" extra:nil];
+        }
+        return;
+    }
     [self sendDebugLog:[NSString stringWithFormat:@"🔌 SDK disconnect: %@ (%@)", mac, type]];
     
     @try {
@@ -766,6 +909,174 @@ RCT_EXPORT_MODULE();
     } @catch (NSException *e) {
         [self sendDebugLog:[NSString stringWithFormat:@"⚠️ SDK disconnect exception for %@: %@", type, e.reason]];
     }
+}
+
+#pragma mark - BG5S Diagnostic Helpers
+
+- (NSString *)bg5sErrorText:(BG5SError)error {
+    switch (error) {
+        case BG5SError_LowBattery: return @"Low battery or charging-only state";
+        case BG5SError_PullOffStripWhenMeasuring: return @"Strip removed during measurement";
+        case BG5SError_UnvalidReferenceVoltage: return @"Reference voltage error";
+        case BG5SError_StripUsed: return @"Used strip or moisture detected";
+        case BG5SError_ErrorOccurInEEPROM: return @"EEPROM/read transmission error";
+        case BG5SError_LowTemperature: return @"Low temperature";
+        case BG5SError_HighTemperature: return @"High temperature";
+        case BG5SError_BluetoothError: return @"Bluetooth error";
+        case BG5SError_ResultLow: return @"Result below meter range";
+        case BG5SError_ResultHigh: return @"Result above meter range";
+        case BG5SError_FactoryError: return @"Factory/device error";
+        case BG5SError_InputParametersError: return @"Input parameter error";
+        case BG5SError_RecordTotalNumberNotMatchTransferTotalNumber: return @"Record count mismatch";
+        case BG5SError_RecordPacketNotMatch: return @"Record packet mismatch";
+        case BG5SError_RecordPackerIndexNotMatch: return @"Record packet index mismatch";
+        case BG5SError_CommandTimeout: return @"Command timeout";
+        case BG5SError_CommandNotSupport: return @"Command not supported";
+        case BG5SError_Disconnect: return @"Device disconnected";
+        default: return @"Unknown BG5S error";
+    }
+}
+
+- (NSString *)bg5sStripStateText:(BG5SStripState)state {
+    switch (state) {
+        case BG5SStripState_Insert: return @"strip_inserted";
+        case BG5SStripState_PullOff: return @"strip_removed";
+        default: return @"strip_unknown";
+    }
+}
+
+- (NSString *)bg5sChargeStateText:(BG5SChargeState)state {
+    switch (state) {
+        case BG5SChargeState_Charging: return @"charging";
+        case BG5SChargeState_ExitCharge: return @"not_charging";
+        default: return @"charge_unknown";
+    }
+}
+
+- (NSDictionary *)bg5sStatePayload:(BG5SStateInfo *)stateInfo {
+    if (!stateInfo) return @{};
+    return @{
+        @"batteryValue": @(stateInfo.batteryValue),
+        @"deviceDate": stateInfo.deviceDate.description ?: @"",
+        @"deviceTimeZone": @(stateInfo.deviceTimeZone),
+        @"stripUsedValue": @(stateInfo.stripUsedValue),
+        @"offlineDataQuantity": @(stateInfo.offlineDataQuantity),
+        @"bloodCodeVersion": @(stateInfo.bloodCodeVersion),
+        @"ctlCodeVersion": @(stateInfo.ctlCodeVersion),
+        @"unit": @(stateInfo.unit)
+    };
+}
+
+- (void)handleBG5SConnected:(BG5S *)device mac:(NSString *)mac {
+    device.delegate = self;
+    _bg5sDebugMac = mac;
+    [self sendBG5SEvent:@"control_found" mac:mac message:@"BG5SController returned live device instance and delegate was assigned" extra:@{
+        @"connectedInstances": [self bg5sConnectedDeviceSummary]
+    }];
+}
+
+- (void)bg5sStartBloodMeasure:(BG5S *)device mac:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject {
+    [self sendBG5SEvent:@"start_measure" mac:mac message:@"Calling startMeasure with BGMeasureMode_Blood (1)" extra:nil];
+    [device startMeasure:BGMeasureMode_Blood withSuccessBlock:^{
+        [self sendBG5SEvent:@"start_measure_ok" mac:mac message:@"SDK accepted startMeasure; insert strip/apply blood and wait for callbacks" extra:nil];
+        resolve(nil);
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *text = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"start_measure_error" mac:mac message:text extra:@{@"error": @(error)}];
+        reject(@"BG5S_START_ERROR", text, nil);
+    }];
+}
+
+- (void)bg5sPrepareAndStart:(BG5S *)device mac:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject {
+    device.delegate = self;
+    _bg5sDebugMac = mac;
+
+    void (^startBlock)(void) = ^{
+        [self bg5sStartBloodMeasure:device mac:mac resolver:resolve rejecter:reject];
+    };
+
+    void (^setUnitBlock)(void) = ^{
+        [self sendBG5SEvent:@"set_unit" mac:mac message:@"Setting unit to mg/dL (BGUnit_mgPmL = 2)" extra:nil];
+        [device setUnit:BGUnit_mgPmL successBlock:^{
+            [self sendBG5SEvent:@"set_unit_ok" mac:mac message:@"setUnit succeeded" extra:nil];
+            startBlock();
+        } errorBlock:^(BG5SError error, NSString *detailInfo) {
+            NSString *text = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+            [self sendBG5SEvent:@"set_unit_error" mac:mac message:text extra:@{@"error": @(error)}];
+            startBlock();
+        }];
+    };
+
+    void (^setTimeBlock)(void) = ^{
+        float timezone = (float)([[NSTimeZone localTimeZone] secondsFromGMTForDate:[NSDate date]] / 3600.0);
+        [self sendBG5SEvent:@"set_time" mac:mac message:[NSString stringWithFormat:@"Setting time with timezone %.2f", timezone] extra:nil];
+        [device setTimeWithDate:[NSDate date] timezone:timezone successBlock:^{
+            [self sendBG5SEvent:@"set_time_ok" mac:mac message:@"setTime succeeded" extra:nil];
+            setUnitBlock();
+        } errorBlock:^(BG5SError error, NSString *detailInfo) {
+            NSString *text = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+            [self sendBG5SEvent:@"set_time_error" mac:mac message:text extra:@{@"error": @(error)}];
+            setUnitBlock();
+        }];
+    };
+
+    [self sendBG5SEvent:@"query_state" mac:mac message:@"Querying BG5S state before measurement" extra:nil];
+    [device queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
+        [self sendBG5SEvent:@"query_state_ok" mac:mac message:@"queryStateInfo succeeded" extra:[self bg5sStatePayload:stateInfo]];
+        setTimeBlock();
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *text = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"query_state_error" mac:mac message:text extra:@{@"error": @(error)}];
+        setTimeBlock();
+    }];
+}
+
+- (void)device:(BG5S *)device occurError:(BG5SError)error errorDescription:(NSString *)errorDescription {
+    NSString *mac = device.serialNumber ?: _bg5sDebugMac ?: @"";
+    NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, errorDescription ?: @""];
+    [self sendBG5SEvent:@"device_error" mac:mac message:message extra:@{@"error": @(error)}];
+    [self sendEventSafe:@"onError" body:@{
+        @"mac": mac,
+        @"type": @"BG5S",
+        @"code": @"BG5S_DEVICE_ERROR",
+        @"error": @(error),
+        @"message": message
+    }];
+}
+
+- (void)device:(BG5S *)device stripStateDidUpdate:(BG5SStripState)state {
+    NSString *mac = device.serialNumber ?: _bg5sDebugMac ?: @"";
+    NSString *stateText = [self bg5sStripStateText:state];
+    [self sendBG5SEvent:@"strip_state" mac:mac message:stateText extra:@{@"state": @(state), @"stateText": stateText}];
+}
+
+- (void)deviceDropBlood:(BG5S *)device {
+    NSString *mac = device.serialNumber ?: _bg5sDebugMac ?: @"";
+    [self sendBG5SEvent:@"blood_detected" mac:mac message:@"Meter says enough blood was applied; waiting for result" extra:nil];
+}
+
+- (void)device:(BG5S *)device dataID:(NSString *)dataID measureReult:(NSInteger)result {
+    NSString *mac = device.serialNumber ?: _bg5sDebugMac ?: @"";
+    [self sendBG5SEvent:@"result" mac:mac message:[NSString stringWithFormat:@"BG5S result %ld mg/dL", (long)result] extra:@{
+        @"value": @(result),
+        @"unit": @"mg/dL",
+        @"dataID": dataID ?: @""
+    }];
+    [self sendEventSafe:@"onBloodGlucoseReading" body:@{
+        @"mac": mac,
+        @"type": @"BG5S",
+        @"value": @(result),
+        @"unit": @"mg/dL",
+        @"dataID": dataID ?: @"",
+        @"source": @"iHealthSDK",
+        @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+    }];
+}
+
+- (void)device:(BG5S *)device chargeStateDidUpdate:(BG5SChargeState)state {
+    NSString *mac = device.serialNumber ?: _bg5sDebugMac ?: @"";
+    NSString *stateText = [self bg5sChargeStateText:state];
+    [self sendBG5SEvent:@"charge_state" mac:mac message:stateText extra:@{@"state": @(state), @"stateText": stateText}];
 }
 
 #pragma mark - BP Handlers
@@ -871,6 +1182,107 @@ RCT_EXPORT_MODULE();
 }
 
 #pragma mark - RCT Methods
+
+RCT_EXPORT_METHOD(debugBG5SStartScan:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    @try {
+        [self sendBG5SEvent:@"scan_start" mac:@"" message:@"Starting SDK-only BG5S scan" extra:nil];
+        if (!_controllersInitialized) [self initializeControllers];
+        [[ScanDeviceController commandGetInstance] commandScanDeviceType:HealthDeviceType_BG5S];
+        [self sendEventSafe:@"onScanStateChanged" body:@{@"scanning": @YES, @"type": @"BG5S"}];
+        resolve(nil);
+    } @catch (NSException *e) {
+        NSString *message = [NSString stringWithFormat:@"BG5S scan exception: %@", e.reason ?: @""];
+        [self sendBG5SEvent:@"scan_exception" mac:@"" message:message extra:nil];
+        reject(@"BG5S_SCAN_EXCEPTION", message, nil);
+    }
+}
+
+RCT_EXPORT_METHOD(debugBG5SStopScan:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    @try {
+        [[ScanDeviceController commandGetInstance] commandStopScanDeviceType:HealthDeviceType_BG5S];
+        [self sendBG5SEvent:@"scan_stop" mac:@"" message:@"Stopped SDK-only BG5S scan" extra:nil];
+        [self sendEventSafe:@"onScanStateChanged" body:@{@"scanning": @NO, @"type": @"BG5S"}];
+        resolve(nil);
+    } @catch (NSException *e) {
+        NSString *message = [NSString stringWithFormat:@"BG5S stop scan exception: %@", e.reason ?: @""];
+        reject(@"BG5S_STOP_SCAN_EXCEPTION", message, nil);
+    }
+}
+
+RCT_EXPORT_METHOD(debugBG5SQueryState:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    BG5S *device = [self getBG5SWithMac:mac];
+    if (!device) {
+        NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+        [self sendBG5SEvent:@"query_state_no_device" mac:mac message:message extra:nil];
+        reject(@"BG5S_NO_DEVICE", message, nil);
+        return;
+    }
+
+    [self sendBG5SEvent:@"query_state" mac:mac message:@"Querying BG5S state" extra:nil];
+    [device queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
+        NSDictionary *payload = [self bg5sStatePayload:stateInfo];
+        [self sendBG5SEvent:@"query_state_ok" mac:mac message:@"queryStateInfo succeeded" extra:payload];
+        resolve(payload);
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"query_state_error" mac:mac message:message extra:@{@"error": @(error)}];
+        reject(@"BG5S_QUERY_STATE_ERROR", message, nil);
+    }];
+}
+
+RCT_EXPORT_METHOD(debugBG5SPrepareAndStart:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    BG5S *device = [self getBG5SWithMac:mac];
+    if (!device) {
+        NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+        [self sendBG5SEvent:@"prepare_no_device" mac:mac message:message extra:nil];
+        reject(@"BG5S_NO_DEVICE", message, nil);
+        return;
+    }
+    [self bg5sPrepareAndStart:device mac:mac resolver:resolve rejecter:reject];
+}
+
+RCT_EXPORT_METHOD(debugBG5SSetCodeAndStart:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    BG5S *device = [self getBG5SWithMac:mac];
+    if (!device) {
+        NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+        [self sendBG5SEvent:@"set_code_no_device" mac:mac message:message extra:nil];
+        reject(@"BG5S_NO_DEVICE", message, nil);
+        return;
+    }
+
+    device.delegate = self;
+    [self sendBG5SEvent:@"set_code" mac:mac message:@"Calling setCodeWithMeasureMode with BGMeasureMode_Blood (1), then startMeasure" extra:nil];
+    [device setCodeWithMeasureMode:BGMeasureMode_Blood resultBlock:^(BOOL success) {
+        [self sendBG5SEvent:@"set_code_result" mac:mac message:(success ? @"setCodeWithMeasureMode returned success" : @"setCodeWithMeasureMode returned false") extra:@{@"success": @(success)}];
+        [self bg5sStartBloodMeasure:device mac:mac resolver:resolve rejecter:reject];
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"set_code_error" mac:mac message:message extra:@{@"error": @(error)}];
+        reject(@"BG5S_SET_CODE_ERROR", message, nil);
+    }];
+}
+
+RCT_EXPORT_METHOD(debugBG5SReadDeviceInfo:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    BG5S *device = [self getBG5SWithMac:mac];
+    if (!device) {
+        NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+        [self sendBG5SEvent:@"read_info_no_device" mac:mac message:message extra:nil];
+        reject(@"BG5S_NO_DEVICE", message, nil);
+        return;
+    }
+
+    [self sendBG5SEvent:@"read_device_info" mac:mac message:@"Calling readDeviceInfoWithSuccessBlock" extra:nil];
+    [device readDeviceInfoWithSuccessBlock:^(NSDictionary *deviceInfoDic) {
+        NSDictionary *safeInfo = deviceInfoDic ?: @{};
+        NSDictionary *payload = @{@"raw": safeInfo.description ?: @""};
+        [self sendBG5SEvent:@"read_device_info_ok" mac:mac message:@"readDeviceInfo succeeded" extra:payload];
+        resolve(payload);
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"read_device_info_error" mac:mac message:message extra:@{@"error": @(error)}];
+        reject(@"BG5S_READ_INFO_ERROR", message, nil);
+    }];
+}
 
 RCT_EXPORT_METHOD(authenticate:(NSString *)licensePath resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
     [self sendDebugLog:@"🔑 Auth: Starting..."];
@@ -996,6 +1408,18 @@ RCT_EXPORT_METHOD(disconnectAll:(RCTPromiseResolveBlock)resolve rejecter:(RCTPro
 }
 
 RCT_EXPORT_METHOD(startMeasurement:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    NSDictionary *info = _connectedDevices[mac];
+    NSString *type = info[@"type"];
+    if ([type isEqualToString:@"BG5S"]) {
+        BG5S *device = [self getBG5SWithMac:mac];
+        if (!device) {
+            NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+            reject(@"BG5S_NO_DEVICE", message, nil);
+            return;
+        }
+        [self bg5sStartBloodMeasure:device mac:mac resolver:resolve rejecter:reject];
+        return;
+    }
     resolve(nil);
 }
 
@@ -1032,6 +1456,7 @@ RCT_EXPORT_METHOD(allowSleep) {
     if ([type isEqualToString:@"BP3L"]) return HealthDeviceType_BP3L;
     if ([type isEqualToString:@"BP5"]) return HealthDeviceType_BP5;
     if ([type isEqualToString:@"BP5S"]) return HealthDeviceType_BP5S;
+    if ([type isEqualToString:@"BG5S"]) return HealthDeviceType_BG5S;
     if ([type isEqualToString:@"HS2"]) return HealthDeviceType_HS2;
     if ([type isEqualToString:@"HS2S"]) return HealthDeviceType_HS2S;
     if ([type isEqualToString:@"HS4S"]) return HealthDeviceType_HS4;
