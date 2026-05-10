@@ -93,6 +93,7 @@ export default function AddDeviceScreen() {
 
   const subscriptionsRef = useRef<any[]>([]);
   const cameraDevice = useCameraDevice("back");
+  const scanRunRef = useRef(0);
 
   // QR Code Scanner
   const codeScanner = useCodeScanner({
@@ -157,14 +158,25 @@ export default function AddDeviceScreen() {
 
     setDevices([]);
     setScanning(true);
+    scanRunRef.current += 1;
+    const scanRun = scanRunRef.current;
 
     try {
       await deviceService.authenticate();
-      await deviceService.startScan(["BP3L", "BP5", "BP5S", "BG5S", "HS2", "HS2S", "HS4S"]);
+      await deviceService.startScan(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"]);
+
+      setTimeout(() => {
+        if (scanRunRef.current !== scanRun) return;
+        deviceService.startBG5SScan().catch((error) => {
+          console.warn("[AddDevice] BG5S scan phase failed:", error);
+        });
+      }, 5000);
 
       // Auto-stop after 30 seconds
       setTimeout(() => {
-        stopScan();
+        if (scanRunRef.current === scanRun) {
+          stopScan();
+        }
       }, 30000);
     } catch (error: any) {
       console.error("[AddDevice] Scan error:", error);
@@ -174,6 +186,7 @@ export default function AddDeviceScreen() {
   };
 
   const stopScan = async () => {
+    scanRunRef.current += 1;
     await deviceService.stopScan();
     setScanning(false);
   };

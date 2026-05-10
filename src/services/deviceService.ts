@@ -223,10 +223,28 @@ const deviceService = {
   },
 
   /**
+   * Start the proven BG5S-only SDK scan path.
+   * The iHealth BG5S meter is more reliable when scanned by itself.
+   */
+  startBG5SScan: async (): Promise<void> => {
+    try {
+      if (IHealthDevices.debugBG5SStartScan) {
+        await IHealthDevices.debugBG5SStartScan();
+      } else {
+        await IHealthDevices.startScan(["BG5S"]);
+      }
+    } catch (error) {
+      console.error("[deviceService] BG5S scan error:", error);
+      throw error;
+    }
+  },
+
+  /**
    * Stop all scanning
    */
   stopScan: async (): Promise<void> => {
     try {
+      await IHealthDevices.debugBG5SStopScan?.();
       await IHealthDevices.stopScan();
       console.log("[deviceService] Scan stopped");
     } catch (error) {

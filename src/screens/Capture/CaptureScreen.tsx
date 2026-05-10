@@ -945,15 +945,18 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     try {
       addLog("Starting scan...");
-      await IHealthDevices.startScan([
-        "BP3L",
-        "BP5",
-        "BP5S",
-        "BG5S",
-        "HS2S",
-        "HS2",
-        "HS4S",
-      ]);
+      if (device.type === "BG") {
+        await deviceService.startBG5SScan();
+      } else {
+        await IHealthDevices.startScan([
+          "BP3L",
+          "BP5",
+          "BP5S",
+          "HS2S",
+          "HS2",
+          "HS4S",
+        ]);
+      }
       addLog("Scan started");
     } catch (e: any) {
       addLog(`Scan error: ${e.message}`);
