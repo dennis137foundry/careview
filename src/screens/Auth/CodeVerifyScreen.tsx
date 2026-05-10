@@ -48,28 +48,52 @@ export default function CodeVerifyScreen({
     }
   }, []);
 
+  const focusInput = (index: number) => {
+    inputs.current[index]?.focus();
+  };
+
   const handleChange = (index: number, text: string) => {
+    if (busy) return;
+
     const clean = text.replace(/\D/g, "");
     const newValues = [...values];
 
-    // If they paste or type multiple digits, take the last one
+    if (clean.length > 1) {
+      const digits = clean.slice(0, DIGITS).split("");
+      const startIndex = digits.length === DIGITS ? 0 : index;
+
+      digits.forEach((digit, offset) => {
+        const targetIndex = startIndex + offset;
+        if (targetIndex < DIGITS) {
+          newValues[targetIndex] = digit;
+        }
+      });
+
+      setValues(newValues);
+
+      const code = newValues.join("");
+      if (code.length === DIGITS) {
+        inputs.current[DIGITS - 1]?.blur();
+        verify(newValues);
+      } else {
+        focusInput(Math.min(startIndex + digits.length, DIGITS - 1));
+      }
+      return;
+    }
+
     const char = clean.slice(-1);
     newValues[index] = char;
 
     setValues(newValues);
 
     if (char && index < DIGITS - 1) {
-      // Move to next input
-      const nextInput = inputs.current[index + 1];
-      if (nextInput) {
-        nextInput.focus();
-      }
+      focusInput(index + 1);
     }
 
     if (index === DIGITS - 1 && char) {
-      // Last digit entered; auto-submit if all filled
       const code = newValues.join("");
       if (code.length === DIGITS) {
+        inputs.current[DIGITS - 1]?.blur();
         verify(newValues);
       }
     }
@@ -87,6 +111,8 @@ export default function CodeVerifyScreen({
   };
 
   const verify = async (valsOverride?: string[]) => {
+    if (busy) return;
+
     const code = (valsOverride || values).join("");
 
     if (code.length !== DIGITS) {
@@ -164,13 +190,16 @@ export default function CodeVerifyScreen({
               }}
               style={[styles.codeInput, v ? styles.codeInputFilled : null]}
               keyboardType="number-pad"
-              maxLength={1}
               value={v}
               onChangeText={(text) => handleChange(i, text)}
               onKeyPress={(e) => handleKeyPress(i, e)}
               textAlign="center"
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete={Platform.OS === "android" ? "sms-otp" : "one-time-code"}
+              textContentType="oneTimeCode"
+              importantForAutofill="yes"
+              editable={!busy}
             />
           ))}
         </View>
