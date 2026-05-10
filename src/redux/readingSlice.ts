@@ -8,7 +8,7 @@ export const loadReadings = createAsyncThunk('readings/load', async () => {
 
 export const addReadingAndPersist = createAsyncThunk(
   'readings/addAndPersist',
-  async (payload: Omit<SavedReading, 'id'|'ts'>, { rejectWithValue }) => {
+  async (payload: Omit<SavedReading, 'id'|'ts'> & { id?: string; ts?: number }, { rejectWithValue }) => {
     try {
       const r: SavedReading = { 
         id: nanoid(), 

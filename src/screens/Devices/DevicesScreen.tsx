@@ -166,7 +166,11 @@ function SwipeableDeviceCard({
               <Text style={styles.meta}>
                 {lastReading.type === "BP"
                   ? `${lastReading.value}/${lastReading.value2} ${lastReading.unit}`
-                  : `${lastReading.value} ${lastReading.unit}`}{" "}
+                  : `${lastReading.value} ${lastReading.unit}${
+                      lastReading.type === "BG" && lastReading.measurementCondition
+                        ? ` - ${lastReading.measurementCondition}`
+                        : ""
+                    }`}{" "}
                 · {new Date(lastReading.ts).toLocaleDateString()}
               </Text>
             </View>
@@ -279,13 +283,15 @@ export default function DevicesScreen({ navigation }: any) {
         <View style={styles.headerRow}>
           <Text style={styles.title}>Your Devices</Text>
           <View style={styles.headerActions}>
-            <TouchableOpacity
-              style={styles.debugButton}
-              onPress={() => navigation.navigate("BG5SDebug")}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="bug-report" size={20} color="#00509f" />
-            </TouchableOpacity>
+            {__DEV__ ? (
+              <TouchableOpacity
+                style={styles.debugButton}
+                onPress={() => navigation.navigate("BG5SDebug")}
+                activeOpacity={0.8}
+              >
+                <MaterialIcons name="bug-report" size={20} color="#00509f" />
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               style={styles.addButton}
               onPress={() => navigation.navigate("AddDevice")}

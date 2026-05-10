@@ -5,23 +5,29 @@
  * Supports both iHealth SDK devices and generic BLE GATT devices.
  *
  * Device Sources:
- * - iHealthSDK: BP3L, BP5, BP5S, HS2, HS2S, HS4S
+ * - iHealthSDK: BP3L, BP5, BP5S, BG5S, HS2, HS2S, HS4S
  * - BLE_GATT: Any device advertising BP (0x1810) or Scale (0x181D) services
  */
 
-import { NativeModules, NativeEventEmitter, EmitterSubscription } from "react-native";
+import {
+  NativeModules,
+  NativeEventEmitter,
+  EmitterSubscription,
+  Platform,
+  PermissionsAndroid,
+} from "react-native";
 
 const { IHealthDevices } = NativeModules;
 const eventEmitter = new NativeEventEmitter(IHealthDevices);
 
 // Device type mapping
-export type DeviceCategory = "BP" | "SCALE";
+export type DeviceCategory = "BP" | "SCALE" | "BG";
 export type DeviceSource = "iHealthSDK" | "BLE_GATT";
 
 export interface DiscoveredDevice {
   mac: string;
   name: string;
-  type: string; // e.g., "BP3L", "HS2S", "GATT_BP", "GATT_SCALE"
+  type: string; // e.g., "BP3L", "BG5S", "HS2S", "GATT_BP", "GATT_SCALE"
   category?: DeviceCategory;
   rssi?: number;
   source: DeviceSource;
@@ -54,10 +60,21 @@ export interface WeightReading {
   timestamp?: number;
 }
 
-export interface DeviceError {
+export interface BloodGlucoseReading {
   mac: string;
   type: string;
-  error: number;
+  value: number;
+  unit: string;
+  dataID?: string;
+  source?: DeviceSource;
+  timestamp?: number;
+}
+
+export interface DeviceError {
+  mac?: string;
+  type?: string;
+  code?: string;
+  error?: number;
   message?: string;
 }
 
@@ -66,8 +83,20 @@ export interface DebugLogEvent {
   timestamp: number;
 }
 
+export interface BluetoothStatus {
+  available: boolean;
+  authorized: boolean;
+  poweredOn: boolean;
+  locationServicesEnabled?: boolean;
+  ready: boolean;
+  state: string;
+  message?: string;
+}
+
 // Supported iHealth device types for scanning
-const IHEALTH_DEVICE_TYPES = ["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"];
+const IHEALTH_DEVICE_TYPES = ["BP3L", "BP5", "BP5S", "BG5S", "HS2", "HS2S", "HS4S"];
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
  * Map device type string to category. Returns "BP" as a safe fallback
@@ -80,6 +109,9 @@ function getDeviceCategory(type: string): DeviceCategory {
   const upperType = type.toUpperCase();
   if (upperType.includes("BP") || upperType.includes("BLOOD")) {
     return "BP";
+  }
+  if (upperType.includes("BG") || upperType.includes("GLUCOSE")) {
+    return "BG";
   }
   if (upperType.includes("HS") || upperType.includes("SCALE") || upperType.includes("WEIGHT")) {
     return "SCALE";
@@ -119,6 +151,60 @@ const deviceService = {
     } catch (error) {
       return false;
     }
+  },
+
+  /**
+   * Read native Bluetooth permission/power state.
+   */
+  getBluetoothStatus: async (): Promise<BluetoothStatus> => {
+    try {
+      return await IHealthDevices.getBluetoothStatus();
+    } catch (error) {
+      console.error("[deviceService] Bluetooth status error:", error);
+      return {
+        available: true,
+        authorized: true,
+        poweredOn: true,
+        locationServicesEnabled: true,
+        ready: true,
+        state: "unknown",
+        message: "Bluetooth status is unavailable.",
+      };
+    }
+  },
+
+  /**
+   * Request Android BLE permissions and verify Bluetooth can scan now.
+   * iOS permission is controlled by CoreBluetooth; native status reports denied/off.
+   */
+  ensureBluetoothReady: async (): Promise<BluetoothStatus> => {
+    if (Platform.OS === "android") {
+      const permissions: string[] = [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
+
+      if (Platform.Version >= 31) {
+        permissions.push(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+        );
+      }
+
+      await PermissionsAndroid.requestMultiple(permissions as any);
+    }
+
+    let status = await deviceService.getBluetoothStatus();
+    if (status.state === "unknown" || status.state === "resetting") {
+      await wait(700);
+      status = await deviceService.getBluetoothStatus();
+    }
+
+    if (!status.ready) {
+      const error: any = new Error(status.message || "Bluetooth is not ready.");
+      error.code = status.state;
+      error.status = status;
+      throw error;
+    }
+
+    return status;
   },
 
   /**
@@ -291,6 +377,13 @@ const deviceService = {
   },
 
   /**
+   * Listen for blood glucose readings
+   */
+  onBloodGlucoseReading: (callback: (reading: BloodGlucoseReading) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onBloodGlucoseReading", callback);
+  },
+
+  /**
    * Listen for device errors
    */
   onError: (callback: (error: DeviceError) => void): EmitterSubscription => {
@@ -302,6 +395,13 @@ const deviceService = {
    */
   onDebugLog: (callback: (event: DebugLogEvent) => void): EmitterSubscription => {
     return eventEmitter.addListener("onDebugLog", callback);
+  },
+
+  /**
+   * Listen for native Bluetooth permission/power changes.
+   */
+  onBluetoothStateChanged: (callback: (status: BluetoothStatus) => void): EmitterSubscription => {
+    return eventEmitter.addListener("onBluetoothStateChanged", callback);
   },
 
   // ============================================================
@@ -328,6 +428,7 @@ const deviceService = {
       BP3L: "iHealth BP3L",
       BP5: "iHealth BP5",
       BP5S: "iHealth BP5S",
+      BG5S: "iHealth BG5S Glucose Meter",
       GATT_BP: "BLE Blood Pressure Monitor",
       HS2: "iHealth HS2",
       HS2S: "iHealth HS2S",

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   NativeEventEmitter,
   NativeModules,
   Platform,
@@ -32,6 +33,8 @@ type BusyAction =
   | "prepare"
   | "start"
   | "code"
+  | "offline"
+  | "delete"
   | null;
 
 function formatPayload(payload: any): string {
@@ -206,6 +209,34 @@ export default function BG5SDebugScreen({ navigation }: any) {
       return IHealthDevices.debugBG5SSetCodeAndStart(mac);
     });
 
+  const getOfflineData = () =>
+    run("offline", "Get stored/offline data", async () => {
+      const mac = requireMac();
+      if (!mac) return;
+      return IHealthDevices.debugBG5SGetOfflineData(mac);
+    });
+
+  const deleteOfflineData = () => {
+    const mac = requireMac();
+    if (!mac) return;
+
+    Alert.alert(
+      "Delete Meter Records?",
+      "This asks the BG5S SDK to delete stored records from the meter. Only do this after you have captured the log you need.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () =>
+            run("delete", "Delete stored/offline data", async () =>
+              IHealthDevices.debugBG5SDeleteOfflineData(mac)
+            ),
+        },
+      ]
+    );
+  };
+
   const disconnectAll = () =>
     run(null, "Disconnect all", async () => IHealthDevices.disconnectAll());
 
@@ -300,6 +331,8 @@ export default function BG5SDebugScreen({ navigation }: any) {
         <DebugButton label="Prep + Start" busy={busy === "prepare"} onPress={prepareAndStart} />
         <DebugButton label="Start Only" busy={busy === "start"} onPress={startOnly} />
         <DebugButton label="Code + Start" busy={busy === "code"} onPress={setCodeAndStart} />
+        <DebugButton label="Offline Data" busy={busy === "offline"} onPress={getOfflineData} />
+        <DebugButton label="Delete Records" busy={busy === "delete"} onPress={deleteOfflineData} />
         <DebugButton label="Disconnect" busy={false} onPress={disconnectAll} />
       </View>
 

@@ -1,7 +1,11 @@
 package com.ihealthdevices
 
+import android.Manifest
 import android.app.Application
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.os.Build
 import android.os.Handler
@@ -77,6 +81,94 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             sendEvent("onError", params)
         } catch (e: Exception) {
             // Ignore if event emitter not ready
+        }
+    }
+
+    private fun hasPermission(permission: String): Boolean {
+        return if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            true
+        } else {
+            reactApplicationContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun isLocationEnabled(): Boolean {
+        val lm = reactApplicationContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            lm.isLocationEnabled
+        } else {
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+        }
+    }
+
+    private fun getBluetoothAdapter(): BluetoothAdapter? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            val manager = reactApplicationContext.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+            manager.adapter
+        } else {
+            @Suppress("DEPRECATION")
+            BluetoothAdapter.getDefaultAdapter()
+        }
+    }
+
+    private fun buildBluetoothStatus(): WritableMap {
+        val adapter = getBluetoothAdapter()
+        val available = adapter != null
+        val scanPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            hasPermission(Manifest.permission.BLUETOOTH_SCAN)
+        } else {
+            hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        val connectPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            hasPermission(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            true
+        }
+        val authorized = scanPermission && connectPermission
+        val poweredOn = if (!authorized) {
+            false
+        } else {
+            try {
+                adapter?.isEnabled == true
+            } catch (_: SecurityException) {
+                false
+            }
+        }
+        val locationEnabled = isLocationEnabled()
+
+        val state: String
+        val message: String
+        when {
+            !available -> {
+                state = "unsupported"
+                message = "This device does not support Bluetooth scanning."
+            }
+            !authorized -> {
+                state = "unauthorized"
+                message = "Bluetooth permission is off for CareView. Allow Bluetooth permissions in Settings, then try again."
+            }
+            !poweredOn -> {
+                state = "powered_off"
+                message = "Bluetooth is off. Turn on Bluetooth, then try again."
+            }
+            !locationEnabled -> {
+                state = "location_disabled"
+                message = "Location Services must be on for Bluetooth scanning on this Android device."
+            }
+            else -> {
+                state = "powered_on"
+                message = "Bluetooth is ready."
+            }
+        }
+
+        return Arguments.createMap().apply {
+            putBoolean("available", available)
+            putBoolean("authorized", authorized)
+            putBoolean("poweredOn", poweredOn)
+            putBoolean("locationServicesEnabled", locationEnabled)
+            putBoolean("ready", available && authorized && poweredOn && locationEnabled)
+            putString("state", state)
+            putString("message", message)
         }
     }
 
@@ -408,6 +500,11 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         promise.resolve(isAuthenticatedFlag)
     }
 
+    @ReactMethod
+    fun getBluetoothStatus(promise: Promise) {
+        promise.resolve(buildBluetoothStatus())
+    }
+
     /**
      * startScan(deviceTypes: ReadableArray, promise: Promise)
      *
@@ -424,6 +521,22 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         try {
             ensureInitialized()
 
+            val btStatus = buildBluetoothStatus()
+            if (!btStatus.getBoolean("ready")) {
+                val state = btStatus.getString("state") ?: "unknown"
+                val message = btStatus.getString("message") ?: "Bluetooth is not ready."
+                val code = when (state) {
+                    "unauthorized" -> "BLUETOOTH_UNAUTHORIZED"
+                    "location_disabled" -> "LOCATION_DISABLED"
+                    "unsupported" -> "BLUETOOTH_UNSUPPORTED"
+                    else -> "BLUETOOTH_OFF"
+                }
+                sendEvent("onBluetoothStateChanged", buildBluetoothStatus())
+                sendError(code, message)
+                promise.reject(code, message)
+                return
+            }
+
             // Cancel any in-progress scan
             scanHandler.removeCallbacks(scanNextRunnable)
             isScanningActive = false
@@ -434,21 +547,6 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 deviceTypes.getString(i)?.let { types.add(it) }
             }
             sendDebugLog("Starting scan for: $types")
-
-            // Android requires Location Services (GPS toggle) to be ON for BLE scanning.
-            // This is true even when ACCESS_FINE_LOCATION permission is granted.
-            // On Android 12+ with neverForLocation flag this check is technically not required,
-            // but older devices (API 23-30) still need it.
-            val lm = reactApplicationContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            val locationEnabled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                lm.isLocationEnabled
-            } else {
-                lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-            }
-            if (!locationEnabled) {
-                promise.reject("LOCATION_DISABLED", "Location Services must be enabled to scan for Bluetooth devices. Please turn on Location in Settings.")
-                return
-            }
 
             scanTypesList = types.toList()
             currentScanIndex = 0

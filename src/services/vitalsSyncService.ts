@@ -12,7 +12,7 @@
  * 
  * Updates:
  * - BP readings: heartRate sent as measurement_condition (e.g., "72 bpm")
- * - BG readings: meal timing sent as measurement_condition
+ * - BG readings: sample window sent as measurement_condition
  * - Screening responses: daily health checks and urine protein results
  */
 
@@ -77,7 +77,7 @@ interface SyncPayload {
 
 interface VitalPayload {
   id: string;
-  type: "BP" | "SCALE";  // Remove "BG"
+  type: "BP" | "SCALE" | "BG";
   value: number | null;
   value2?: number | null;
   heartRate?: number | null;
@@ -304,7 +304,7 @@ async function sendVitalsToApi(payload: SyncPayload): Promise<SyncResponse> {
  *
  * Key mapping:
  * - BP: heartRate -> measurement_condition (e.g., "72 bpm")
- * - BG: measurementCondition -> measurement_condition (meal timing)
+ * - BG: measurementCondition -> measurement_condition (sample window)
  * - SCALE: no measurement_condition
  *
  * If the source device has been registered with the EMR inventory,
@@ -318,6 +318,8 @@ function readingToPayload(reading: SavedReading): VitalPayload {
   if (reading.type === "BP" && reading.heartRate) {
     // For BP, send pulse/heart rate as measurement_condition
     measurementCondition = `${reading.heartRate} bpm`;
+  } else if (reading.type === "BG" && reading.measurementCondition) {
+    measurementCondition = reading.measurementCondition;
   }
 
   // Look up the source device so we can attach its EMR unit_id if
@@ -722,7 +724,11 @@ export async function syncPendingDeviceRegistrations(): Promise<void> {
   );
 
   for (const device of pending) {
-    const category = device.type; // "BP" | "SCALE"
+    if (device.type === "BG") {
+      continue;
+    }
+
+    const category: "BP" | "SCALE" = device.type;
     const result = await registerDeviceWithEmr({
       patient_id: parseInt(user.patientId, 10),
       mac: normalizeMac(device.mac),

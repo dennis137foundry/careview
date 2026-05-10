@@ -328,9 +328,9 @@ export type CuffSize = "STANDARD" | "LARGE" | "XXL";
 export type DeviceRecord = {
   id: string;
   name: string;
-  type: "BP" | "SCALE";
+  type: "BP" | "SCALE" | "BG";
   mac: string;
-  model?: string; // e.g., 'BP3L', 'BP5S', 'HS2S', 'GATT_BP', 'GATT_SCALE'
+  model?: string; // e.g., 'BP3L', 'BP5S', 'BG5S', 'HS2S', 'GATT_BP', 'GATT_SCALE'
   bottleCode?: string; // Legacy - was for BG5 test strips
   friendlyName?: string; // User-customizable display name
   source?: DeviceSource; // 'iHealthSDK' or 'BLE_GATT'
@@ -404,7 +404,7 @@ export function updateDeviceEmrUnits(
 export function getDevicesWithoutEmrUnitId(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE emrUnitId IS NULL;"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -495,7 +495,7 @@ export function getDevice(id: string): DeviceRecord | null {
   }
 }
 
-export function getDeviceByType(type: "BP" | "SCALE"): DeviceRecord | null {
+export function getDeviceByType(type: "BP" | "SCALE" | "BG"): DeviceRecord | null {
   try {
     const res = db.execute(
       "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE type = ? LIMIT 1;",
@@ -527,7 +527,7 @@ export type SavedReading = {
   id: string;
   deviceId: string;
   deviceName: string;
-  type: "BP" | "SCALE";
+  type: "BP" | "SCALE" | "BG";
   value?: number;
   value2?: number;
   heartRate?: number;

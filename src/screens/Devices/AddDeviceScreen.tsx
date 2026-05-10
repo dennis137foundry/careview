@@ -10,8 +10,8 @@ import {
   Alert,
   Modal,
   TextInput,
+  Linking,
   Platform,
-  PermissionsAndroid,
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from "@react-navigation/native";
@@ -22,7 +22,11 @@ import {
   useCodeScanner,
 } from "react-native-vision-camera";
 
-import deviceService, { DiscoveredDevice } from "../../services/deviceService";
+import deviceService, {
+  type BluetoothStatus,
+  type DiscoveredDevice,
+  type DeviceCategory,
+} from "../../services/deviceService";
 import { addDevice, loadDevices, setDeviceEmrUnits, removeDevice as removeDeviceAction } from "../../redux/deviceSlice";
 import { useToast } from "../../components/Toast";
 import type { AppDispatch, RootState } from "../../redux/store";
@@ -35,6 +39,35 @@ import {
 // ============================================================================
 // Component
 // ============================================================================
+
+const getCategoryLabel = (category: DeviceCategory | string): string => {
+  if (category === "BP") return "blood pressure monitor";
+  if (category === "SCALE") return "scale";
+  if (category === "BG") return "glucose meter";
+  return "device";
+};
+
+const BLUETOOTH_ERROR_CODES = new Set([
+  "BLUETOOTH_OFF",
+  "BLUETOOTH_UNAUTHORIZED",
+  "BLUETOOTH_UNSUPPORTED",
+  "LOCATION_DISABLED",
+  "powered_off",
+  "unauthorized",
+  "unsupported",
+  "location_disabled",
+]);
+
+function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
+  const message =
+    status?.message ||
+    "CareView needs Bluetooth to add devices. Turn Bluetooth on or allow Bluetooth permission, then try again.";
+
+  Alert.alert("Bluetooth Needed", message, [
+    { text: "Cancel", style: "cancel" },
+    { text: "Open Settings", onPress: () => Linking.openSettings() },
+  ]);
+}
 
 export default function AddDeviceScreen() {
   const dispatch = useDispatch<AppDispatch>();
@@ -98,7 +131,14 @@ export default function AddDeviceScreen() {
       }
     });
 
-    subscriptionsRef.current = [deviceFoundSub, scanStateSub, debugSub];
+    const errorSub = deviceService.onError((error: any) => {
+      const code = String(error.code || error.state || "");
+      if (!BLUETOOTH_ERROR_CODES.has(code)) return;
+      setScanning(false);
+      showBluetoothAlert(error);
+    });
+
+    subscriptionsRef.current = [deviceFoundSub, scanStateSub, debugSub, errorSub];
 
     return () => {
       subscriptionsRef.current.forEach((sub) => sub?.remove?.());
@@ -107,56 +147,12 @@ export default function AddDeviceScreen() {
   }, []);
 
   const startScan = async () => {
-    // Android requires runtime permission requests for BLE scanning.
-    // This block only runs on Android — iOS is not affected.
-    if (Platform.OS === "android") {
-      try {
-        const permissions: string[] = [
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ];
-
-        // Android 12+ (API 31+) needs BLUETOOTH_SCAN and BLUETOOTH_CONNECT
-        if (Platform.Version >= 31) {
-          permissions.push(
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
-          );
-        }
-
-        const granted = await PermissionsAndroid.requestMultiple(permissions as any);
-        console.log("[AddDevice] Android permissions:", granted);
-
-        // Check if any critical permission was denied
-        const locationGranted =
-          granted[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] ===
-          PermissionsAndroid.RESULTS.GRANTED;
-
-        if (!locationGranted) {
-          Alert.alert(
-            "Permission Required",
-            "Location permission is needed to scan for Bluetooth devices. Please grant it in Settings."
-          );
-          return;
-        }
-
-        if (Platform.Version >= 31) {
-          const btGranted =
-            granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] ===
-              PermissionsAndroid.RESULTS.GRANTED &&
-            granted[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] ===
-              PermissionsAndroid.RESULTS.GRANTED;
-
-          if (!btGranted) {
-            Alert.alert(
-              "Permission Required",
-              "Bluetooth permission is needed to scan for devices. Please grant it in Settings."
-            );
-            return;
-          }
-        }
-      } catch (e: any) {
-        console.error("[AddDevice] Permission request error:", e);
-      }
+    try {
+      await deviceService.ensureBluetoothReady();
+    } catch (error: any) {
+      console.error("[AddDevice] Bluetooth not ready:", error);
+      showBluetoothAlert(error?.status);
+      return;
     }
 
     setDevices([]);
@@ -164,8 +160,7 @@ export default function AddDeviceScreen() {
 
     try {
       await deviceService.authenticate();
-      // Scan for BP and Scale devices (no BG)
-      await deviceService.startScan(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"]);
+      await deviceService.startScan(["BP3L", "BP5", "BP5S", "BG5S", "HS2", "HS2S", "HS4S"]);
 
       // Auto-stop after 30 seconds
       setTimeout(() => {
@@ -184,7 +179,7 @@ export default function AddDeviceScreen() {
   };
 
   // Check if device type already exists
-  const hasDeviceOfType = (category: string): boolean => {
+  const hasDeviceOfType = (category: DeviceCategory): boolean => {
     return existingDevices.some((d) => d.type === category);
   };
 
@@ -197,7 +192,7 @@ export default function AddDeviceScreen() {
     if (hasDeviceOfType(category)) {
       Alert.alert(
         "Device Type Exists",
-        `You already have a ${category === "BP" ? "blood pressure monitor" : "scale"} registered. Remove it first to add a new one.`,
+        `You already have a ${getCategoryLabel(category)} registered. Remove it first to add a new one.`,
         [{ text: "OK" }]
       );
       return;
@@ -212,7 +207,7 @@ export default function AddDeviceScreen() {
       setPendingCuffSize(null);
       setShowCuffModal(true);
     } else {
-      // Scales: no cuff size, go straight to naming.
+      // No cuff size, go straight to naming.
       setPendingCuffSize(null);
       setShowNameModal(true);
     }
@@ -261,8 +256,11 @@ export default function AddDeviceScreen() {
       // 1. Save locally first — offline-safe. Registration can retry later.
       dispatch(addDevice(deviceRecord));
 
-      // 2. Register with EMR inventory.
-      if (!patientId) {
+      // 2. Register with EMR inventory. BG5S stays local until the EMR
+      // glucose device contract is ready.
+      if (category === "BG") {
+        console.log("[AddDevice] BG5S saved locally; skipping EMR device registration");
+      } else if (!patientId) {
         // No logged-in patient — shouldn't reach this screen without one,
         // but handle defensively. Leave the device paired locally; the
         // background sweep will register it once a patient is available.
@@ -348,10 +346,12 @@ export default function AddDeviceScreen() {
     const [type, mac] = parts;
     const upperType = type.toUpperCase();
 
-    // Determine category (removed BG support)
-    let category: "BP" | "SCALE";
+    // Determine category
+    let category: DeviceCategory;
     if (upperType.includes("BP")) {
       category = "BP";
+    } else if (upperType.includes("BG") || upperType.includes("GLUCOSE")) {
+      category = "BG";
     } else if (upperType.includes("HS")) {
       category = "SCALE";
     } else {
@@ -363,7 +363,7 @@ export default function AddDeviceScreen() {
     if (hasDeviceOfType(category)) {
       Alert.alert(
         "Device Type Exists",
-        `You already have a ${category === "BP" ? "blood pressure monitor" : "scale"} registered.`
+        `You already have a ${getCategoryLabel(category)} registered.`
       );
       return;
     }
@@ -389,6 +389,9 @@ export default function AddDeviceScreen() {
     if (upperType.includes("BP") || upperType.includes("BLOOD")) {
       return "favorite";
     }
+    if (upperType.includes("BG") || upperType.includes("GLUCOSE")) {
+      return "opacity";
+    }
     if (upperType.includes("HS") || upperType.includes("SCALE") || upperType.includes("WEIGHT")) {
       return "fitness-center";
     }
@@ -399,6 +402,7 @@ export default function AddDeviceScreen() {
   const getDeviceColor = (type: string): string => {
     const upperType = type.toUpperCase();
     if (upperType.includes("BP")) return "#e53935";
+    if (upperType.includes("BG") || upperType.includes("GLUCOSE")) return "#43a047";
     if (upperType.includes("HS") || upperType.includes("SCALE")) return "#00acc1";
     return "#757575";
   };
@@ -492,15 +496,15 @@ export default function AddDeviceScreen() {
           ) : (
             <>
               <MaterialIcons name="bluetooth-searching" size={20} color="#fff" />
-              <Text style={styles.scanButtonText}>Start Scan</Text>
+              <Text style={styles.scanButtonText}>Scan for Devices</Text>
             </>
           )}
         </TouchableOpacity>
 
         <Text style={styles.scanHint}>
           {scanning
-            ? "Turn on your device and put it in pairing mode"
-            : "Tap to scan for nearby BP monitors and scales"}
+            ? "Keep your device nearby. The app will find supported iHealth devices automatically."
+            : "Scan for nearby blood pressure monitors, scales, and glucose meters"}
         </Text>
       </View>
 
@@ -522,7 +526,7 @@ export default function AddDeviceScreen() {
                 <MaterialIcons name="bluetooth-searching" size={48} color="#ccc" />
                 <Text style={styles.emptyText}>No devices found</Text>
                 <Text style={styles.emptyHint}>
-                  Start scanning and make sure your device is powered on
+                  Scan with your supported iHealth device nearby
                 </Text>
               </>
             )}

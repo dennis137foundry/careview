@@ -7,7 +7,7 @@
 //  Supported iHealth SDK devices: BP3L, BP5, BP5S, HS2, HS2S, HS4S
 //  Supported BLE GATT devices: Any device advertising BP (0x1810) or Scale (0x181D) service
 //
-//  BG5/BG5S glucose devices have been REMOVED - Dexcom API will be used instead
+//  BG5S glucose support is SDK-only and uses stored-record reads.
 //
 
 #import "IHealthDevices.h"
@@ -123,7 +123,7 @@ RCT_EXPORT_MODULE();
 - (NSArray<NSString *> *)supportedEvents {
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
              @"onBloodPressureReading", @"onWeightReading", @"onBloodGlucoseReading",
-             @"onGlucoseMeterEvent", @"onError", @"onDebugLog"];
+             @"onGlucoseMeterEvent", @"onBluetoothStateChanged", @"onError", @"onDebugLog"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -149,6 +149,53 @@ RCT_EXPORT_MODULE();
     if (_hasListeners) {
         [self sendEventWithName:name body:body];
     }
+}
+
+- (NSDictionary *)bluetoothStatusPayload {
+    CBManagerState state = _centralManager ? _centralManager.state : CBManagerStateUnknown;
+    NSString *stateStr;
+    NSString *message;
+    switch (state) {
+        case CBManagerStatePoweredOn:
+            stateStr = @"powered_on";
+            message = @"Bluetooth is ready.";
+            break;
+        case CBManagerStatePoweredOff:
+            stateStr = @"powered_off";
+            message = @"Bluetooth is off. Turn on Bluetooth, then try again.";
+            break;
+        case CBManagerStateUnauthorized:
+            stateStr = @"unauthorized";
+            message = @"Bluetooth permission is off for CareView. Allow Bluetooth in Settings, then try again.";
+            break;
+        case CBManagerStateUnsupported:
+            stateStr = @"unsupported";
+            message = @"This device does not support Bluetooth scanning.";
+            break;
+        case CBManagerStateResetting:
+            stateStr = @"resetting";
+            message = @"Bluetooth is resetting. Try again in a moment.";
+            break;
+        default:
+            stateStr = @"unknown";
+            message = @"Bluetooth is getting ready. Try again in a moment.";
+            break;
+    }
+
+    BOOL available = state != CBManagerStateUnsupported;
+    BOOL authorized = state != CBManagerStateUnauthorized;
+    BOOL poweredOn = state == CBManagerStatePoweredOn;
+    BOOL ready = available && authorized && poweredOn;
+
+    return @{
+        @"available": @(available),
+        @"authorized": @(authorized),
+        @"poweredOn": @(poweredOn),
+        @"locationServicesEnabled": @YES,
+        @"ready": @(ready),
+        @"state": stateStr,
+        @"message": message
+    };
 }
 
 - (void)sendBG5SEvent:(NSString *)stage mac:(NSString *)mac message:(NSString *)message extra:(NSDictionary *)extra {
@@ -183,6 +230,19 @@ RCT_EXPORT_MODULE();
         default: stateStr = @"Unknown"; break;
     }
     [self sendDebugLog:[NSString stringWithFormat:@"📱 CoreBluetooth state: %@", stateStr]];
+    [self sendEventSafe:@"onBluetoothStateChanged" body:[self bluetoothStatusPayload]];
+
+    if (central.state == CBManagerStatePoweredOff && (_isScanning || _scanningForGATT)) {
+        [self sendEventSafe:@"onError" body:@{
+            @"code": @"BLUETOOTH_OFF",
+            @"message": @"Bluetooth is off. Turn on Bluetooth, then try again."
+        }];
+    } else if (central.state == CBManagerStateUnauthorized && (_isScanning || _scanningForGATT)) {
+        [self sendEventSafe:@"onError" body:@{
+            @"code": @"BLUETOOTH_UNAUTHORIZED",
+            @"message": @"Bluetooth permission is off for CareView. Allow Bluetooth in Settings, then try again."
+        }];
+    }
     
     if (central.state == CBManagerStatePoweredOn && _scanningForGATT) {
         [self sendDebugLog:@"📱 BT ready, starting deferred GATT scan..."];
@@ -657,7 +717,7 @@ RCT_EXPORT_MODULE();
     [center addObserver:self selector:@selector(onConnected:) name:@"BP5SConnectNoti" object:nil];
     [center addObserver:self selector:@selector(onDisconnected:) name:@"BP5SDisConnectNoti" object:nil];
 
-    // BG5S glucose meter (diagnostic path only)
+    // BG5S glucose meter
     [center addObserver:self selector:@selector(onBG5SDiscover:) name:kNotificationNameBG5SDidDiscover object:nil];
     [center addObserver:self selector:@selector(onBG5SConnected:) name:kNotificationNameBG5SConnectSuccess object:nil];
     [center addObserver:self selector:@selector(onBG5SConnectFailed:) name:kNotificationNameBG5SConnectFail object:nil];
@@ -965,6 +1025,25 @@ RCT_EXPORT_MODULE();
         @"ctlCodeVersion": @(stateInfo.ctlCodeVersion),
         @"unit": @(stateInfo.unit)
     };
+}
+
+- (NSArray *)bg5sRecordsPayload:(NSArray *)records {
+    NSMutableArray *out = [NSMutableArray new];
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss ZZZZZ";
+
+    for (BG5SRecordModel *record in records) {
+        NSString *dateString = record.measureDate ? [formatter stringFromDate:record.measureDate] : @"";
+        [out addObject:@{
+            @"dataID": record.dataID ?: @"",
+            @"measureDate": dateString,
+            @"timeZone": @(record.timeZone),
+            @"value": @(record.value),
+            @"unit": @"mg/dL",
+            @"canCorrect": @(record.canCorrect)
+        }];
+    }
+    return out;
 }
 
 - (void)handleBG5SConnected:(BG5S *)device mac:(NSString *)mac {
@@ -1284,6 +1363,49 @@ RCT_EXPORT_METHOD(debugBG5SReadDeviceInfo:(NSString *)mac resolver:(RCTPromiseRe
     }];
 }
 
+RCT_EXPORT_METHOD(debugBG5SGetOfflineData:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    BG5S *device = [self getBG5SWithMac:mac];
+    if (!device) {
+        NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+        [self sendBG5SEvent:@"offline_data_no_device" mac:mac message:message extra:nil];
+        reject(@"BG5S_NO_DEVICE", message, nil);
+        return;
+    }
+
+    [self sendBG5SEvent:@"offline_data" mac:mac message:@"Calling queryRecordWithSuccessBlock" extra:nil];
+    [device queryRecordWithSuccessBlock:^(NSArray *array) {
+        NSArray *records = [self bg5sRecordsPayload:array ?: @[]];
+        NSDictionary *payload = @{@"count": @(records.count), @"records": records};
+        [self sendBG5SEvent:@"offline_data_ok" mac:mac message:[NSString stringWithFormat:@"queryRecord returned %lu record(s)", (unsigned long)records.count] extra:payload];
+        resolve(payload);
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"offline_data_error" mac:mac message:message extra:@{@"error": @(error)}];
+        reject(@"BG5S_OFFLINE_DATA_ERROR", message, nil);
+    }];
+}
+
+RCT_EXPORT_METHOD(debugBG5SDeleteOfflineData:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    BG5S *device = [self getBG5SWithMac:mac];
+    if (!device) {
+        NSString *message = [NSString stringWithFormat:@"No BG5S instance for %@. Connected instances: %@", mac, [self bg5sConnectedDeviceSummary]];
+        [self sendBG5SEvent:@"delete_offline_no_device" mac:mac message:message extra:nil];
+        reject(@"BG5S_NO_DEVICE", message, nil);
+        return;
+    }
+
+    [self sendBG5SEvent:@"delete_offline" mac:mac message:@"Calling deleteRecordWithSuccessBlock" extra:nil];
+    [device deleteRecordWithSuccessBlock:^{
+        NSDictionary *payload = @{@"deleted": @YES};
+        [self sendBG5SEvent:@"delete_offline_ok" mac:mac message:@"deleteRecord succeeded" extra:payload];
+        resolve(payload);
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"delete_offline_error" mac:mac message:message extra:@{@"error": @(error)}];
+        reject(@"BG5S_DELETE_OFFLINE_ERROR", message, nil);
+    }];
+}
+
 RCT_EXPORT_METHOD(authenticate:(NSString *)licensePath resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
     [self sendDebugLog:@"🔑 Auth: Starting..."];
     NSString *path = [[NSBundle mainBundle] pathForResource:@"license" ofType:@"pem"];
@@ -1308,13 +1430,27 @@ RCT_EXPORT_METHOD(isAuthenticated:(RCTPromiseResolveBlock)resolve rejecter:(RCTP
     resolve(@(_isAuthenticated));
 }
 
+RCT_EXPORT_METHOD(getBluetoothStatus:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    resolve([self bluetoothStatusPayload]);
+}
+
 RCT_EXPORT_METHOD(startScan:(NSArray *)deviceTypes resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
     [self sendDebugLog:[NSString stringWithFormat:@"📶 Scan: Starting for %@", deviceTypes]];
+    NSDictionary *btStatus = [self bluetoothStatusPayload];
+    if (![btStatus[@"ready"] boolValue]) {
+        NSString *state = btStatus[@"state"] ?: @"unknown";
+        NSString *message = btStatus[@"message"] ?: @"Bluetooth is not ready.";
+        NSString *code = [state isEqualToString:@"unauthorized"] ? @"BLUETOOTH_UNAUTHORIZED" : @"BLUETOOTH_OFF";
+        [self sendEventSafe:@"onError" body:@{@"code": code, @"message": message}];
+        reject(code, message, nil);
+        return;
+    }
+
     if (!_controllersInitialized) [self initializeControllers];
 
     ScanDeviceController *scanner = [ScanDeviceController commandGetInstance];
     for (NSString *type in deviceTypes) {
-        if ([type hasPrefix:@"BP"] || [type hasPrefix:@"HS"]) {
+        if ([type hasPrefix:@"BP"] || [type hasPrefix:@"HS"] || [type isEqualToString:@"BG5S"]) {
             [scanner commandScanDeviceType:[self deviceTypeFromString:type]];
         }
     }
@@ -1333,6 +1469,7 @@ RCT_EXPORT_METHOD(stopScan:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseR
     [scanner commandStopScanDeviceType:HealthDeviceType_HS2];
     [scanner commandStopScanDeviceType:HealthDeviceType_HS2S];
     [scanner commandStopScanDeviceType:HealthDeviceType_HS4];
+    [scanner commandStopScanDeviceType:HealthDeviceType_BG5S];
     [self sendEventSafe:@"onScanStateChanged" body:@{@"scanning": @NO}];
     resolve(nil);
 }

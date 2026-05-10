@@ -272,6 +272,7 @@ export default function HistoryScreen() {
         "Value2",
         "Unit",
         "Heart Rate",
+        "Sample Window",
         "Synced",
         "Timestamp",
       ];
@@ -283,6 +284,7 @@ export default function HistoryScreen() {
         r.value2 ?? "",
         r.unit ?? "",
         r.heartRate ?? "",
+        r.measurementCondition ?? "",
         r.synced ? "Yes" : "No",
         new Date(r.ts).toLocaleString(),
       ]);
@@ -669,6 +671,18 @@ function DeviceHistoryTab({
                     </Text>
                   </View>
                 )}
+                {item.type === "BG" && item.measurementCondition ? (
+                  <View style={styles.heartRateRow}>
+                    <MaterialCommunityIcons
+                      name="clock-outline"
+                      size={14}
+                      color="#43a047"
+                    />
+                    <Text style={styles.heartRateText}>
+                      {item.measurementCondition}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             </View>
             <Text style={styles.timeText}>

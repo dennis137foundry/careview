@@ -6,11 +6,13 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Modal,
   ScrollView,
   Animated,
   Easing,
   Dimensions,
   StatusBar,
+  Linking,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
@@ -25,14 +27,38 @@ import type { DeviceRecord } from "../../services/sqliteService";
 import { hasDailyHealthCheckToday } from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
+import deviceService, { type BluetoothStatus } from "../../services/deviceService";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
+const BLUETOOTH_ERROR_CODES = new Set([
+  "BLUETOOTH_OFF",
+  "BLUETOOTH_UNAUTHORIZED",
+  "BLUETOOTH_UNSUPPORTED",
+  "LOCATION_DISABLED",
+  "powered_off",
+  "unauthorized",
+  "unsupported",
+  "location_disabled",
+]);
+
+function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
+  const message =
+    status?.message ||
+    "CareView needs Bluetooth to add devices and capture readings. Turn Bluetooth on or allow Bluetooth permission, then try again.";
+
+  Alert.alert("Bluetooth Needed", message, [
+    { text: "Cancel", style: "cancel" },
+    { text: "Open Settings", onPress: () => Linking.openSettings() },
+  ]);
+}
+
 const deviceImages: Record<string, any> = {
   BP: require("../../assets/bp3l.png"),
   SCALE: require("../../assets/hs5s.png"),
+  BG: require("../../assets/bg5.png"),
 };
 
 const deviceThemes: Record<
@@ -51,7 +77,69 @@ const deviceThemes: Record<
     gradient: ["#00ACC1", "#0097A7", "#00838F"],
     icon: "fitness-center",
   },
+  BG: {
+    primary: "#43A047",
+    secondary: "#A5D6A7",
+    gradient: ["#43A047", "#2E7D32", "#1B5E20"],
+    icon: "opacity",
+  },
 };
+
+const GLUCOSE_TIMING_OPTIONS = [
+  { label: "Overnight", value: "overnight" },
+  { label: "Before breakfast", value: "before breakfast" },
+  { label: "After breakfast", value: "after breakfast" },
+  { label: "Before lunch", value: "before lunch" },
+  { label: "After lunch", value: "after lunch" },
+  { label: "Before dinner", value: "before dinner" },
+  { label: "After dinner", value: "after dinner" },
+  { label: "Bedtime", value: "bedtime" },
+] as const;
+
+type GlucoseTimingValue = (typeof GLUCOSE_TIMING_OPTIONS)[number]["value"];
+
+function getGlucoseTimingLabel(value?: string): string {
+  return (
+    GLUCOSE_TIMING_OPTIONS.find((option) => option.value === value)?.label ||
+    value ||
+    ""
+  );
+}
+
+function parseBGTimestamp(record: any): number {
+  if (typeof record?.timestamp === "number" && Number.isFinite(record.timestamp)) {
+    return record.timestamp;
+  }
+
+  if (record?.measureDate) {
+    const measureDate = String(record.measureDate).trim();
+    const isoMeasureDate = measureDate.replace(
+      /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ([+-]\d{2}):?(\d{2})$/,
+      "$1T$2$3:$4"
+    );
+    const parsed = Date.parse(isoMeasureDate);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Date.now();
+}
+
+function getLatestBGRecord(payload: any): any | null {
+  const records = Array.isArray(payload?.records) ? payload.records : [];
+  if (records.length === 0) return null;
+
+  return [...records].sort(
+    (a, b) => parseBGTimestamp(b) - parseBGTimestamp(a)
+  )[0];
+}
+
+function buildBGReadingId(deviceId: string, data: any): string {
+  const rawId = String(data?.dataID || data?.measureDate || data?.timestamp || Date.now());
+  const safeId = rawId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  return `bg_${deviceId || "device"}_${safeId}`;
+}
 
 export default function CaptureScreen({ route, navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
@@ -68,6 +156,8 @@ export default function CaptureScreen({ route, navigation }: any) {
   const [syncStatus, setSyncStatus] = useState<
     "" | "syncing" | "synced" | "pending"
   >("");
+  const [pendingGlucoseReading, setPendingGlucoseReading] = useState<any>(null);
+  const [showGlucoseTimingModal, setShowGlucoseTimingModal] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const targetMacRef = useRef<string>("");
   const readingReceivedRef = useRef<boolean>(false);
@@ -103,7 +193,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     [devices, deviceId]
   );
 
-  const theme = deviceThemes[device?.type || "BP"];
+  const theme = deviceThemes[device?.type || "BP"] || deviceThemes.BP;
 
   // ==========================================================================
   // Dev-only logging (no UI, just console in __DEV__)
@@ -149,6 +239,8 @@ export default function CaptureScreen({ route, navigation }: any) {
     setStatusText("");
     setLastReading(null);
     setSyncStatus("");
+    setPendingGlucoseReading(null);
+    setShowGlucoseTimingModal(false);
     targetMacRef.current = "";
 
     setShowHealthCheckModal(false);
@@ -370,7 +462,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       ) {
         addLog("Target device found! Connecting...");
         setPhase("connect");
-        setStatusText("Found you! Connecting...");
+        setStatusText("Device found. Connecting...");
 
         try {
           await IHealthDevices.stopScan();
@@ -398,11 +490,17 @@ export default function CaptureScreen({ route, navigation }: any) {
         );
 
         if (data.connected) {
+          if (device?.type === "BG") {
+            setPhase("measure");
+            setStatusText("Checking stored readings...");
+            return;
+          }
+
           setPhase("measure");
           if (device?.type === "SCALE") {
-            setStatusText("Step on the scale");
+            setStatusText("Step on the scale and stand still");
           } else {
-            setStatusText("Keep still, measuring...");
+            setStatusText("Measurement started. Keep your arm relaxed");
           }
 
           // iOS starts measurement automatically in the native layer when
@@ -535,7 +633,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
       // Stop scan and disconnect — data is already received.
-      // This releases the GATT connection so the device powers down
+      // Release the connection after the reading is saved.
       // cleanly and is ready for the next reading.
       readingReceivedRef.current = true;
       IHealthDevices?.stopScan?.().catch(() => {});
@@ -577,6 +675,167 @@ export default function CaptureScreen({ route, navigation }: any) {
     [device, dispatch, playSuccessAnimation, syncToEMR, showToast]
   );
 
+  const promptForGlucoseTiming = useCallback(
+    async (data: any) => {
+      if (readingReceivedRef.current) return;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+      const value = Number(data?.value);
+      if (!Number.isFinite(value) || value <= 0) {
+        addLog("BG5S returned no usable glucose value");
+        IHealthDevices?.stopScan?.().catch(() => {});
+        IHealthDevices?.disconnectAll?.().catch(() => {});
+        IHealthDevices?.allowSleep?.();
+        targetMacRef.current = "";
+        setBusy(false);
+        setPhase("idle");
+        setStatusText("");
+        Alert.alert(
+          "No Glucose Reading",
+          "The meter connected, but no stored glucose reading was found. Take a reading on the meter, then try capture again."
+        );
+        return;
+      }
+
+      readingReceivedRef.current = true;
+      IHealthDevices?.stopScan?.().catch(() => {});
+      IHealthDevices?.disconnectAll?.().catch(() => {});
+      IHealthDevices?.allowSleep?.();
+
+      setPendingGlucoseReading(data);
+      setBusy(false);
+      setStatusText("Select sample window");
+      setShowGlucoseTimingModal(true);
+    },
+    [addLog]
+  );
+
+  const saveGlucoseReading = useCallback(
+    async (timing: GlucoseTimingValue) => {
+      const data = pendingGlucoseReading;
+      if (!data) return;
+
+      const value = Number(data?.value);
+      const ts = parseBGTimestamp(data);
+      const deviceIdForReading = device?.id || "";
+      const unit = data?.unit || "mg/dL";
+
+      try {
+        await dispatch(
+          addReadingAndPersist({
+            id: buildBGReadingId(deviceIdForReading, { ...data, timestamp: ts }),
+            ts,
+            type: "BG",
+            deviceId: deviceIdForReading,
+            deviceName: device?.name || "Glucose Meter",
+            value,
+            unit,
+            measurementCondition: timing,
+          })
+        ).unwrap();
+      } catch (err) {
+        console.error("[Capture] Failed to save glucose reading:", err);
+        readingReceivedRef.current = false;
+        setBusy(false);
+        setStatusText("");
+        showToast({
+          message: "Couldn't save your glucose reading. Please try again.",
+          type: "error",
+          duration: 4000,
+        });
+        return;
+      }
+
+      setShowGlucoseTimingModal(false);
+      setPendingGlucoseReading(null);
+      setLastReading({
+        glucose: value,
+        unit,
+        timing,
+        timingLabel: getGlucoseTimingLabel(timing),
+      });
+      setStatusText(`${value} ${unit}`);
+      setBusy(false);
+      playSuccessAnimation();
+      syncToEMR();
+    },
+    [
+      device,
+      dispatch,
+      pendingGlucoseReading,
+      playSuccessAnimation,
+      showToast,
+      syncToEMR,
+    ]
+  );
+
+  // BG5S capture uses the working debug path: connect, pull stored records,
+  // then ask for the sample window before saving and syncing.
+  useEffect(() => {
+    if (!emitter || device?.type !== "BG") return;
+
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(() => resolve(), ms));
+
+    const readStoredBG5SData = async (mac: string) => {
+      let lastError: any;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          if (!IHealthDevices?.debugBG5SGetOfflineData) {
+            throw new Error("BG5S offline data API is not available in this build");
+          }
+          return await IHealthDevices.debugBG5SGetOfflineData(mac);
+        } catch (error) {
+          lastError = error;
+          await wait(600);
+        }
+      }
+      throw lastError;
+    };
+
+    const sub = emitter.addListener("onConnectionStateChanged", async (data: any) => {
+      if (!data.connected || !busyRef.current || readingReceivedRef.current) return;
+      const targetMac = targetMacRef.current;
+      if (
+        targetMac &&
+        data.mac &&
+        data.mac.toUpperCase() !== targetMac.toUpperCase()
+      ) {
+        return;
+      }
+
+      setPhase("measure");
+      setStatusText("Checking stored readings...");
+      addLog("BG5S connected; reading stored records");
+
+      try {
+        const payload = await readStoredBG5SData(data.mac);
+        const latest = getLatestBGRecord(payload);
+        await promptForGlucoseTiming({
+          ...(latest || {}),
+          mac: data.mac,
+          type: "BG5S",
+          source: "iHealthSDK",
+        });
+      } catch (e: any) {
+        addLog(`BG5S stored read error: ${e?.message || String(e)}`);
+        IHealthDevices?.stopScan?.().catch(() => {});
+        IHealthDevices?.disconnectAll?.().catch(() => {});
+        IHealthDevices?.allowSleep?.();
+        targetMacRef.current = "";
+        setBusy(false);
+        setPhase("idle");
+        setStatusText("");
+        Alert.alert(
+          "Glucose Read Error",
+          "The meter connected, but the app could not read its stored glucose data. Keep the meter nearby and try again."
+        );
+      }
+    });
+
+    return () => sub.remove();
+  }, [addLog, device, promptForGlucoseTiming]);
+
   // Listen for readings
   useEffect(() => {
     if (!emitter) return;
@@ -590,9 +849,15 @@ export default function CaptureScreen({ route, navigation }: any) {
         addLog(`Weight: ${data.weight} ${data.unit}`);
         saveWeightReading(data);
       }),
+      emitter.addListener("onBloodGlucoseReading", (data: any) => {
+        if (device?.type !== "BG") return;
+        addLog(`BG: ${data.value} ${data.unit || "mg/dL"}`);
+        promptForGlucoseTiming(data);
+      }),
       emitter.addListener("onError", (data: any) => {
         const msg = data.message || JSON.stringify(data);
         addLog(`Error: ${msg}`);
+        const code = String(data.code || data.state || "");
 
         // If we're actively trying to capture, reset and tell the user
         if (busyRef.current && !readingReceivedRef.current) {
@@ -607,16 +872,20 @@ export default function CaptureScreen({ route, navigation }: any) {
           setBusy(false);
           setPhase("idle");
           setStatusText("");
-          Alert.alert(
-            "Device Error",
-            "Something went wrong during the reading. Please try again."
-          );
+          if (BLUETOOTH_ERROR_CODES.has(code)) {
+            showBluetoothAlert(data);
+          } else {
+            Alert.alert(
+              "Device Error",
+              "Something went wrong during the reading. Please try again."
+            );
+          }
         }
       }),
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, saveBPReading, saveWeightReading]);
+  }, [addLog, device, saveBPReading, saveWeightReading, promptForGlucoseTiming]);
 
   // ============================================================================
   // START CAPTURE
@@ -628,6 +897,17 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
     if (!IHealthDevices || !emitter) {
       Alert.alert("Error", "Native module not available");
+      return;
+    }
+
+    try {
+      await deviceService.ensureBluetoothReady();
+    } catch (error: any) {
+      addLog(`Bluetooth not ready: ${error?.message || String(error)}`);
+      showBluetoothAlert(error?.status);
+      setBusy(false);
+      setPhase("idle");
+      setStatusText("");
       return;
     }
 
@@ -656,9 +936,11 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     setPhase("scan");
     if (device.type === "SCALE") {
-      setStatusText("Step on scale to wake it");
+      setStatusText("Finding your scale...");
+    } else if (device.type === "BG") {
+      setStatusText("Finding your glucose meter...");
     } else {
-      setStatusText("Press start on device");
+      setStatusText("Finding your blood pressure monitor...");
     }
 
     try {
@@ -667,6 +949,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         "BP3L",
         "BP5",
         "BP5S",
+        "BG5S",
         "HS2S",
         "HS2",
         "HS4S",
@@ -690,7 +973,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       setStatusText("");
       Alert.alert(
         "Timeout",
-        "No reading received. Make sure device is awake and try again."
+        "No reading was received. Keep the device nearby, make sure it has battery, and try again."
       );
     }, 90000);
   }, [device, addLog, successScale]);
@@ -720,6 +1003,14 @@ export default function CaptureScreen({ route, navigation }: any) {
   // START - Entry point that checks for health check first
   // ============================================================================
   const start = useCallback(async () => {
+    try {
+      await deviceService.ensureBluetoothReady();
+    } catch (error: any) {
+      addLog(`Bluetooth not ready: ${error?.message || String(error)}`);
+      showBluetoothAlert(error?.status);
+      return;
+    }
+
     if (device?.type === "BP" && !healthCheckCompleted) {
       addLog("Daily health check required before BP measurement");
       setShowHealthCheckModal(true);
@@ -747,6 +1038,14 @@ export default function CaptureScreen({ route, navigation }: any) {
     IHealthDevices?.allowSleep?.();
     navigation.goBack();
   }, [navigation]);
+
+  const cancelGlucoseTiming = useCallback(() => {
+    setShowGlucoseTimingModal(false);
+    setPendingGlucoseReading(null);
+    readingReceivedRef.current = false;
+    setPhase("idle");
+    setStatusText("");
+  }, []);
 
   // ==========================================================================
   // Render helpers
@@ -782,13 +1081,15 @@ export default function CaptureScreen({ route, navigation }: any) {
       case "auth":
         return "Initializing...";
       case "scan":
-        if (device.type === "SCALE") return "Step on scale to wake it";
-        return "Press start on your device";
+        if (device.type === "SCALE") return "Finding your scale...";
+        if (device.type === "BG") return "Finding your glucose meter...";
+        return "Finding your monitor...";
       case "connect":
         return "Connecting...";
       case "measure":
-        if (device.type === "SCALE") return "Hold still...";
-        return "Keep arm relaxed...";
+        if (device.type === "SCALE") return "Stand still...";
+        if (device.type === "BG") return "Checking stored readings...";
+        return "Keep your arm relaxed...";
       case "success":
         return "Reading saved!";
       default:
@@ -809,6 +1110,8 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
   };
 
+  const isSuccess = phase === "success" && Boolean(lastReading);
+
   const renderReadingDisplay = () => {
     if (phase === "success" && lastReading) {
       if (device.type === "BP") {
@@ -816,6 +1119,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           <Animated.View
             style={[
               styles.readingContainer,
+              isSuccess && styles.readingContainerSuccess,
               { transform: [{ scale: successScale }] },
             ]}
           >
@@ -823,43 +1127,46 @@ export default function CaptureScreen({ route, navigation }: any) {
               <Text
                 style={[
                   styles.bpValue,
+                  isSuccess && styles.bpValueSuccess,
                   lastReading.isHigh && styles.bpValueHigh,
                 ]}
               >
                 {lastReading.systolic}
               </Text>
-              <Text style={styles.bpSeparator}>/</Text>
+              <Text style={[styles.bpSeparator, isSuccess && styles.bpSeparatorSuccess]}>/</Text>
               <Text
                 style={[
                   styles.bpValue,
+                  isSuccess && styles.bpValueSuccess,
                   lastReading.isHigh && styles.bpValueHigh,
                 ]}
               >
                 {lastReading.diastolic}
               </Text>
             </View>
-            <Text style={styles.readingUnit}>mmHg</Text>
+            <Text style={[styles.readingUnit, isSuccess && styles.readingUnitSuccess]}>mmHg</Text>
             {lastReading.isHigh && (
-              <View style={styles.highBPBadge}>
+              <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
                 <MaterialIcons name="warning" size={18} color="#FF5252" />
-                <Text style={styles.highBPText}>
+                <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
                   Above threshold ({bpThresholds?.systolicHigh}/
                   {bpThresholds?.diastolicHigh})
                 </Text>
               </View>
             )}
-            <View style={styles.pulseContainer}>
+            <View style={[styles.pulseContainer, isSuccess && styles.pulseContainerSuccess]}>
               <MaterialIcons
                 name="favorite"
-                size={18}
+                size={isSuccess ? 16 : 18}
                 color={theme.secondary}
               />
-              <Text style={styles.pulseText}>{lastReading.pulse} bpm</Text>
+              <Text style={[styles.pulseText, isSuccess && styles.pulseTextSuccess]}>{lastReading.pulse} bpm</Text>
             </View>
             {syncStatus !== "" && (
               <Text
                 style={[
                   styles.syncStatusText,
+                  isSuccess && styles.syncStatusTextSuccess,
                   syncStatus === "synced" && styles.syncStatusSynced,
                   syncStatus === "pending" && styles.syncStatusPending,
                 ]}
@@ -874,16 +1181,46 @@ export default function CaptureScreen({ route, navigation }: any) {
           <Animated.View
             style={[
               styles.readingContainer,
+              isSuccess && styles.readingContainerSuccess,
               { transform: [{ scale: successScale }] },
             ]}
           >
-            <Text style={styles.weightValue}>{lastReading.weight}</Text>
-            <Text style={styles.readingUnit}>lbs</Text>
-            <Text style={styles.subReading}>{lastReading.kg} kg</Text>
+            <Text style={[styles.weightValue, isSuccess && styles.weightValueSuccess]}>{lastReading.weight}</Text>
+            <Text style={[styles.readingUnit, isSuccess && styles.readingUnitSuccess]}>lbs</Text>
+            <Text style={[styles.subReading, isSuccess && styles.subReadingSuccess]}>{lastReading.kg} kg</Text>
             {syncStatus !== "" && (
               <Text
                 style={[
                   styles.syncStatusText,
+                  isSuccess && styles.syncStatusTextSuccess,
+                  syncStatus === "synced" && styles.syncStatusSynced,
+                  syncStatus === "pending" && styles.syncStatusPending,
+                ]}
+              >
+                {getSyncStatusText()}
+              </Text>
+            )}
+          </Animated.View>
+        );
+      } else if (device.type === "BG") {
+        return (
+          <Animated.View
+            style={[
+              styles.readingContainer,
+              isSuccess && styles.readingContainerSuccess,
+              { transform: [{ scale: successScale }] },
+            ]}
+          >
+            <Text style={[styles.weightValue, isSuccess && styles.weightValueSuccess]}>{lastReading.glucose}</Text>
+            <Text style={[styles.readingUnit, isSuccess && styles.readingUnitSuccess]}>{lastReading.unit || "mg/dL"}</Text>
+            {lastReading.timingLabel ? (
+              <Text style={[styles.subReading, isSuccess && styles.subReadingSuccess]}>{lastReading.timingLabel}</Text>
+            ) : null}
+            {syncStatus !== "" && (
+              <Text
+                style={[
+                  styles.syncStatusText,
+                  isSuccess && styles.syncStatusTextSuccess,
                   syncStatus === "synced" && styles.syncStatusSynced,
                   syncStatus === "pending" && styles.syncStatusPending,
                 ]}
@@ -898,9 +1235,15 @@ export default function CaptureScreen({ route, navigation }: any) {
     return null;
   };
 
-  const bottomPadding = phase === "success" 
-    ? Math.max(insets.bottom + 16, 30) 
-    : Math.max(insets.bottom + 100, 140);
+  const bottomPadding = isSuccess
+    ? Math.max(insets.bottom + 12, 22)
+    : Math.max(insets.bottom + 72, 96);
+  const deviceTypeLabel =
+    device.type === "BP"
+      ? "Blood Pressure Monitor"
+      : device.type === "SCALE"
+        ? "Smart Scale"
+        : "Glucose Meter";
 
   return (
     <View style={styles.container}>
@@ -911,7 +1254,12 @@ export default function CaptureScreen({ route, navigation }: any) {
       />
 
       {/* Header */}
-      <Animated.View style={[styles.header, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          styles.header,
+          { opacity: fadeAnim, paddingTop: Math.max(insets.top + 6, 30) },
+        ]}
+      >
         <TouchableOpacity
           onPress={() => navigation.goBack()}
           style={styles.headerBtn}
@@ -927,6 +1275,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         style={styles.scrollView}
         contentContainerStyle={[
           styles.scrollContent,
+          isSuccess && styles.scrollContentSuccess,
           { paddingBottom: bottomPadding },
         ]}
         showsVerticalScrollIndicator={false}
@@ -934,14 +1283,16 @@ export default function CaptureScreen({ route, navigation }: any) {
         <Animated.View
           style={[
             styles.content,
+            isSuccess && styles.contentSuccess,
             { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
           ]}
         >
           {/* Device Visual */}
-          <View style={styles.deviceSection}>
+          <View style={[styles.deviceSection, isSuccess && styles.deviceSectionSuccess]}>
             <Animated.View
               style={[
                 styles.deviceRing,
+                isSuccess && styles.deviceRingSuccess,
                 {
                   borderColor: theme.primary,
                   transform: [
@@ -974,10 +1325,10 @@ export default function CaptureScreen({ route, navigation }: any) {
               )}
             </Animated.View>
 
-            <View style={styles.deviceImageContainer}>
+            <View style={[styles.deviceImageContainer, isSuccess && styles.deviceImageContainerSuccess]}>
               <Image
-                source={deviceImages[device.type]}
-                style={styles.deviceImage}
+                source={deviceImages[device.type] || deviceImages.BP}
+                style={[styles.deviceImage, isSuccess && styles.deviceImageSuccess]}
               />
               {phase === "success" && (
                 <>
@@ -985,6 +1336,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                   <Animated.View
                     style={[
                       styles.successRing,
+                      isSuccess && styles.successRingSuccess,
                       {
                         borderColor: theme.primary,
                         transform: [{ scale: successRingScale }],
@@ -995,10 +1347,11 @@ export default function CaptureScreen({ route, navigation }: any) {
                   <Animated.View
                     style={[
                       styles.successBadge,
+                      isSuccess && styles.successBadgeSuccess,
                       { backgroundColor: theme.primary, transform: [{ scale: successScale }] },
                     ]}
                   >
-                    <MaterialIcons name="check" size={24} color="#fff" />
+                    <MaterialIcons name="check" size={isSuccess ? 20 : 24} color="#fff" />
                   </Animated.View>
                 </>
               )}
@@ -1006,10 +1359,8 @@ export default function CaptureScreen({ route, navigation }: any) {
           </View>
 
           {/* Device Info */}
-          <Text style={styles.deviceName}>{device.name}</Text>
-          <Text style={styles.deviceType}>
-            {device.type === "BP" ? "Blood Pressure Monitor" : "Smart Scale"}
-          </Text>
+          <Text style={[styles.deviceName, isSuccess && styles.deviceNameSuccess]}>{device.name}</Text>
+          <Text style={[styles.deviceType, isSuccess && styles.deviceTypeSuccess]}>{deviceTypeLabel}</Text>
 
           {/* Reading Display or Status */}
           {phase === "success" && lastReading ? (
@@ -1051,7 +1402,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           )}
 
           {/* Action Buttons */}
-          <View style={styles.buttonContainer}>
+          <View style={[styles.buttonContainer, isSuccess && styles.buttonContainerSuccess]}>
             {phase === "idle" && (
               <TouchableOpacity onPress={start} activeOpacity={0.8}>
                 <LinearGradient
@@ -1060,7 +1411,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
-                  <Text style={styles.primaryButtonText}>Start Capture</Text>
+                  <Text style={styles.primaryButtonText}>Capture Reading</Text>
                 </LinearGradient>
               </TouchableOpacity>
             )}
@@ -1080,7 +1431,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                 <TouchableOpacity onPress={done} activeOpacity={0.8}>
                   <LinearGradient
                     colors={theme.gradient}
-                    style={styles.primaryButton}
+                    style={[styles.primaryButton, isSuccess && styles.primaryButtonSuccess]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                   >
@@ -1098,6 +1449,43 @@ export default function CaptureScreen({ route, navigation }: any) {
         visible={showHealthCheckModal}
         onComplete={handleHealthCheckComplete}
       />
+
+      <Modal
+        visible={showGlucoseTimingModal}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelGlucoseTiming}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.glucoseTimingModal}>
+            <Text style={styles.glucoseTimingTitle}>Glucose sample window</Text>
+            <Text style={styles.glucoseTimingValue}>
+              {pendingGlucoseReading?.value} {pendingGlucoseReading?.unit || "mg/dL"}
+            </Text>
+            <View style={styles.glucoseTimingGrid}>
+              {GLUCOSE_TIMING_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={styles.glucoseTimingOption}
+                  onPress={() => saveGlucoseReading(option.value)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.glucoseTimingOptionText}>
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={styles.glucoseTimingCancel}
+              onPress={cancelGlucoseTiming}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.glucoseTimingCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1143,11 +1531,18 @@ const styles = StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
   },
+  scrollContentSuccess: {
+    justifyContent: "center",
+  },
   content: {
     flex: 1,
     alignItems: "center",
     paddingHorizontal: 24,
     paddingTop: 10,
+  },
+  contentSuccess: {
+    paddingHorizontal: 20,
+    paddingTop: 0,
   },
   deviceSection: {
     width: 160,
@@ -1155,6 +1550,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,
+  },
+  deviceSectionSuccess: {
+    width: 124,
+    height: 124,
+    marginBottom: 6,
   },
   deviceRing: {
     position: "absolute",
@@ -1164,6 +1564,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderStyle: "dashed",
     opacity: 0.5,
+  },
+  deviceRingSuccess: {
+    width: 124,
+    height: 124,
+    borderRadius: 62,
   },
   ringDot: {
     position: "absolute",
@@ -1189,10 +1594,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  deviceImageContainerSuccess: {
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+  },
   deviceImage: {
     width: 75,
     height: 75,
     resizeMode: "contain",
+  },
+  deviceImageSuccess: {
+    width: 58,
+    height: 58,
   },
   successBadge: {
     position: "absolute",
@@ -1206,12 +1620,23 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: "#1a1a2e",
   },
+  successBadgeSuccess: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 2,
+  },
   successRing: {
     position: "absolute",
     width: 110,
     height: 110,
     borderRadius: 55,
     borderWidth: 2,
+  },
+  successRingSuccess: {
+    width: 86,
+    height: 86,
+    borderRadius: 43,
   },
   deviceName: {
     fontSize: 22,
@@ -1220,11 +1645,17 @@ const styles = StyleSheet.create({
     marginBottom: 2,
     textAlign: "center",
   },
+  deviceNameSuccess: {
+    fontSize: 18,
+  },
   deviceType: {
     fontSize: 13,
     color: "#888",
     marginBottom: 20,
     textAlign: "center",
+  },
+  deviceTypeSuccess: {
+    marginBottom: 8,
   },
   statusSection: {
     alignItems: "center",
@@ -1249,6 +1680,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginVertical: 10,
   },
+  readingContainerSuccess: {
+    marginVertical: 0,
+  },
   bpReading: {
     flexDirection: "row",
     alignItems: "baseline",
@@ -1257,6 +1691,9 @@ const styles = StyleSheet.create({
     fontSize: 64,
     fontWeight: "300",
     color: "#fff",
+  },
+  bpValueSuccess: {
+    fontSize: 52,
   },
   bpValueHigh: {
     color: "#FF5252",
@@ -1267,10 +1704,17 @@ const styles = StyleSheet.create({
     color: "#666",
     marginHorizontal: 4,
   },
+  bpSeparatorSuccess: {
+    fontSize: 38,
+  },
   readingUnit: {
     fontSize: 18,
     color: "#888",
     marginTop: 4,
+  },
+  readingUnitSuccess: {
+    fontSize: 15,
+    marginTop: 0,
   },
   highBPBadge: {
     flexDirection: "row",
@@ -1282,10 +1726,18 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     gap: 6,
   },
+  highBPBadgeSuccess: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
   highBPText: {
     fontSize: 14,
     color: "#FF8A80",
     fontWeight: "500",
+  },
+  highBPTextSuccess: {
+    fontSize: 12,
   },
   pulseContainer: {
     flexDirection: "row",
@@ -1296,25 +1748,44 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.05)",
     borderRadius: 20,
   },
+  pulseContainerSuccess: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
   pulseText: {
     fontSize: 16,
     color: "#fff",
     marginLeft: 8,
+  },
+  pulseTextSuccess: {
+    fontSize: 14,
   },
   weightValue: {
     fontSize: 72,
     fontWeight: "200",
     color: "#fff",
   },
+  weightValueSuccess: {
+    fontSize: 56,
+  },
   subReading: {
     fontSize: 16,
     color: "#666",
     marginTop: 8,
   },
+  subReadingSuccess: {
+    fontSize: 14,
+    marginTop: 4,
+  },
   syncStatusText: {
     fontSize: 14,
     color: "#888",
     marginTop: 16,
+  },
+  syncStatusTextSuccess: {
+    fontSize: 13,
+    marginTop: 8,
   },
   syncStatusSynced: {
     color: "#4caf50",
@@ -1340,12 +1811,19 @@ const styles = StyleSheet.create({
     marginTop: 20,
     marginBottom: 10,
   },
+  buttonContainerSuccess: {
+    marginTop: 10,
+    marginBottom: 0,
+  },
   primaryButton: {
     width: SCREEN_WIDTH - 48,
     height: 56,
     borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
+  },
+  primaryButtonSuccess: {
+    height: 50,
   },
   primaryButtonText: {
     color: "#fff",
@@ -1366,6 +1844,70 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 18,
     fontWeight: "500",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+  glucoseTimingModal: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: "#152238",
+    borderRadius: 8,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+  },
+  glucoseTimingTitle: {
+    color: "#fff",
+    fontSize: 20,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  glucoseTimingValue: {
+    color: "#A5D6A7",
+    fontSize: 28,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 8,
+    marginBottom: 18,
+  },
+  glucoseTimingGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  glucoseTimingOption: {
+    width: "48%",
+    minHeight: 48,
+    borderRadius: 8,
+    backgroundColor: "rgba(67,160,71,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(165,214,167,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+  },
+  glucoseTimingOptionText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  glucoseTimingCancel: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 16,
+  },
+  glucoseTimingCancelText: {
+    color: "#b0bec5",
+    fontSize: 15,
+    fontWeight: "600",
   },
   errorText: {
     fontSize: 18,
