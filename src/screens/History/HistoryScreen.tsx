@@ -13,6 +13,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   ImageBackground,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useDispatch, useSelector } from "react-redux";
@@ -28,7 +29,11 @@ import {
   forceSyncAll,
 } from "../../services/vitalsSyncService";
 import type { RootState, AppDispatch } from "../../redux/store";
-import type { SavedReading } from "../../services/sqliteService";
+import {
+  getScreeningResponsesByType,
+  type SavedReading,
+  type ScreeningResponse,
+} from "../../services/sqliteService";
 
 // Default BP thresholds (standard hypertension definition)
 const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
@@ -46,14 +51,20 @@ interface DisplayReading extends SavedReading {
   displayNumber: number;
 }
 
+interface DisplayScreeningResponse extends ScreeningResponse {
+  displayNumber: number;
+}
+
 interface TabRoute {
   key: string;
   title: string;
+  kind: "reading" | "screening" | "empty";
 }
 
 interface SyncState {
   status: "idle" | "syncing" | "offline" | "error";
   pendingCount: number;
+  pendingScreeningCount: number;
   lastSyncAttempt: Date | null;
   lastSuccessfulSync: Date | null;
   lastError: string | null;
@@ -67,8 +78,8 @@ if (
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-/* ---- Segment Control Component ---- */
-function SegmentControl({
+/* ---- Scrollable History Navigation ---- */
+function HistoryTabBar({
   segments,
   selectedIndex,
   onChange,
@@ -80,7 +91,12 @@ function SegmentControl({
   if (!segments || segments.length === 0) return null;
 
   return (
-    <View style={segmentStyles.container}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={segmentStyles.contentContainer}
+      style={segmentStyles.scrollContainer}
+    >
       {segments.map((segment, idx) => {
         const isSelected = idx === selectedIndex;
         return (
@@ -105,26 +121,28 @@ function SegmentControl({
           </TouchableOpacity>
         );
       })}
-    </View>
+    </ScrollView>
   );
 }
 
 const segmentStyles = StyleSheet.create({
-  container: {
-    flexDirection: "row",
-    marginHorizontal: 16,
+  scrollContainer: {
     marginVertical: 12,
-    backgroundColor: "rgba(0, 32, 64, 0.12)",
-    borderRadius: 10,
-    padding: 3,
+    flexGrow: 0,
+  },
+  contentContainer: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    gap: 8,
   },
   segment: {
-    flex: 1,
+    backgroundColor: "rgba(0, 32, 64, 0.12)",
     paddingVertical: 10,
-    paddingHorizontal: 8,
+    paddingHorizontal: 14,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 8,
+    borderRadius: 18,
+    minWidth: 112,
   },
   segmentSelected: {
     backgroundColor: "#002040",
@@ -153,6 +171,12 @@ export default function HistoryScreen() {
   );
   const [index, setIndex] = useState(0);
   const [routes, setRoutes] = useState<TabRoute[]>([]);
+  const [dailyHealthChecks, setDailyHealthChecks] = useState<
+    ScreeningResponse[]
+  >([]);
+  const [urineProteinResponses, setUrineProteinResponses] = useState<
+    ScreeningResponse[]
+  >([]);
   const [sortDirections, setSortDirections] = useState<Record<string, boolean>>(
     {}
   );
@@ -160,26 +184,40 @@ export default function HistoryScreen() {
   const [syncState, setSyncState] = useState<SyncState>({
     status: "idle",
     pendingCount: 0,
+    pendingScreeningCount: 0,
     lastSyncAttempt: null,
     lastSuccessfulSync: null,
     lastError: null,
     retryCount: 0,
   });
 
+  const loadScreeningHistory = useCallback(() => {
+    setDailyHealthChecks(getScreeningResponsesByType("daily_health_check"));
+    setUrineProteinResponses(
+      getScreeningResponsesByType("urine_protein_result")
+    );
+  }, []);
+
   // Subscribe to sync state changes
   useEffect(() => {
     const unsubscribe = onSyncStateChange((state) => {
       setSyncState(state);
-      if (state.status === "idle" && state.pendingCount === 0) {
+      if (
+        state.status === "idle" &&
+        state.pendingCount === 0 &&
+        state.pendingScreeningCount === 0
+      ) {
         dispatch(loadReadings());
+        loadScreeningHistory();
       }
     });
     return unsubscribe;
-  }, [dispatch]);
+  }, [dispatch, loadScreeningHistory]);
 
   useEffect(() => {
     dispatch(loadReadings());
-  }, [dispatch]);
+    loadScreeningHistory();
+  }, [dispatch, loadScreeningHistory]);
 
   // Group by TYPE (BP, SCALE, BG)
   const grouped = useMemo(() => {
@@ -214,48 +252,66 @@ export default function HistoryScreen() {
           else title = type;
         }
 
-        newRoutes.push({ key: type, title });
+        newRoutes.push({ key: type, title, kind: "reading" });
       }
+    }
+
+    if (dailyHealthChecks.length > 0) {
+      newRoutes.push({
+        key: "daily_health_check",
+        title: "Daily Health",
+        kind: "screening",
+      });
+    }
+
+    if (urineProteinResponses.length > 0) {
+      newRoutes.push({
+        key: "urine_protein_result",
+        title: "Urine Protein",
+        kind: "screening",
+      });
     }
 
     setRoutes(
       newRoutes.length > 0
         ? newRoutes
-        : [{ key: "empty", title: "No Devices" }]
+        : [{ key: "empty", title: "No History", kind: "empty" }]
     );
-    
+
     // Reset index if out of bounds
-    if (index >= newRoutes.length && newRoutes.length > 0) {
+    if (index >= Math.max(newRoutes.length, 1)) {
       setIndex(0);
     }
-  }, [grouped, index]);
+  }, [dailyHealthChecks.length, grouped, index, urineProteinResponses.length]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await dispatch(loadReadings());
+    loadScreeningHistory();
     setRefreshing(false);
-  }, [dispatch]);
+  }, [dispatch, loadScreeningHistory]);
 
   const handleSync = useCallback(async () => {
     try {
       const result = await forceSyncAll();
       await dispatch(loadReadings());
+      loadScreeningHistory();
 
       if (result.synced > 0) {
         Alert.alert(
           "Sync Complete",
-          `${result.synced} reading${result.synced !== 1 ? "s" : ""} synced to EMR.`
+          `${result.synced} item${result.synced !== 1 ? "s" : ""} synced to EMR.`
         );
       } else if (result.remaining > 0) {
         Alert.alert(
           "Sync Incomplete",
-          `${result.remaining} reading${result.remaining !== 1 ? "s" : ""} still pending. Will retry automatically.`
+          `${result.remaining} item${result.remaining !== 1 ? "s" : ""} still pending. Will retry automatically.`
         );
       }
     } catch (error) {
       Alert.alert("Sync Error", "Unable to sync readings. Please try again.");
     }
-  }, [dispatch]);
+  }, [dispatch, loadScreeningHistory]);
 
   const handleExport = async () => {
     try {
@@ -322,18 +378,25 @@ export default function HistoryScreen() {
     setSortDirections((prev) => ({ ...prev, [typeKey]: !prev[typeKey] }));
   }, []);
 
-  const pendingCount = syncState.pendingCount;
+  const pendingCount =
+    syncState.pendingCount + syncState.pendingScreeningCount;
   const isSyncing = syncState.status === "syncing";
   const isOffline = syncState.status === "offline";
 
   // Determine navigation mode
-  const deviceCount = routes.filter((r) => r.key !== "empty").length;
-  const isSingleDevice = deviceCount === 1;
-  const showSegments = deviceCount >= 2 && deviceCount <= 3;
+  const sectionCount = routes.filter((r) => r.key !== "empty").length;
+  const isSingleSection = sectionCount === 1;
+  const showHistoryTabs = sectionCount > 1;
 
   // Get current route safely
   const currentRoute = routes[index] || routes[0];
   const currentKey = currentRoute?.key || "empty";
+  const currentScreeningData =
+    currentKey === "daily_health_check"
+      ? dailyHealthChecks
+      : currentKey === "urine_protein_result"
+        ? urineProteinResponses
+        : [];
 
   return (
     <ImageBackground
@@ -359,7 +422,7 @@ export default function HistoryScreen() {
                 isOffline && styles.syncBannerTextOffline,
               ]}
             >
-              {pendingCount} reading{pendingCount !== 1 ? "s" : ""} pending
+              {pendingCount} item{pendingCount !== 1 ? "s" : ""} pending
               {isOffline ? " • Offline" : ""}
             </Text>
           </View>
@@ -401,16 +464,16 @@ export default function HistoryScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Single Device Title */}
-      {isSingleDevice && currentKey !== "empty" && (
+      {/* Single History Section Title */}
+      {isSingleSection && currentKey !== "empty" && (
         <View style={styles.singleDeviceHeader}>
           <Text style={styles.singleDeviceTitle}>{currentRoute?.title}</Text>
         </View>
       )}
 
-      {/* Segment Control for 2-3 devices */}
-      {showSegments && (
-        <SegmentControl
+      {/* Scrollable History Sections */}
+      {showHistoryTabs && (
+        <HistoryTabBar
           segments={routes}
           selectedIndex={index}
           onChange={setIndex}
@@ -424,9 +487,18 @@ export default function HistoryScreen() {
             <MaterialIcons name="show-chart" size={64} color="#ccc" />
             <Text style={styles.emptyTitle}>No Readings Yet</Text>
             <Text style={styles.emptySubtitle}>
-              Take a measurement to see your history here
+              Take a measurement or answer a health check to see history here
             </Text>
           </View>
+        ) : currentRoute?.kind === "screening" ? (
+          <ScreeningHistoryTab
+            data={currentScreeningData}
+            type={currentKey}
+            sortAsc={sortDirections[currentKey] ?? false}
+            onToggleSort={() => toggleSort(currentKey)}
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         ) : (
           <DeviceHistoryTab
             data={grouped[currentKey] || []}
@@ -863,6 +935,339 @@ function DeviceHistoryTab({
   );
 }
 
+function parseScreeningData(response: ScreeningResponse): Record<string, unknown> {
+  try {
+    return response.data ? JSON.parse(response.data) : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function yesNoLabel(value: unknown): string {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "Not answered";
+}
+
+function isProteinAlert(result: unknown): boolean {
+  return result === "+2" || result === "+3" || result === "+4";
+}
+
+function proteinTextColor(result: unknown): string {
+  if (result === "Negative") return "#2e7d32";
+  if (result === "Trace" || result === "+1") return "#ef6c00";
+  if (isProteinAlert(result)) return "#c62828";
+  return "#002040";
+}
+
+function ScreeningSummary({
+  data,
+  type,
+}: {
+  data: ScreeningResponse[];
+  type: string;
+}) {
+  const summary = useMemo(() => {
+    if (type === "daily_health_check") {
+      const symptomCount = data.filter((response) => {
+        const parsed = parseScreeningData(response);
+        return parsed.hasHeadaches === true || parsed.hasVisualDisturbances === true;
+      }).length;
+      return {
+        firstLabel: "Total",
+        firstValue: String(data.length),
+        secondLabel: "Symptoms",
+        secondValue: String(symptomCount),
+        thirdLabel: "Clear",
+        thirdValue: String(data.length - symptomCount),
+      };
+    }
+
+    const alertCount = data.filter((response) => {
+      const parsed = parseScreeningData(response);
+      return isProteinAlert(parsed.result);
+    }).length;
+    const latest = data[0] ? parseScreeningData(data[0]).result : "--";
+
+    return {
+      firstLabel: "Total",
+      firstValue: String(data.length),
+      secondLabel: "Latest",
+      secondValue: typeof latest === "string" ? latest : "--",
+      thirdLabel: "Alerts",
+      thirdValue: String(alertCount),
+    };
+  }, [data, type]);
+
+  if (!data.length) return null;
+
+  return (
+    <View style={styles.statsContainer}>
+      <View style={styles.statItem}>
+        <MaterialIcons name="fact-check" size={16} color="#00509f" />
+        <Text style={styles.statLabel}>{summary.firstLabel}</Text>
+        <Text style={styles.statValue}>{summary.firstValue}</Text>
+      </View>
+      <View style={styles.statItem}>
+        <MaterialIcons name="health-and-safety" size={16} color="#e53935" />
+        <Text style={styles.statLabel}>{summary.secondLabel}</Text>
+        <Text
+          style={[
+            styles.statValue,
+            type === "urine_protein_result" && {
+              color: proteinTextColor(summary.secondValue),
+            },
+          ]}
+        >
+          {summary.secondValue}
+        </Text>
+      </View>
+      <View style={styles.statItem}>
+        <MaterialIcons name="check-circle" size={16} color="#43a047" />
+        <Text style={styles.statLabel}>{summary.thirdLabel}</Text>
+        <Text style={styles.statValue}>{summary.thirdValue}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ScreeningHistoryTab({
+  data,
+  type,
+  sortAsc,
+  onToggleSort,
+  refreshing,
+  onRefresh,
+}: {
+  data: ScreeningResponse[];
+  type: string;
+  sortAsc: boolean;
+  onToggleSort: () => void;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  const chronological = useMemo(() => {
+    if (!data || data.length === 0) return [];
+    return [...data].sort((a, b) => a.timestamp - b.timestamp);
+  }, [data]);
+
+  const numbered: DisplayScreeningResponse[] = useMemo(
+    () =>
+      chronological.map((response, i) => ({
+        ...response,
+        displayNumber: i + 1,
+      })),
+    [chronological]
+  );
+
+  const sortedList = useMemo(
+    () =>
+      sortAsc
+        ? [...numbered].sort((a, b) => a.timestamp - b.timestamp)
+        : [...numbered].sort((a, b) => b.timestamp - a.timestamp),
+    [numbered, sortAsc]
+  );
+
+  const unsyncedCount = useMemo(
+    () => numbered.filter((response) => !response.synced).length,
+    [numbered]
+  );
+
+  const renderItem = useCallback(
+    ({ item }: { item: DisplayScreeningResponse }) => {
+      const parsed = parseScreeningData(item);
+      const isDailyHealth = type === "daily_health_check";
+      const headacheYes = parsed.hasHeadaches === true;
+      const visionYes = parsed.hasVisualDisturbances === true;
+      const result = parsed.result;
+      const abnormal = isDailyHealth
+        ? headacheYes || visionYes
+        : isProteinAlert(result);
+      const details =
+        typeof parsed.details === "string" ? parsed.details.trim() : "";
+
+      return (
+        <View style={[styles.row, abnormal && styles.rowHigh]}>
+          <View style={styles.info}>
+            <View style={styles.valueRow}>
+              <View
+                style={[
+                  styles.numberCircle,
+                  abnormal && styles.numberCircleHigh,
+                ]}
+              >
+                <Text style={styles.numberText}>{item.displayNumber}</Text>
+              </View>
+              <View style={styles.valueColumn}>
+                <View style={styles.valueWithBadge}>
+                  <Text
+                    style={[
+                      styles.value,
+                      abnormal && styles.valueHigh,
+                      !isDailyHealth && { color: proteinTextColor(result) },
+                    ]}
+                  >
+                    {isDailyHealth
+                      ? abnormal
+                        ? "Symptoms Reported"
+                        : "No Symptoms"
+                      : `Urine Protein: ${typeof result === "string" ? result : "--"}`}
+                  </Text>
+                  {abnormal && (
+                    <View style={styles.highBadge}>
+                      <Text style={styles.highBadgeText}>
+                        {isDailyHealth ? "YES" : "ALERT"}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                {isDailyHealth ? (
+                  <View style={styles.screeningBadgeRow}>
+                    <View
+                      style={[
+                        styles.answerPill,
+                        headacheYes ? styles.answerPillYes : styles.answerPillNo,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.answerPillText,
+                          headacheYes
+                            ? styles.answerPillTextYes
+                            : styles.answerPillTextNo,
+                        ]}
+                      >
+                        Headache: {yesNoLabel(parsed.hasHeadaches)}
+                      </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.answerPill,
+                        visionYes ? styles.answerPillYes : styles.answerPillNo,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.answerPillText,
+                          visionYes
+                            ? styles.answerPillTextYes
+                            : styles.answerPillTextNo,
+                        ]}
+                      >
+                        Vision: {yesNoLabel(parsed.hasVisualDisturbances)}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+
+                {details ? (
+                  <Text style={styles.screeningDetails}>{details}</Text>
+                ) : null}
+              </View>
+            </View>
+            <Text style={styles.timeText}>
+              {new Date(item.timestamp).toLocaleDateString([], {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}{" "}
+              at{" "}
+              {new Date(item.timestamp).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+            </Text>
+          </View>
+          <View style={styles.statusContainer}>
+            {item.synced ? (
+              <View style={styles.syncedBadge}>
+                <MaterialCommunityIcons
+                  name="cloud-check"
+                  size={20}
+                  color="#fff"
+                />
+              </View>
+            ) : (
+              <View style={styles.pendingBadge}>
+                <MaterialCommunityIcons
+                  name="cloud-upload-outline"
+                  size={20}
+                  color="#ff9800"
+                />
+              </View>
+            )}
+          </View>
+        </View>
+      );
+    },
+    [type]
+  );
+
+  return (
+    <View style={styles.scene}>
+      <FlatList
+        data={sortedList}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#002040"
+            colors={["#002040"]}
+          />
+        }
+        ListHeaderComponent={
+          <>
+            <ScreeningSummary data={data} type={type} />
+            <View style={styles.metaRow}>
+              <View style={styles.countRow}>
+                <Text style={styles.countText}>
+                  {numbered.length}{" "}
+                  {type === "daily_health_check" ? "check" : "result"}
+                  {numbered.length !== 1 ? "s" : ""}
+                </Text>
+                {unsyncedCount > 0 && (
+                  <View style={styles.unsyncedPill}>
+                    <MaterialCommunityIcons
+                      name="cloud-upload-outline"
+                      size={12}
+                      color="#ff9800"
+                    />
+                    <Text style={styles.unsyncedPillText}>
+                      {unsyncedCount} pending
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <TouchableOpacity style={styles.metaButton} onPress={onToggleSort}>
+                <MaterialCommunityIcons
+                  name={
+                    sortAsc
+                      ? "sort-clock-ascending-outline"
+                      : "sort-clock-descending-outline"
+                  }
+                  size={18}
+                  color="#002040"
+                />
+                <Text style={styles.sortText}>
+                  {sortAsc ? "Oldest first" : "Newest first"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        }
+        ListEmptyComponent={
+          <View style={styles.listEmpty}>
+            <Text style={styles.listEmptyText}>No answers yet</Text>
+          </View>
+        }
+      />
+    </View>
+  );
+}
+
 /* ---------- styles ---------- */
 const styles = StyleSheet.create({
   backgroundImage: {
@@ -1137,6 +1542,42 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#e53935",
     fontWeight: "600",
+  },
+  screeningBadgeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  answerPill: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  answerPillYes: {
+    backgroundColor: "#ffebee",
+    borderColor: "#ef9a9a",
+  },
+  answerPillNo: {
+    backgroundColor: "#e8f5e9",
+    borderColor: "#a5d6a7",
+  },
+  answerPillText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  answerPillTextYes: {
+    color: "#c62828",
+  },
+  answerPillTextNo: {
+    color: "#2e7d32",
+  },
+  screeningDetails: {
+    fontSize: 13,
+    color: "#555",
+    lineHeight: 18,
+    marginTop: 8,
   },
   numberCircle: {
     width: 26,

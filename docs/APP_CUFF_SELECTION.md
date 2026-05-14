@@ -233,4 +233,4 @@ No changes to: iHealth native module, BLE scanning, QR scan format (existing `TY
 - Letting the user edit cuff size after pairing. Too complex (needs EMR re-registration, possibly inventory transfer). Force re-pair instead.
 - Scales with different capacities (adult / pediatric) — all scales are one equipment type.
 - Mobile Phone pairing — these are handed out by admin via the EMR UI, not paired via the app.
-- Auth / bearer tokens — still static X-API-Key, unchanged.
+- Auth / bearer tokens — device registration uses `Authorization: Bearer <patient JWT>`.

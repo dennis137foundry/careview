@@ -25,7 +25,6 @@ interface SendMessageModalProps {
 }
 
 const API_URL = "https://trinitycareview.com/api/careviewapp/app_messenger.php";
-const API_KEY = "dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85";
 const REQUEST_TIMEOUT = 10000;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1500;
@@ -47,7 +46,6 @@ function fetchWithTimeout(
     }, timeout);
 
     // authedFetch adds Authorization: Bearer and refreshes on 401.
-    // Legacy X-API-Key stays in the options.headers during transition.
     authedFetch(url, { ...options, signal: controller.signal })
       .then((response) => {
         clearTimeout(timer);
@@ -141,7 +139,6 @@ export default function SendMessageModal({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-API-Key": API_KEY,
         },
         body: JSON.stringify({
           patientId,

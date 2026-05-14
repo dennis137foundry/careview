@@ -67,7 +67,7 @@ The mobile app keeps sending the same body:
 ```json
 { patientId, patientName, patientPhone, message, timestamp }
 ```
-No app-side changes beyond adding the `X-API-Key` header (→ Bearer JWT after Phase 9). Forward-compatible: future app versions can surface the richer response fields; current version just checks `success`.
+No app-side payload changes. Auth is handled with `Authorization: Bearer <patient JWT>`. Forward-compatible: future app versions can surface the richer response fields; current version just checks `success`.
 
 ### Server logic (`app_messenger.php`)
 
@@ -129,7 +129,7 @@ This is a data insert into an existing table (not a schema change — in scope).
 
 ### App changes
 
-`src/components/SendMessageModal.tsx:136` — add `X-API-Key` header (use the same constant as `vitalsSyncService.ts:43`; replaced by Bearer JWT in Phase 9). No UX change.
+`src/components/SendMessageModal.tsx` — send via `authedFetch`, which adds `Authorization: Bearer <patient JWT>`. No UX change.
 
 ### Companion requirement
 
@@ -405,7 +405,7 @@ Each with `NSPrivacyCollectedDataTypeLinked: true`, `NSPrivacyCollectedDataTypeT
 - New endpoint `refresh_token.php`: accepts refresh token, rotates it (marks old `revoked_at`, issues new pair)
 - New helper `validate_jwt()` — replaces `validate_api_key()` in vitals_sync, screening_sync, app_messenger, device_register
 - Verify `patient_id` in request body matches `patient_id` claim in token; reject mismatch with 403
-- Keep static `X-API-Key` as fallback during a transition window, then remove
+- Do not keep a static `X-API-Key` fallback for patient-write endpoints
 
 ### 9b — App: token storage + header
 
@@ -455,7 +455,7 @@ Each with `NSPrivacyCollectedDataTypeLinked: true`, `NSPrivacyCollectedDataTypeT
 Verified against `C:\Users\denni\Dropbox\Business\Websites\trinityemr.com\public_html\api\careviewapp\device_register.php`:
 
 - **Endpoint:** `POST /api/careviewapp/device_register.php`
-- **Auth:** `X-API-Key` (same key as vitals_sync; will migrate to JWT per Phase 9)
+- **Auth:** `Authorization: Bearer <patient JWT>`
 - **Request body:** `patient_id` (int), `mac` (12-char hex), `category` (`BP`|`SCALE`), `cuff_size` (`STANDARD`|`LARGE`|`XXL` — required for BP, ignored for SCALE), plus optional `model`, `name`, `friendly_name`, `source`
 - **Response 200:** `{success, units: [{unit_id, equipment, role: "monitor"|"accessory"|"scale", parent_unit_id?, idempotent}]}` — always an array; XXL returns 2 units (monitor + accessory with `parent_unit_id` pointing at the monitor)
 - **Response 409:** conflicts — "assigned to another patient", "out of service", "cuff size mismatch" — all rolled back locally, alert shown
@@ -545,7 +545,7 @@ The 12-character hex string printed on the back of every iHealth device (e.g., `
 
 - **Phase 1** (app_messenger auth) is independent
 - **Phase 2** (dead URL cleanup) is independent
-- **Phase 9** (JWT): if Phase 10 ships before Phase 9, the register call uses the static `X-API-Key`; if after, it uses the JWT. Either order works; just make sure the header swap happens in both places (register + vitals sync + messenger) at the same time.
+- **Phase 9** (JWT): register, vitals sync, screening sync, and messenger all use `Authorization: Bearer <patient JWT>`.
 
 ### Verification
 

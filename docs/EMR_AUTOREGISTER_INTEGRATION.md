@@ -11,7 +11,7 @@ This doc is the app-side integration brief. The EMR-side plan lives at `trinitye
 ### New endpoint: `POST https://trinitycareview.com/api/careviewapp/device_register.php`
 
 **Headers:**
-- `X-API-Key: dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85` (same static key the app already uses for `vitals_sync.php` — see `src/services/vitalsSyncService.ts` line 43)
+- `Authorization: Bearer <patient JWT>`
 - `Content-Type: application/json`
 
 **Request body:**
@@ -124,9 +124,9 @@ Single purpose: POST to the register endpoint and handle responses.
 
 ```typescript
 import { getUser } from "./sqliteService";
+import { authedFetch } from "./authToken";
 
 const REGISTER_URL = "https://trinitycareview.com/api/careviewapp/device_register.php";
-const API_KEY = "dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85";
 
 export interface RegisterPayload {
   patient_id: number;
@@ -161,11 +161,10 @@ export type RegisterResult =
 
 export async function registerDeviceWithEmr(payload: RegisterPayload): Promise<RegisterResult> {
   try {
-    const res = await fetch(REGISTER_URL, {
+    const res = await authedFetch(REGISTER_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-API-Key": API_KEY,
       },
       body: JSON.stringify(payload),
     });

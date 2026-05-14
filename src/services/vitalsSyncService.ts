@@ -48,9 +48,6 @@ const CONFIG = {
   vitalsApiUrl: "https://trinitycareview.com/api/careviewapp/vitals_sync.php",
   screeningApiUrl: "https://trinitycareview.com/api/careviewapp/screening_sync.php",
 
-  // API key - must match server
-  apiKey: "dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85",
-
   // Retry settings (exponential backoff)
   retryDelays: [5000, 15000, 45000, 120000, 300000], // 5s, 15s, 45s, 2min, 5min
   maxRetries: 5,
@@ -236,9 +233,7 @@ export function initNetworkMonitoring(): () => void {
  * fetch() wrapped with an AbortController-backed timeout AND the JWT
  * auth wrapper. React Native's fetch has no default timeout, so a stuck
  * connection would otherwise hang the sync loop ~60s. The auth wrapper
- * adds Authorization: Bearer and handles 401 refresh transparently;
- * the legacy X-API-Key header stays in place during the transition so
- * an old server or rotated-JWT edge case still works.
+ * adds Authorization: Bearer and handles 401 refresh transparently.
  */
 function fetchWithTimeout(
   url: string,
@@ -285,7 +280,6 @@ async function sendVitalsToApi(payload: SyncPayload): Promise<SyncResponse> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": CONFIG.apiKey,
     },
     body: JSON.stringify(payload),
   });
@@ -372,7 +366,6 @@ async function sendScreeningToApi(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-API-Key": CONFIG.apiKey,
     },
     body: JSON.stringify(payload),
   });

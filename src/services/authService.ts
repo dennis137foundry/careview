@@ -4,7 +4,7 @@ import { saveUser, getUser, LocalUser, wipeAllPatientData } from "./sqliteServic
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
 import { setAuthTokens, clearAuthTokens } from "./authToken";
 
-const API_BASE = "https://trinityemr.com/api/careviewapp";
+const API_BASE = "https://trinitycareview.com/api/careviewapp";
 const REQUEST_TIMEOUT = 10000; // 10 seconds
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1500; // 1.5 seconds between retries

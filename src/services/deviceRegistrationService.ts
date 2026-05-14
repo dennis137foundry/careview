@@ -20,8 +20,6 @@ import { authedFetch } from "./authToken";
 
 const REGISTER_URL =
   "https://trinitycareview.com/api/careviewapp/device_register.php";
-const API_KEY =
-  "dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85";
 const REQUEST_TIMEOUT_MS = 15000;
 
 // ---------------------------------------------------------------------------
@@ -78,7 +76,6 @@ export async function registerDeviceWithEmr(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-API-Key": API_KEY,
       },
       body: JSON.stringify(payload),
     });
@@ -134,7 +131,6 @@ function fetchWithTimeout(
     }, timeout);
 
     // authedFetch adds Authorization: Bearer and refreshes on 401.
-    // Legacy X-API-Key stays in the options.headers during transition.
     authedFetch(url, { ...options, signal: controller.signal })
       .then((response) => {
         clearTimeout(timer);

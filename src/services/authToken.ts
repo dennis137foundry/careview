@@ -70,8 +70,7 @@ export function getAccessToken(): string | null {
  *
  * Rules:
  *   - If no access token is cached, the request goes out as-is. The
- *     server's X-API-Key fallback keeps legacy callers working during
- *     the transition.
+ *     server will reject protected patient-write endpoints.
  *   - On 401 AND a refresh token is available: try to refresh, retry
  *     once. If the retry also 401s, return the second response —
  *     caller should treat that as session expired and force re-login.

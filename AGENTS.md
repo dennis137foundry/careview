@@ -31,7 +31,7 @@ src/
     History/      - Reading history with charts, export CSV, sync status
     Profile/      - User info, provider details, messaging, sign out
   services/
-    authService.ts           - SMS auth via trinityemr.com API
+    authService.ts           - SMS auth via trinitycareview.com API
     deviceService.ts         - Unified BLE device management layer
     vitalsSyncService.ts     - Syncs readings + screenings to EMR
     sqliteService.ts         - SQLite database layer (users, devices, readings, screenings)
@@ -70,15 +70,15 @@ modules/
 
 ---
 
-## API Endpoints (trinityemr.com / trinitycareview.com)
+## API Endpoints (trinitycareview.com)
 
 All API calls use POST with JSON bodies.
 
 ### Authentication
 | Endpoint | Purpose | Service |
 |----------|---------|---------|
-| `https://trinityemr.com/api/careviewapp/send_code.php` | Send SMS verification code | authService.ts |
-| `https://trinityemr.com/api/careviewapp/verify_code.php` | Verify code, return patient profile + BP thresholds | authService.ts |
+| `https://trinitycareview.com/api/careviewapp/send_code.php` | Send SMS verification code | authService.ts |
+| `https://trinitycareview.com/api/careviewapp/verify_code.php` | Verify code, return patient profile + BP thresholds | authService.ts |
 
 ### Data Sync
 | Endpoint | Purpose | Service |
@@ -92,7 +92,7 @@ All API calls use POST with JSON bodies.
 | `https://trinitycareview.com/api/careviewapp/app_messenger.php` | Patient sends message to care team | SendMessageModal.tsx |
 
 ### API Key
-All sync endpoints use the same API key: `dc9a8e0f685349ab93c0e06f417ff7f8c13fbbac170b71270b55bd2ba7c3ba85`
+Patient-write endpoints require `Authorization: Bearer <patient JWT>` from `authToken.ts`.
 
 ### Sync Payload Structures
 

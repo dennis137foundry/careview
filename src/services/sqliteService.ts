@@ -778,6 +778,37 @@ export function getScreeningResponsesInRange(
 }
 
 /**
+ * Get all screening responses of a given type, newest first.
+ */
+export function getScreeningResponsesByType(
+  type: ScreeningType
+): ScreeningResponse[] {
+  try {
+    const res = db.execute(
+      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? ORDER BY timestamp DESC;",
+      [type]
+    );
+    const out: ScreeningResponse[] = [];
+    if (res.rows) {
+      for (let i = 0; i < res.rows.length; i++) {
+        const row = res.rows.item(i);
+        out.push({
+          id: row.id,
+          type: row.type as ScreeningType,
+          timestamp: row.timestamp,
+          data: row.data,
+          synced: row.synced === 1,
+        });
+      }
+    }
+    return out;
+  } catch (e) {
+    console.error("[DB] Failed to get screening responses by type:", e);
+    return [];
+  }
+}
+
+/**
  * Get unsynced screening responses
  */
 export function getUnsyncedScreeningResponses(): ScreeningResponse[] {
@@ -936,6 +967,7 @@ export default {
   saveScreeningResponse,
   getLastScreeningResponse,
   getScreeningResponsesInRange,
+  getScreeningResponsesByType,
   getUnsyncedScreeningResponses,
   markScreeningResponseSynced,
   hasDailyHealthCheckToday,
