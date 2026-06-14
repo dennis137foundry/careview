@@ -8,11 +8,14 @@ import RNBootSplash from "react-native-bootsplash";
 import { StatusBar } from "react-native";
 import { store } from "./src/redux/store";
 import { initDB } from "./src/services/sqliteService";
-import { loadUser } from "./src/redux/userSlice";
+import { loadUser, logout } from "./src/redux/userSlice";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
-import { loadAuthTokensFromStorage } from "./src/services/authToken";
+import {
+  loadAuthTokensFromStorage,
+  setOnAuthExpired,
+} from "./src/services/authToken";
 import AppNavigator from "./src/navigation/AppNavigator";
-import { ToastProvider } from "./src/components/Toast";
+import { ToastProvider, useToast } from "./src/components/Toast";
 
 const MyTheme = {
   ...DefaultTheme,
@@ -21,9 +24,21 @@ const MyTheme = {
 
 function RootApp() {
   const dispatch = useDispatch<AppDispatch>();
+  const { showToast } = useToast();
 
   useEffect(() => {
     let cleanupSync: (() => void) | undefined;
+
+    // Registered before any authedFetch can fire so the first 401 from
+    // refresh_token.php routes back to AuthScreen instead of looping.
+    setOnAuthExpired(() => {
+      showToast({
+        message: "Your session expired. Please sign in again.",
+        type: "info",
+        duration: 4000,
+      });
+      store.dispatch(logout());
+    });
 
     const init = async () => {
       initDB();
@@ -45,15 +60,13 @@ function RootApp() {
         cleanupSync();
       }
     };
-  }, [dispatch]);
+  }, [dispatch, showToast]);
 
   return (
-    <ToastProvider>
-      <NavigationContainer theme={MyTheme}>
-        <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-        <AppNavigator />
-      </NavigationContainer>
-    </ToastProvider>
+    <NavigationContainer theme={MyTheme}>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+      <AppNavigator />
+    </NavigationContainer>
   );
 }
 
@@ -61,7 +74,9 @@ export default function App() {
   return (
     <Provider store={store}>
       <SafeAreaProvider>
-        <RootApp />
+        <ToastProvider>
+          <RootApp />
+        </ToastProvider>
       </SafeAreaProvider>
     </Provider>
   );

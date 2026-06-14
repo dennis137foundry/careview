@@ -480,12 +480,12 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 promise.resolve(retryPass)
             }
         } catch (e: java.io.IOException) {
+            isAuthenticatedFlag = false
             promise.reject("AUTH_ERROR", "license.pem not found in assets folder", e)
         } catch (e: Exception) {
-            // Continue anyway — might work in trial mode (matches iOS behavior)
             sendDebugLog("Auth exception: ${e.message}")
-            isAuthenticatedFlag = true
-            promise.resolve(true)
+            isAuthenticatedFlag = false
+            promise.resolve(false)
         }
     }
 

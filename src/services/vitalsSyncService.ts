@@ -38,6 +38,7 @@ import {
   normalizeMac,
 } from "./deviceRegistrationService";
 import { authedFetch } from "./authToken";
+import { isDemoAccount } from "./seedDemoData";
 
 // ============================================================================
 // Configuration
@@ -213,8 +214,9 @@ export function initNetworkMonitoring(): () => void {
     console.log(`[VitalsSync] Network: ${isOnline ? "online" : "offline"}`);
 
     if (isOnline && wasOffline) {
-      // Just came online - try to sync pending readings
-      updateState({ status: "idle" });
+      // Just came online - try to sync pending readings. Reset retryCount
+      // so the previous offline streak doesn't immediately re-trip the cap.
+      updateState({ status: "idle", retryCount: 0 });
       syncAllPending();
     } else if (!isOnline) {
       updateState({ status: "offline" });
@@ -257,6 +259,42 @@ function fetchWithTimeout(
         reject(error);
       });
   });
+}
+
+// ============================================================================
+// Demo Account Gate
+// ============================================================================
+
+// The demo account (App Store reviewer) must never reach the EMR. Locally
+// mark every queued reading/screening as synced so the UI shows "Synced"
+// without leaking demo data into production inventory or charts.
+async function isDemoUser(): Promise<boolean> {
+  const user = await getUser();
+  return !!user?.phone && isDemoAccount(user.phone);
+}
+
+function fakeSyncAllPending(): {
+  vitals: { synced: number; failed: number; remaining: number };
+  screening: { synced: number; failed: number; remaining: number };
+} {
+  const vitalsIds = getUnsyncedReadings().map((r) => r.id);
+  if (vitalsIds.length > 0) markReadingsSynced(vitalsIds);
+
+  const screening = getUnsyncedScreeningResponses();
+  screening.forEach((r) => markScreeningResponseSynced(r.id));
+
+  updateState({
+    status: "idle",
+    lastSuccessfulSync: new Date(),
+    lastError: null,
+    retryCount: 0,
+  });
+  updatePendingCounts();
+
+  return {
+    vitals: { synced: vitalsIds.length, failed: 0, remaining: 0 },
+    screening: { synced: screening.length, failed: 0, remaining: 0 },
+  };
 }
 
 // ============================================================================
@@ -407,6 +445,12 @@ export async function syncReading(reading: SavedReading): Promise<boolean> {
     return false;
   }
 
+  if (isDemoAccount(user.phone)) {
+    markReadingSynced(reading.id);
+    updatePendingCounts();
+    return true;
+  }
+
   if (!isOnline) {
     console.log("[VitalsSync] Offline, reading queued for later sync");
     updatePendingCounts();
@@ -479,6 +523,13 @@ export async function syncPendingReadings(): Promise<{
   if (!user?.patientId) {
     console.warn("[VitalsSync] No user logged in, cannot sync");
     return { synced: 0, failed: 0, remaining: getUnsyncedCount() };
+  }
+
+  if (isDemoAccount(user.phone)) {
+    const ids = getUnsyncedReadings().map((r) => r.id);
+    if (ids.length > 0) markReadingsSynced(ids);
+    updatePendingCounts();
+    return { synced: ids.length, failed: 0, remaining: 0 };
   }
 
   const unsynced = getUnsyncedReadings();
@@ -579,11 +630,18 @@ export async function syncPendingScreening(): Promise<{
   // Get patient ID from Redux store
   const state = store.getState();
   const patientId = state.user.patientId;
+  const phone = state.user.phone;
 
   if (!patientId) {
     console.warn("[ScreeningSync] No patient ID available");
     const remaining = getUnsyncedScreeningResponses().length;
     return { synced: 0, failed: remaining, remaining };
+  }
+
+  if (phone && isDemoAccount(phone)) {
+    const responses = getUnsyncedScreeningResponses();
+    responses.forEach((r) => markScreeningResponseSynced(r.id));
+    return { synced: responses.length, failed: 0, remaining: 0 };
   }
 
   const unsyncedResponses = getUnsyncedScreeningResponses();
@@ -709,6 +767,10 @@ export async function syncPendingDeviceRegistrations(): Promise<void> {
   const user = await getUser();
   if (!user?.patientId) return;
 
+  // Demo devices are seeded with NULL emrUnitId on purpose. Never register
+  // them with the EMR — they'd contaminate production inventory.
+  if (isDemoAccount(user.phone)) return;
+
   const pending = getDevicesWithoutEmrUnitId();
   if (pending.length === 0) return;
 
@@ -784,6 +846,10 @@ export async function syncAllPending(): Promise<{
     };
   }
 
+  if (await isDemoUser()) {
+    return fakeSyncAllPending();
+  }
+
   updateState({ status: "syncing", lastSyncAttempt: new Date() });
 
   // Retry any device registrations that didn't complete on initial pair
@@ -840,6 +906,17 @@ function scheduleRetry(): void {
 
   if (!isOnline) {
     console.log("[Sync] Offline, will retry when online");
+    return;
+  }
+
+  // Cap automatic retries. After hitting the cap the loop stops and the
+  // user sees a tappable error in SyncStatusBadge that calls forceSyncAll,
+  // which resets retryCount via updateState({ retryCount: 0 }).
+  if (syncState.retryCount >= CONFIG.maxRetries) {
+    updateState({
+      status: "error",
+      lastError: "Sync paused after repeated failures. Tap to retry.",
+    });
     return;
   }
 

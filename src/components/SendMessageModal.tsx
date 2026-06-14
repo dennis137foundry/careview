@@ -15,13 +15,13 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { authedFetch } from "../services/authToken";
+import { isDemoAccount } from "../services/seedDemoData";
+import { getUser } from "../services/sqliteService";
 
 interface SendMessageModalProps {
   visible: boolean;
   onClose: () => void;
   patientId: string;
-  patientName: string;
-  patientPhone: string;
 }
 
 const API_URL = "https://trinitycareview.com/api/careviewapp/app_messenger.php";
@@ -105,8 +105,6 @@ export default function SendMessageModal({
   visible,
   onClose,
   patientId,
-  patientName,
-  patientPhone,
 }: SendMessageModalProps) {
   const insets = useSafeAreaInsets();
   const [message, setMessage] = useState("");
@@ -134,6 +132,16 @@ export default function SendMessageModal({
 
     setSending(true);
 
+    // Demo account (App Store reviewer) never reaches the EMR — pretend
+    // the message was delivered so reviewers see the success state.
+    const user = await getUser();
+    if (user?.phone && isDemoAccount(user.phone)) {
+      await new Promise((r) => setTimeout(r, 400));
+      setSent(true);
+      setSending(false);
+      return;
+    }
+
     try {
       const response = await fetchWithRetry(API_URL, {
         method: "POST",
@@ -141,9 +149,7 @@ export default function SendMessageModal({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          patientId,
-          patientName,
-          patientPhone,
+          patient_id: patientId,
           message: trimmed,
           timestamp: new Date().toISOString(),
         }),

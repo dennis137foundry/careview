@@ -2,7 +2,11 @@
 import { Alert } from "react-native";
 import { saveUser, getUser, LocalUser, wipeAllPatientData } from "./sqliteService";
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
-import { setAuthTokens, clearAuthTokens } from "./authToken";
+import {
+  setAuthTokens,
+  clearAuthTokens,
+  resetAuthExpiredLatch,
+} from "./authToken";
 
 const API_BASE = "https://trinitycareview.com/api/careviewapp";
 const REQUEST_TIMEOUT = 10000; // 10 seconds
@@ -121,6 +125,9 @@ const authService = {
       if (data.error === "sms_failed") {
         throw new Error("Failed to send SMS. Please try again.");
       }
+      if (data.error === "too_many_codes") {
+        throw new Error("Too many code requests. Please wait a bit and try again.");
+      }
 
       throw new Error(data.error || "Failed to send code");
     } catch (e: any) {
@@ -225,6 +232,9 @@ const authService = {
         if (user.authToken && user.refreshToken) {
           setAuthTokens(user.authToken, user.refreshToken);
         }
+        // Re-arm the auth-expired callback so a future refresh-token
+        // death in this session can fire the toast/logout again.
+        resetAuthExpiredLatch();
         // Patient ID — dev only.
         if (__DEV__) {
           console.log("[Auth] User saved to SQLite:", user.patientId);

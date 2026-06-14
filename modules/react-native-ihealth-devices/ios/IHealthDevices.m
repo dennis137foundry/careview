@@ -1420,9 +1420,9 @@ RCT_EXPORT_METHOD(authenticate:(NSString *)licensePath resolver:(RCTPromiseResol
             resolve(@YES);
         }
         DisposeErrorBlock:^(UserAuthenResult e) {
-            self->_isAuthenticated = YES;
-            [self initializeControllers];
-            resolve(@YES);
+            self->_isAuthenticated = NO;
+            [self sendDebugLog:[NSString stringWithFormat:@"🔑 Auth failed: %ld", (long)e]];
+            resolve(@NO);
         }];
 }
 

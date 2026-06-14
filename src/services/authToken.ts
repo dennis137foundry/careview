@@ -24,6 +24,13 @@ const REFRESH_TIMEOUT_MS = 10000;
 let cachedAccess: string | null = null;
 let cachedRefresh: string | null = null;
 
+// Callback fired exactly once per refresh-token death (401 from
+// refresh_token.php). App.tsx registers a handler that toasts the user
+// and dispatches logout, which routes back to AuthScreen via the gate
+// in AppNavigator.
+let onAuthExpired: (() => void) | null = null;
+let authExpiredFired = false;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -50,6 +57,21 @@ export function clearAuthTokens(): void {
   } catch (e) {
     console.error("[authToken] Failed to clear tokens:", e);
   }
+}
+
+/**
+ * Register the handler fired when the refresh token is rejected (401 from
+ * refresh_token.php). Called once at app boot from App.tsx with a closure
+ * that has access to the Redux store and Toast provider.
+ */
+export function setOnAuthExpired(cb: () => void): void {
+  onAuthExpired = cb;
+  authExpiredFired = false;
+}
+
+/** Reset the latch — call after a successful login so the next 401 can fire. */
+export function resetAuthExpiredLatch(): void {
+  authExpiredFired = false;
 }
 
 /** Hydrate in-memory cache from SQLite. Call at app boot. */
@@ -131,9 +153,20 @@ async function tryRefresh(): Promise<boolean> {
     );
 
     if (!res.ok) {
-      // 401 from refresh = token revoked/expired. Clear everything.
+      // 401 from refresh = token revoked/expired. Clear everything and
+      // fire the auth-expired callback exactly once so the app routes
+      // back to AuthScreen. Multiple parallel authedFetch calls can each
+      // hit this branch; latch prevents N toasts/N logouts.
       if (res.status === 401) {
         clearAuthTokens();
+        if (onAuthExpired && !authExpiredFired) {
+          authExpiredFired = true;
+          try {
+            onAuthExpired();
+          } catch (e) {
+            console.error("[authToken] onAuthExpired threw:", e);
+          }
+        }
       }
       return false;
     }

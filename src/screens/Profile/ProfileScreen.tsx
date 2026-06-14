@@ -269,8 +269,6 @@ export default function ProfileScreen({ navigation }: any) {
         visible={showMessageModal}
         onClose={() => setShowMessageModal(false)}
         patientId={user.patientId || ""}
-        patientName={`${user.firstName || ""} ${user.lastName || ""}`.trim()}
-        patientPhone={user.phone || ""}
       />
     </ImageBackground>
   );
