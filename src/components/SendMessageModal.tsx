@@ -136,7 +136,7 @@ export default function SendMessageModal({
     // the message was delivered so reviewers see the success state.
     const user = await getUser();
     if (user?.phone && isDemoAccount(user.phone)) {
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 400));
       setSent(true);
       setSending(false);
       return;
