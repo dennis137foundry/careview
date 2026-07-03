@@ -12,6 +12,7 @@ import {
   TextInput,
   Linking,
   Platform,
+  StatusBar,
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from "@react-navigation/native";
@@ -19,6 +20,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import {
   Camera,
   useCameraDevice,
+  useCameraPermission,
   useCodeScanner,
 } from "react-native-vision-camera";
 
@@ -93,6 +95,8 @@ export default function AddDeviceScreen() {
 
   const subscriptionsRef = useRef<any[]>([]);
   const cameraDevice = useCameraDevice("back");
+  const { hasPermission: hasCameraPermission, requestPermission: requestCameraPermission } =
+    useCameraPermission();
   const scanRunRef = useRef(0);
 
   // QR Code Scanner
@@ -163,14 +167,27 @@ export default function AddDeviceScreen() {
 
     try {
       await deviceService.authenticate();
-      await deviceService.startScan(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"]);
+      // iOS scans additively + runs the separate 5s BG5S phase below, so its list is
+      // unchanged. Android can't scan multiple types at once, so BG5S is folded into the
+      // (looped) Android list in priority order — the devices we actually deploy first.
+      const androidScanTypes = ["BP3L", "HS2S", "BG5S", "BP5", "BP5S", "HS2", "HS4S"];
+      const iosScanTypes = ["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"];
+      await deviceService.startScan(
+        Platform.OS === "android" ? androidScanTypes : iosScanTypes
+      );
 
-      setTimeout(() => {
-        if (scanRunRef.current !== scanRun) return;
-        deviceService.startBG5SScan().catch((error) => {
-          console.warn("[AddDevice] BG5S scan phase failed:", error);
-        });
-      }, 5000);
+      // BG5S uses a dedicated, ADDITIVE SDK scan path on iOS — it stacks on top of the
+      // BP/scale scan without disturbing it. On Android the same call RESETS the
+      // sequential scan and cancels BP/scale discovery before it ever reaches the scale,
+      // and BG5S is not yet implemented natively — so only run this phase on iOS.
+      if (Platform.OS === "ios") {
+        setTimeout(() => {
+          if (scanRunRef.current !== scanRun) return;
+          deviceService.startBG5SScan().catch((error) => {
+            console.warn("[AddDevice] BG5S scan phase failed:", error);
+          });
+        }, 5000);
+      }
 
       // Auto-stop after 30 seconds
       setTimeout(() => {
@@ -474,6 +491,9 @@ export default function AddDeviceScreen() {
 
   return (
     <View style={styles.container}>
+      {/* Android draws content behind a translucent status bar (targetSdk 36 edge-to-edge);
+          the navy header would otherwise hide the dark clock/battery icons. iOS is unaffected. */}
+      {Platform.OS === "android" && <StatusBar barStyle="light-content" />}
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
@@ -484,7 +504,23 @@ export default function AddDeviceScreen() {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Add Device</Text>
         <TouchableOpacity
-          onPress={() => setShowQRScanner(true)}
+          onPress={async () => {
+            if (!hasCameraPermission) {
+              const granted = await requestCameraPermission();
+              if (!granted) {
+                Alert.alert(
+                  "Camera Permission Needed",
+                  "Camera access is required to scan a device QR code. Please enable it in Settings.",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Open Settings", onPress: () => Linking.openSettings() },
+                  ]
+                );
+                return;
+              }
+            }
+            setShowQRScanner(true);
+          }}
           style={styles.qrButton}
         >
           <MaterialIcons name="qr-code-scanner" size={24} color="#00509f" />
@@ -560,7 +596,7 @@ export default function AddDeviceScreen() {
             <Text style={styles.qrTitle}>Scan Device QR Code</Text>
           </View>
 
-          {cameraDevice ? (
+          {cameraDevice && hasCameraPermission ? (
             <Camera
               style={styles.camera}
               device={cameraDevice}
@@ -570,7 +606,9 @@ export default function AddDeviceScreen() {
           ) : (
             <View style={styles.noCameraContainer}>
               <MaterialIcons name="no-photography" size={64} color="#ccc" />
-              <Text style={styles.noCameraText}>Camera not available</Text>
+              <Text style={styles.noCameraText}>
+                {hasCameraPermission ? "Camera not available" : "Camera permission denied"}
+              </Text>
             </View>
           )}
 

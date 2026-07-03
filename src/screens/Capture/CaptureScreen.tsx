@@ -13,6 +13,7 @@ import {
   Dimensions,
   StatusBar,
   Linking,
+  Platform,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
@@ -771,8 +772,14 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   // BG5S capture uses the working debug path: connect, pull stored records,
   // then ask for the sample window before saving and syncing.
+  //
+  // iOS only: this pull path calls debugBG5SGetOfflineData, which doesn't exist on
+  // Android. On Android the native module auto-pulls stored records on connect and
+  // delivers them via onBloodGlucoseReading (handled by the reading listener below),
+  // so running this here would just throw "offline data API not available".
   useEffect(() => {
     if (!emitter || device?.type !== "BG") return;
+    if (Platform.OS !== "ios") return;
 
     const wait = (ms: number) =>
       new Promise<void>((resolve) => setTimeout(() => resolve(), ms));

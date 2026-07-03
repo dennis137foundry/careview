@@ -38,6 +38,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     private var targetMAC: String? = null
     private var targetType: String? = null
 
+    // BG5S glucose meter control — obtained after connect to issue SDK commands
+    // (setTime / setUnit / startMeasure / getOfflineData). Mirrors iOS BG5SController.
+    private var bg5sControl: Bg5sControl? = null
+
     // Timer-based sequential scan
     private val scanHandler = Handler(Looper.getMainLooper())
     private var scanTypesList = listOf<String>()
@@ -184,6 +188,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             "HS2" -> DiscoveryTypeEnum.HS2
             "HS2S" -> DiscoveryTypeEnum.HS2S
             "HS4S" -> DiscoveryTypeEnum.HS4S
+            "BG5S" -> DiscoveryTypeEnum.BG5S
             else -> null
         }
     }
@@ -196,6 +201,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             type.contains("HS2S", ignoreCase = true) -> "HS2S"
             type.contains("HS2", ignoreCase = true) -> "HS2"
             type.contains("HS4S", ignoreCase = true) || type.contains("HS4", ignoreCase = true) -> "HS4S"
+            type.contains("BG5S", ignoreCase = true) -> "BG5S"
             else -> type
         }
     }
@@ -224,13 +230,20 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
 
         if (currentScanIndex >= scanTypesList.size) {
-            isScanningActive = false
-            sendDebugLog("SCAN: All ${scanTypesList.size} types complete")
-            val params = Arguments.createMap().apply {
-                putBoolean("scanning", false)
+            // The iHealth Android SDK can only discover one device type at a time, so we
+            // cycle through the list. Rather than stopping after a single pass (which means
+            // a device whose 3s window was missed is never found), loop back to the start
+            // and keep scanning until stopScan() or the JS auto-stop timeout fires. This
+            // gives every type — e.g. the HS2S scale — repeated discovery windows.
+            if (scanTypesList.isEmpty()) {
+                isScanningActive = false
+                sendEvent("onScanStateChanged", Arguments.createMap().apply {
+                    putBoolean("scanning", false)
+                })
+                return
             }
-            sendEvent("onScanStateChanged", params)
-            return
+            currentScanIndex = 0
+            sendDebugLog("SCAN: Completed a full pass — looping for continuous discovery")
         }
 
         val type = scanTypesList[currentScanIndex]
@@ -269,6 +282,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS2)
             iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS2S)
             iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_HS4S)
+            iHealthDevicesManager.getInstance().addCallbackFilterForDeviceType(callbackId, iHealthDevicesManager.TYPE_BG5S)
 
             isInitialized = true
             sendDebugLog("iHealth SDK initialized successfully")
@@ -324,9 +338,19 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                         putString("source", "iHealthSDK")
                     }
                     sendEvent("onConnectionStateChanged", params)
+
+                    // BG5S needs an explicit prep sequence (status → time → unit) and an
+                    // offline-record pull, the same way iOS does on connect.
+                    if (normalizedType == "BG5S") {
+                        prepareBg5s(mac)
+                    }
                 }
                 iHealthDevicesManager.DEVICE_STATE_DISCONNECTED -> {
                     connectedDevices.remove(mac)
+                    if (normalizedType == "BG5S") {
+                        try { bg5sControl?.destroy() } catch (_: Exception) {}
+                        bg5sControl = null
+                    }
                     val params = Arguments.createMap().apply {
                         putString("mac", mac)
                         putString("type", normalizedType)
@@ -362,6 +386,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 when {
                     normalizedType.startsWith("BP") -> handleBPNotification(mac, normalizedType, action, json)
                     normalizedType.startsWith("HS") -> handleHSNotification(mac, normalizedType, action, json)
+                    normalizedType == "BG5S" -> handleBG5SNotification(mac, normalizedType, action, json)
                     else -> sendDebugLog("NOTIFY: Unhandled device type: $normalizedType")
                 }
             } catch (e: Exception) {
@@ -437,6 +462,170 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             action.contains("error", ignoreCase = true) -> sendError("HS_ERROR", "Scale error: $json")
             else -> sendDebugLog("HS: Unhandled action: $action")
         }
+    }
+
+    // =========================================================================
+    // Blood Glucose (BG5S) — discovery + connect + measure + offline records.
+    // Mirrors the iOS BG5S flow (status → setTime → setUnit(mg/dL) → measure) and
+    // emits the same JS events iOS does: onBloodGlucoseReading + onGlucoseMeterEvent.
+    // The iHealth Android SDK only delivers BG5S data via onDeviceNotify using the
+    // Bg5sProfile action strings, so all parsing keys come from that profile.
+    // =========================================================================
+
+    /**
+     * Runs when a BG5S connects. Grabs the control, queries status, and — chained
+     * via the notify callbacks below — sets time and unit, then pulls any stored
+     * offline records so readings taken away from the phone sync just like iOS.
+     */
+    private fun prepareBg5s(mac: String) {
+        try {
+            val control = iHealthDevicesManager.getInstance().getBg5sControl(mac)
+            if (control == null) {
+                sendDebugLog("BG5S: control unavailable for $mac")
+                return
+            }
+            bg5sControl = control
+            control.init()
+            control.getStatusInfo()
+            sendGlucoseMeterEvent(mac, "prepare", "BG5S connected — querying status")
+        } catch (e: Exception) {
+            sendDebugLog("BG5S prepare error: ${e.message}")
+        }
+    }
+
+    private fun handleBG5SNotification(mac: String, deviceType: String, action: String, json: JSONObject) {
+        sendDebugLog("BG5S[$deviceType]: action=$action json=$json")
+        val control = bg5sControl
+        when (action) {
+            Bg5sProfile.ACTION_GET_STATUS_INFO -> {
+                val offlineNum = json.optInt(Bg5sProfile.INFO_OFFLINE_DATA_NUM, 0)
+                sendGlucoseMeterEvent(mac, "status", "Status received; offline records=$offlineNum")
+                // Continue the prep chain: set the meter clock, then the unit.
+                try { control?.setTime(java.util.Date(), localTimezoneOffsetHours()) }
+                catch (e: Exception) { sendDebugLog("BG5S setTime error: ${e.message}") }
+                // Pull stored readings so offline measurements reach the EMR (iOS parity).
+                if (offlineNum > 0) {
+                    try { control?.getOfflineData() }
+                    catch (e: Exception) { sendDebugLog("BG5S getOfflineData error: ${e.message}") }
+                }
+            }
+            Bg5sProfile.ACTION_SET_TIME -> {
+                sendGlucoseMeterEvent(mac, "set_time", "Clock set; setting unit to mg/dL")
+                try { control?.setUnit(Bg5sProfile.UNIT_MG) }
+                catch (e: Exception) { sendDebugLog("BG5S setUnit error: ${e.message}") }
+            }
+            Bg5sProfile.ACTION_SET_UNIT ->
+                sendGlucoseMeterEvent(mac, "ready", "Unit set to mg/dL; meter ready")
+            Bg5sProfile.ACTION_START_MEASURE ->
+                sendGlucoseMeterEvent(mac, "start_measure", "Measurement started — insert strip")
+            Bg5sProfile.ACTION_STRIP_IN ->
+                sendGlucoseMeterEvent(mac, "strip_in", "Strip inserted — apply blood")
+            Bg5sProfile.ACTION_GET_BLOOD ->
+                sendGlucoseMeterEvent(mac, "blood_detected", "Blood detected — analyzing")
+            Bg5sProfile.ACTION_STRIP_OUT ->
+                sendGlucoseMeterEvent(mac, "strip_out", "Strip removed")
+            Bg5sProfile.ACTION_ENTER_CHARGED_STATE ->
+                sendGlucoseMeterEvent(mac, "charging", "Meter charging")
+            Bg5sProfile.ACTION_LEAVE_CHARGED_STATE ->
+                sendGlucoseMeterEvent(mac, "charging", "Meter unplugged")
+            Bg5sProfile.ACTION_RESULT -> {
+                // Live result. We set UNIT_MG, so the value is mg/dL.
+                val value = json.optDouble(Bg5sProfile.RESULT_VALUE,
+                    json.optInt(Bg5sProfile.RESULT_VALUE, 0).toDouble())
+                val dataID = json.optString(Bg5sProfile.DATA_ID, "")
+                if (value > 0) emitGlucoseReading(mac, value, dataID, System.currentTimeMillis().toDouble())
+                else sendDebugLog("BG5S result had no positive value: $json")
+            }
+            Bg5sProfile.ACTION_GET_OFFLINE_DATA -> {
+                // Stored records pulled from the meter; OFFLINE_DATA is a JSON array.
+                val arr = json.optJSONArray(Bg5sProfile.OFFLINE_DATA)
+                if (arr != null) {
+                    var emitted = 0
+                    for (i in 0 until arr.length()) {
+                        val rec = arr.optJSONObject(i) ?: continue
+                        val value = rec.optDouble(Bg5sProfile.DATA_VALUE, 0.0)
+                        if (value > 0) {
+                            emitGlucoseReading(mac, value, rec.optString(Bg5sProfile.DATA_ID, "offline-$i"),
+                                bg5sRecordTimestamp(rec))
+                            emitted++
+                        }
+                    }
+                    sendGlucoseMeterEvent(mac, "offline_synced", "Synced $emitted offline record(s)")
+                } else {
+                    sendDebugLog("BG5S offline data not an array: $json")
+                }
+            }
+            Bg5sProfile.ACTION_ERROR -> {
+                val num = json.optInt(Bg5sProfile.ERROR_NUM, -1)
+                val desc = json.optString(Bg5sProfile.ERROR_DESCRIPTION, "")
+                val message = "BG5S error $num $desc".trim()
+                sendGlucoseMeterEvent(mac, "error", message)
+                sendError("BG5S_ERROR", message)
+            }
+            else -> sendDebugLog("BG5S: Unhandled action: $action")
+        }
+    }
+
+    private fun emitGlucoseReading(mac: String, value: Double, dataID: String, timestamp: Double) {
+        sendDebugLog("BG5S RESULT: $value mg/dL (dataID=$dataID, ts=${timestamp.toLong()})")
+        val params = Arguments.createMap().apply {
+            putString("mac", mac)
+            putString("type", "BG5S")
+            putDouble("value", value)
+            putString("unit", "mg/dL")
+            putString("dataID", dataID)
+            putString("source", "iHealthSDK")
+            putDouble("timestamp", timestamp)
+        }
+        sendEvent("onBloodGlucoseReading", params)
+    }
+
+    private fun sendGlucoseMeterEvent(mac: String, stage: String, message: String) {
+        val params = Arguments.createMap().apply {
+            putString("stage", stage)
+            putString("mac", mac)
+            putString("type", "BG5S")
+            putString("message", message)
+            putString("source", "iHealthSDK")
+        }
+        sendEvent("onGlucoseMeterEvent", params)
+        sendDebugLog("BG5S $stage: $message")
+    }
+
+    private fun localTimezoneOffsetHours(): Float =
+        java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 3600000.0f
+
+    /**
+     * Offline records carry the meter's measure time; the exact key/format can vary
+     * by firmware, so parse defensively and fall back to "now" if unparseable.
+     */
+    private fun bg5sRecordTimestamp(rec: JSONObject): Double {
+        val raw = rec.opt(Bg5sProfile.DATA_MEASURE_TIME)
+        // Numeric epoch (seconds or millis).
+        if (raw is Number) {
+            val v = raw.toDouble()
+            return if (v > 1_000_000_000_000.0) v else v * 1000.0
+        }
+        if (raw is String) {
+            // Some firmware sends a numeric epoch as a string.
+            raw.toDoubleOrNull()?.let { v ->
+                return if (v > 1_000_000_000_000.0) v else v * 1000.0
+            }
+            // BG5S firmware reports the measure time ALREADY IN UTC as "yyyy-MM-dd HH:mm:ss"
+            // (verified against the device clock / info_time vs. phone-local time). The
+            // separate DATA_MEASURE_TIMEZONE field is the local offset for display only, so
+            // we parse the string as GMT and use it directly — no offset shift.
+            try {
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("GMT")
+                val parsedUtc = sdf.parse(raw)
+                if (parsedUtc != null) return parsedUtc.time.toDouble()
+            } catch (e: Exception) {
+                sendDebugLog("BG5S time parse failed for '$raw': ${e.message}")
+            }
+        }
+        // Last resort: now (better than dropping the reading entirely).
+        return System.currentTimeMillis().toDouble()
     }
 
     // =========================================================================
@@ -698,6 +887,15 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                     val c = iHealthDevicesManager.getInstance().getHs4sControl(mac)
                     if (c != null) { sendDebugLog("HS4S: Ready. Step on scale."); promise.resolve(null) }
                     else promise.reject("NO_CONTROL", "HS4S control not available")
+                }
+                "BG5S" -> {
+                    val c = bg5sControl ?: iHealthDevicesManager.getInstance().getBg5sControl(mac)
+                    if (c != null) {
+                        bg5sControl = c
+                        c.startMeasure(Bg5sProfile.MEASURE_BLOOD)
+                        sendGlucoseMeterEvent(mac, "start_measure", "Insert a strip and apply blood")
+                        promise.resolve(null)
+                    } else promise.reject("NO_CONTROL", "BG5S control not available")
                 }
                 else -> promise.reject("UNSUPPORTED", "Unsupported device: $deviceType")
             }
