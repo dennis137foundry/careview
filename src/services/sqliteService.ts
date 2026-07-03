@@ -670,7 +670,8 @@ export function getUnsyncedCount(): number {
 export type ScreeningType =
   | "daily_health_check" // Headaches/visual disturbances before BP
   | "urine_protein_result" // 72-hour urine protein answer
-  | "urine_protein_deferred"; // User pressed "Answer Later"
+  | "urine_protein_deferred" // User pressed "Answer Later"
+  | "hospital_visit_report"; // Patient tapped "I Went To The Hospital"
 
 export type ScreeningResponse = {
   id: string;
@@ -691,12 +692,20 @@ export type UrineProteinData = {
   deferred?: boolean;
 };
 
+export type HospitalVisitData = {
+  // v1 is a one-tap confirm — the event time is the row's timestamp, so no
+  // fields are required. Reserved for optional future context (which hospital,
+  // reason) without a schema change on either side.
+  hospitalName?: string;
+  reason?: string;
+};
+
 /**
  * Save a screening response
  */
 export function saveScreeningResponse(
   type: ScreeningType,
-  data: DailyHealthCheckData | UrineProteinData
+  data: DailyHealthCheckData | UrineProteinData | HospitalVisitData
 ): string {
   // Writes throw on failure. Callers (DailyHealthCheckModal, UrineProteinModal)
   // must catch and keep the modal open — otherwise the patient sees a

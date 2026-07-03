@@ -39,6 +39,7 @@ import {
 } from "./deviceRegistrationService";
 import { authedFetch } from "./authToken";
 import { isDemoAccount } from "./seedDemoData";
+import { syncPendingHospitalReports } from "./hospitalReportService";
 
 // ============================================================================
 // Configuration
@@ -655,9 +656,14 @@ export async function syncPendingScreening(): Promise<{
     `[ScreeningSync] Syncing ${unsyncedResponses.length} screening responses...`
   );
 
-  // Filter out deferrals - we still mark them synced locally but don't send
+  // Filter out deferrals - we still mark them synced locally but don't send.
+  // Also exclude hospital-visit reports: they go to a DIFFERENT endpoint
+  // (hospital_report.php via syncPendingHospitalReports) and would be an
+  // "unknown type" error if sent to screening_sync.php.
   const toSync = unsyncedResponses.filter(
-    (r) => r.type !== "urine_protein_deferred"
+    (r) =>
+      r.type !== "urine_protein_deferred" &&
+      r.type !== "hospital_visit_report"
   );
   const deferrals = unsyncedResponses.filter(
     (r) => r.type === "urine_protein_deferred"
@@ -859,6 +865,12 @@ export async function syncAllPending(): Promise<{
 
   // Sync vitals first
   const vitalsResult = await syncPendingReadings();
+
+  // Hospital-visit reports (own endpoint) before screening, so any that
+  // succeed clear out of the unsynced screening count before we compute
+  // screeningResult.remaining below; any that fail stay counted and trip the
+  // shared retry/backoff.
+  await syncPendingHospitalReports();
 
   // Then sync screening responses
   const screeningResult = await syncPendingScreening();

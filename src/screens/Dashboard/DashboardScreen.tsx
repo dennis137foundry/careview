@@ -4,11 +4,11 @@ import {
   View,
   Text,
   Image,
-  ImageBackground,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
 } from "react-native";
+import LinearGradient from "react-native-linear-gradient";
 import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getDailyTip } from "../../utils/getDailyTip";
@@ -25,6 +25,7 @@ import {
   setFirstLaunchComplete,
 } from "../../services/sqliteService";
 import UrineProteinModal from "../../components/UrineProteinModal";
+import HospitalReportModal from "../../components/HospitalReportModal";
 
 // Map device types to images
 const deviceImages: Record<string, any> = {
@@ -54,6 +55,27 @@ const deviceTypeNames: Record<string, string> = {
   GATT_SCALE: "Smart Scale",
 };
 
+const NAVY = "#002040";
+const BLUE = "#00509f";
+const TEAL = "#0e7c86";
+const OK = "#1f8a5b";
+const ALERT = "#c62828";
+
+function greetingForNow(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+function formatWhen(ts: number): string {
+  const d = new Date(ts);
+  return `${d.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  })} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
 export default function DashboardScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const navigation = useNavigation<any>();
@@ -66,11 +88,14 @@ export default function DashboardScreen() {
   const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
 
   const [todayTip, setTodayTip] = useState<string>("");
-  const [isFirstLaunch, setIsFirstLaunch] = useState<boolean>(false);
+  const [, setIsFirstLaunch] = useState<boolean>(false);
 
   // Urine Protein Modal State
   const [showUrineProteinModal, setShowUrineProteinModal] = useState(false);
   const [showUrineProteinAlert, setShowUrineProteinAlert] = useState(false);
+
+  // Hospital Report Modal State
+  const [showHospitalModal, setShowHospitalModal] = useState(false);
 
   useEffect(() => {
     getDailyTip().then(setTodayTip);
@@ -93,7 +118,7 @@ export default function DashboardScreen() {
 
     const needsResponse = needsUrineProteinResponse();
     const hasDeferred = hasUrineProteinDeferredToday();
-    
+
     if (needsResponse && !hasDeferred) {
       setShowUrineProteinModal(true);
       setShowUrineProteinAlert(false);
@@ -183,245 +208,263 @@ export default function DashboardScreen() {
   };
 
   const firstName = user.firstName || "there";
-  const welcomeMessage = isFirstLaunch
-    ? `Welcome, ${firstName}`
-    : `Welcome back, ${firstName}!`;
+  const bpHigh = isBPReadingHigh(lastBP);
 
   return (
-    <ImageBackground
-      source={require("../../assets/background.png")}
-      style={styles.image}
-      resizeMode="cover"
-    >
-      <View style={styles.container}>
-        <ScrollView
-          contentContainerStyle={[
-            styles.scrollContainer,
-            { paddingTop: insets.top + 16 },
-          ]}
-          showsVerticalScrollIndicator={false}
+    <View style={styles.root}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContainer,
+          { paddingTop: insets.top + 12 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.greeting}>{greetingForNow()}</Text>
+            <Text style={styles.name} numberOfLines={1}>
+              {firstName}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.bell}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (showUrineProteinAlert) handleAlertBarTap();
+            }}
+          >
+            <MaterialIcons
+              name="notifications-none"
+              size={22}
+              color={NAVY}
+            />
+            {showUrineProteinAlert && <View style={styles.bellDot} />}
+          </TouchableOpacity>
+        </View>
+
+        {/* Urine Protein Alert Bar */}
+        {showUrineProteinAlert && (
+          <TouchableOpacity
+            style={styles.alertBar}
+            onPress={handleAlertBarTap}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons name="warning" size={20} color="#E65100" />
+            <Text style={styles.alertBarText}>Add Urine Protein Result</Text>
+            <MaterialIcons name="chevron-right" size={20} color="#E65100" />
+          </TouchableOpacity>
+        )}
+
+        {/* Maternal Wellness Daily Tip — navy hero */}
+        <LinearGradient
+          colors={["#00325f", NAVY]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.hero}
         >
-          {/* Welcome Header */}
-          <Text style={styles.welcomeText}>{welcomeMessage}</Text>
+          <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
+          <Text style={styles.heroTip}>{todayTip}</Text>
+        </LinearGradient>
 
-          {/* Urine Protein Alert Bar */}
-          {showUrineProteinAlert && (
-            <TouchableOpacity
-              style={styles.alertBar}
-              onPress={handleAlertBarTap}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="warning" size={20} color="#E65100" />
-              <Text style={styles.alertBarText}>Add Urine Protein Result</Text>
-              <MaterialIcons name="chevron-right" size={20} color="#E65100" />
-            </TouchableOpacity>
-          )}
+        {/* Latest Readings */}
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitle}>Latest readings</Text>
+          <TouchableOpacity onPress={() => navigation.navigate("History")}>
+            <Text style={styles.sectionLink}>History</Text>
+          </TouchableOpacity>
+        </View>
 
-          {/* Maternal Wellness Daily Tip */}
-          <View style={styles.tipCard}>
-            <View style={styles.tipHeader}>
-              <MaterialIcons
-                name="health-and-safety"
-                size={22}
-                color="#002040"
-                style={{ marginRight: 6 }}
-              />
-              <Text style={styles.tipTitle}>Maternal Wellness Daily</Text>
+        <View style={styles.readsRow}>
+          {/* Blood pressure */}
+          <View
+            style={[styles.statCard, bpHigh && styles.statCardAlert]}
+          >
+            <View style={styles.statTop}>
+              <View
+                style={[
+                  styles.statIcon,
+                  { backgroundColor: bpHigh ? "#f7d6d6" : "#fdecec" },
+                ]}
+              >
+                <MaterialIcons
+                  name="favorite"
+                  size={15}
+                  color={bpHigh ? ALERT : "#e53935"}
+                />
+              </View>
+              <Text style={styles.statLabel}>Blood pressure</Text>
             </View>
-            <Text style={styles.tipText}>{todayTip}</Text>
+            {lastBP ? (
+              <>
+                <Text
+                  style={[styles.statValue, bpHigh && { color: ALERT }]}
+                >
+                  {lastBP.value}/{lastBP.value2}
+                  <Text style={styles.statUnit}> {lastBP.unit}</Text>
+                </Text>
+                <Text
+                  style={[
+                    styles.statTrend,
+                    { color: bpHigh ? ALERT : OK },
+                  ]}
+                >
+                  {bpHigh ? "Above range" : "In range"} · {formatWhen(lastBP.ts)}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.statValue}>—</Text>
+                <Text style={styles.statTrendMuted}>No readings yet</Text>
+              </>
+            )}
           </View>
 
-          {/* Latest Readings Section */}
-          <View style={styles.readingsContainer}>
-            <Text style={styles.sectionTitle}>Latest Readings</Text>
-            {lastBP || lastScale ? (
+          {/* Weight */}
+          <View style={styles.statCard}>
+            <View style={styles.statTop}>
+              <View
+                style={[styles.statIcon, { backgroundColor: "#e6f1fb" }]}
+              >
+                <MaterialIcons name="monitor-weight" size={15} color={BLUE} />
+              </View>
+              <Text style={styles.statLabel}>Weight</Text>
+            </View>
+            {lastScale ? (
               <>
-                {lastBP && (
-                  <View
-                    style={[
-                      styles.readingItem,
-                      isBPReadingHigh(lastBP) && styles.readingItemHigh,
-                    ]}
+                <Text style={styles.statValue}>
+                  {lastScale.value}
+                  <Text style={styles.statUnit}> {lastScale.unit}</Text>
+                </Text>
+                <Text style={[styles.statTrend, { color: OK }]}>
+                  {formatWhen(lastScale.ts)}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.statValue}>—</Text>
+                <Text style={styles.statTrendMuted}>No readings yet</Text>
+              </>
+            )}
+          </View>
+        </View>
+
+        {/* Health Events — hospital report */}
+        <View style={styles.eventsCard}>
+          <View style={styles.eventsHeader}>
+            <View style={styles.eventsIcon}>
+              <MaterialIcons name="local-hospital" size={18} color={TEAL} />
+            </View>
+            <Text style={styles.eventsTitle}>Health events</Text>
+          </View>
+          <Text style={styles.eventsSub}>
+            Let your care team know right away if you've received care outside
+            the home.
+          </Text>
+          <TouchableOpacity
+            style={styles.hospitalButton}
+            activeOpacity={0.85}
+            onPress={() => setShowHospitalModal(true)}
+          >
+            <MaterialIcons name="local-hospital" size={20} color={TEAL} />
+            <Text style={styles.hospitalButtonText}>
+              I Went To The Hospital
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* My Devices */}
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitle}>My devices</Text>
+          {deviceCount > 0 && (
+            <TouchableOpacity
+              onPress={() =>
+                navigation.navigate("Devices", { screen: "DevicesMain" })
+              }
+            >
+              <Text style={styles.sectionLink}>Manage</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {deviceCount > 0 ? (
+          <>
+            <View style={styles.devsRow}>
+              {deviceList.slice(0, 3).map((device: any, index: number) => {
+                const imageSource = getDeviceImage(device);
+                const friendlyName = getDeviceFriendlyName(device);
+                const sourceBadge = getSourceBadge(device);
+                return (
+                  <TouchableOpacity
+                    key={device.id || index}
+                    style={styles.deviceCard}
+                    onPress={() =>
+                      navigation.navigate("Devices", {
+                        screen: "Capture",
+                        params: { deviceId: device.id },
+                      })
+                    }
+                    activeOpacity={0.8}
                   >
-                    <View style={styles.readingHeader}>
-                      <View
-                        style={[
-                          styles.readingIcon,
-                          {
-                            backgroundColor: isBPReadingHigh(lastBP)
-                              ? "#ffcdd2"
-                              : "#ffebee",
-                          },
-                        ]}
-                      >
-                        <MaterialIcons
-                          name="favorite"
-                          size={18}
-                          color={isBPReadingHigh(lastBP) ? "#c62828" : "#e53935"}
-                        />
-                      </View>
-                      <View style={styles.readingInfo}>
-                        <Text style={styles.readingDevice}>
-                          {lastBP.deviceName || "Blood Pressure"}
-                        </Text>
-                        <Text style={styles.readingTime}>
-                          {new Date(lastBP.ts).toLocaleDateString([], {
-                            month: "short",
-                            day: "numeric",
-                          })}{" "}
-                          {new Date(lastBP.ts).toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </Text>
-                      </View>
-                      {isBPReadingHigh(lastBP) && (
-                        <View style={styles.highBadge}>
-                          <Text style={styles.highBadgeText}>HIGH</Text>
+                    <View style={styles.deviceImageWrapper}>
+                      <Image source={imageSource} style={styles.deviceIcon} />
+                      {sourceBadge && (
+                        <View style={styles.sourceBadge}>
+                          <Text style={styles.sourceBadgeText}>
+                            {sourceBadge}
+                          </Text>
                         </View>
                       )}
                     </View>
-                    <Text
-                      style={[
-                        styles.readingValue,
-                        isBPReadingHigh(lastBP) && styles.readingValueHigh,
-                      ]}
-                    >
-                      {lastBP.value}/{lastBP.value2}
-                      <Text style={styles.readingUnit}> {lastBP.unit}</Text>
+                    <Text style={styles.deviceName} numberOfLines={1}>
+                      {friendlyName}
                     </Text>
-                    {lastBP.heartRate && (
-                      <Text style={styles.readingSecondary}>
-                        Pulse: {lastBP.heartRate} bpm
-                      </Text>
-                    )}
-                  </View>
-                )}
-
-                {lastScale && (
-                  <View style={styles.readingItem}>
-                    <View style={styles.readingHeader}>
-                      <View
-                        style={[styles.readingIcon, { backgroundColor: "#e0f7fa" }]}
-                      >
-                        <MaterialIcons
-                          name="fitness-center"
-                          size={18}
-                          color="#00acc1"
-                        />
-                      </View>
-                      <View style={styles.readingInfo}>
-                        <Text style={styles.readingDevice}>
-                          {lastScale.deviceName || "Scale"}
-                        </Text>
-                        <Text style={styles.readingTime}>
-                          {new Date(lastScale.ts).toLocaleDateString([], {
-                            month: "short",
-                            day: "numeric",
-                          })}{" "}
-                          {new Date(lastScale.ts).toLocaleTimeString([], {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={styles.readingValue}>
-                      {lastScale.value}
-                      <Text style={styles.readingUnit}> {lastScale.unit}</Text>
-                    </Text>
-                  </View>
-                )}
-              </>
-            ) : (
-              <View style={styles.noReadingsContainer}>
-                <MaterialIcons name="show-chart" size={32} color="#ccc" />
-                <Text style={styles.noReadingsText}>No readings yet</Text>
-                <Text style={styles.noReadingsHint}>
-                  Take your first measurement to see it here
-                </Text>
-              </View>
+                    <Text style={styles.devicePaired}>Paired</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {deviceCount > 3 && (
+              <Text style={styles.moreDevices}>+{deviceCount - 3} more</Text>
             )}
-          </View>
-
-          {/* My Devices Section */}
-          <Text style={styles.sectionTitle}>My Devices</Text>
-          <View style={styles.deviceCard}>
-            {deviceCount > 0 ? (
-              <>
-                <View style={styles.deviceRow}>
-                  {deviceList.slice(0, 4).map((device: any, index: number) => {
-                    const imageSource = getDeviceImage(device);
-                    const friendlyName = getDeviceFriendlyName(device);
-                    const sourceBadge = getSourceBadge(device);
-                    return (
-                      <TouchableOpacity
-                        key={device.id || index}
-                        style={styles.deviceItem}
-                        onPress={() =>
-                          navigation.navigate("Devices", {
-                            screen: "Capture",
-                            params: { deviceId: device.id },
-                          })
-                        }
-                        activeOpacity={0.7}
-                      >
-                        <View style={styles.deviceImageWrapper}>
-                          <Image source={imageSource} style={styles.deviceIcon} />
-                          {sourceBadge && (
-                            <View style={styles.sourceBadge}>
-                              <Text style={styles.sourceBadgeText}>
-                                {sourceBadge}
-                              </Text>
-                            </View>
-                          )}
-                        </View>
-                        <Text style={styles.deviceName} numberOfLines={2}>
-                          {friendlyName}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {deviceCount > 4 && (
-                  <Text style={styles.moreDevices}>+{deviceCount - 4} more</Text>
-                )}
-              </>
-            ) : (
-              <TouchableOpacity
-                style={styles.noDevicesContainer}
-                onPress={() =>
-                  navigation.navigate("Devices", { screen: "AddDevice" })
-                }
-                activeOpacity={0.7}
-              >
-                <MaterialIcons name="devices-other" size={48} color="#ccc" />
-                <Text style={styles.noDevicesText}>No devices added yet</Text>
-                <View style={styles.addDevicePrompt}>
-                  <MaterialIcons name="add-circle" size={20} color="#00509f" />
-                  <Text style={styles.addDeviceText}>
-                    Tap to add your first device
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Spacer for fixed button */}
-          <View style={{ height: 80 }} />
-        </ScrollView>
-
-        {/* Fixed New Reading Button */}
-        <View style={[styles.fixedButtonContainer, { paddingBottom: 8 }]}>
+          </>
+        ) : (
           <TouchableOpacity
-            style={styles.newReadingButton}
+            style={styles.noDevicesCard}
+            onPress={() => navigation.navigate("Devices", { screen: "AddDevice" })}
             activeOpacity={0.8}
-            onPress={() => navigation.navigate("Devices", { screen: "DevicesMain" })}
+          >
+            <MaterialIcons name="devices-other" size={40} color="#b7c2d0" />
+            <Text style={styles.noDevicesText}>No devices added yet</Text>
+            <View style={styles.addDevicePrompt}>
+              <MaterialIcons name="add-circle" size={18} color={BLUE} />
+              <Text style={styles.addDeviceText}>Tap to add your first device</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Spacer for docked button */}
+        <View style={{ height: 92 }} />
+      </ScrollView>
+
+      {/* Docked, edge-to-edge New Reading button */}
+      <View style={styles.dock}>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() =>
+            navigation.navigate("Devices", { screen: "DevicesMain" })
+          }
+        >
+          <LinearGradient
+            colors={["#00325f", NAVY]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 0, y: 1 }}
+            style={styles.newReadingButton}
           >
             <MaterialIcons name="add-circle-outline" size={22} color="#fff" />
             <Text style={styles.newReadingText}>New Reading</Text>
-          </TouchableOpacity>
-        </View>
+          </LinearGradient>
+        </TouchableOpacity>
       </View>
 
       {/* Urine Protein Modal */}
@@ -430,38 +473,74 @@ export default function DashboardScreen() {
         onComplete={handleUrineProteinComplete}
         onDefer={handleUrineProteinDefer}
       />
-    </ImageBackground>
+
+      {/* Hospital Report Modal */}
+      <HospitalReportModal
+        visible={showHospitalModal}
+        onClose={() => setShowHospitalModal(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  image: {
+  root: {
     flex: 1,
-    width: "100%",
-    height: "100%",
-  },
-  container: {
-    flex: 1,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    backgroundColor: "#eef3f9",
   },
   scrollContainer: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
     paddingBottom: 20,
   },
-  welcomeText: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "#00468c",
-    marginBottom: 20,
+  // Header
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 18,
+    paddingHorizontal: 2,
   },
+  greeting: {
+    fontSize: 13,
+    color: "#5b6b7f",
+    fontWeight: "500",
+  },
+  name: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: NAVY,
+    marginTop: 2,
+    letterSpacing: -0.4,
+  },
+  bell: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#e2e9f1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bellDot: {
+    position: "absolute",
+    top: 11,
+    right: 12,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: ALERT,
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  // Alert bar
   alertBar: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#FFF3E0",
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderRadius: 12,
-    marginBottom: 16,
+    borderRadius: 14,
+    marginBottom: 14,
     gap: 10,
     borderWidth: 1,
     borderColor: "#FFE0B2",
@@ -472,169 +551,182 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#E65100",
   },
-  tipCard: {
-    backgroundColor: "rgba(255, 255, 255, 0.95)",
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 24,
-    borderLeftWidth: 4,
-    borderLeftColor: "#00509f",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+  // Hero
+  hero: {
+    borderRadius: 20,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
+    marginBottom: 22,
   },
-  tipHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  tipTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#00509f",
-  },
-  tipText: {
-    fontSize: 15,
-    color: "#444",
-    lineHeight: 22,
-  },
-  readingsContainer: {
-    marginBottom: 24,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#00468c",
-    marginBottom: 12,
-  },
-  readingItem: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  readingItemHigh: {
-    borderWidth: 2,
-    borderColor: "#ef5350",
-    backgroundColor: "rgba(255,235,238,0.95)",
-  },
-  readingHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  readingIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  readingInfo: {
-    flex: 1,
-  },
-  readingDevice: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-  },
-  readingTime: {
-    color: "#888",
-    fontSize: 12,
-    marginTop: 2,
-  },
-  highBadge: {
-    backgroundColor: "#c62828",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  highBadgeText: {
-    color: "#fff",
+  heroTag: {
     fontSize: 11,
     fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    color: "#9dc2ec",
+    marginBottom: 8,
   },
-  readingValue: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: "#222",
-    marginTop: 4,
+  heroTip: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: "#eaf2fb",
+    fontWeight: "500",
   },
-  readingValueHigh: {
-    color: "#c62828",
-  },
-  readingUnit: {
-    fontSize: 16,
-    fontWeight: "400",
-    color: "#666",
-  },
-  readingSecondary: {
-    fontSize: 14,
-    color: "#666",
-    marginTop: 4,
-  },
-  noReadingsContainer: {
+  // Sections
+  sectionRow: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 24,
-    backgroundColor: "rgba(255,255,255,0.9)",
-    borderRadius: 12,
+    justifyContent: "space-between",
+    marginBottom: 12,
+    paddingHorizontal: 2,
   },
-  noReadingsText: {
-    fontSize: 16,
-    color: "#999",
-    marginTop: 8,
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#0f1b2d",
   },
-  noReadingsHint: {
+  sectionLink: {
     fontSize: 13,
-    color: "#bbb",
+    fontWeight: "600",
+    color: BLUE,
+  },
+  // Reading stat cards
+  readsRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 22,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e7ecf2",
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+  },
+  statCardAlert: {
+    borderColor: "#f0c4c4",
+    backgroundColor: "#fdf2f2",
+  },
+  statTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  statIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  statLabel: {
+    fontSize: 12,
+    color: "#5b6b7f",
+    fontWeight: "600",
+    flex: 1,
+  },
+  statValue: {
+    fontSize: 23,
+    fontWeight: "800",
+    color: NAVY,
+    marginTop: 8,
+    letterSpacing: -0.5,
+  },
+  statUnit: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#8a97a6",
+  },
+  statTrend: {
+    fontSize: 11.5,
+    fontWeight: "600",
     marginTop: 4,
+  },
+  statTrendMuted: {
+    fontSize: 11.5,
+    fontWeight: "500",
+    color: "#9aa7b5",
+    marginTop: 4,
+  },
+  // Health events
+  eventsCard: {
+    backgroundColor: "#fff",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#e7ecf2",
+    padding: 15,
+    marginBottom: 22,
+  },
+  eventsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    marginBottom: 6,
+  },
+  eventsIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    backgroundColor: "#e4f4f5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  eventsTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0f1b2d",
+  },
+  eventsSub: {
+    fontSize: 13,
+    color: "#5b6b7f",
+    lineHeight: 19,
+    marginBottom: 14,
+  },
+  hospitalButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    borderWidth: 1.5,
+    borderColor: TEAL,
+    backgroundColor: "#e4f4f5",
+    borderRadius: 14,
+    paddingVertical: 13,
+  },
+  hospitalButtonText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: TEAL,
+  },
+  // Devices
+  devsRow: {
+    flexDirection: "row",
+    gap: 10,
   },
   deviceCard: {
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderRadius: 16,
-    paddingVertical: 20,
-    paddingHorizontal: 16,
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#e7ecf2",
+    paddingVertical: 12,
+    paddingHorizontal: 6,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-    marginBottom: 16,
-    minHeight: 120,
-  },
-  deviceRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "flex-start",
-    flexWrap: "wrap",
-    width: "100%",
-    gap: 16,
-  },
-  deviceItem: {
-    alignItems: "center",
-    width: 70,
   },
   deviceImageWrapper: {
     position: "relative",
   },
   deviceIcon: {
-    width: 56,
-    height: 56,
+    width: 44,
+    height: 44,
     resizeMode: "contain",
-    marginBottom: 4,
+    marginBottom: 6,
   },
   sourceBadge: {
     position: "absolute",
-    bottom: 2,
+    bottom: 4,
     right: -4,
     backgroundColor: "#2196F3",
     paddingHorizontal: 4,
@@ -648,22 +740,33 @@ const styles = StyleSheet.create({
   },
   deviceName: {
     fontSize: 11,
-    color: "#666",
+    color: "#5b6b7f",
+    fontWeight: "600",
     textAlign: "center",
-    marginTop: 4,
+  },
+  devicePaired: {
+    fontSize: 10,
+    color: OK,
+    fontWeight: "700",
+    marginTop: 3,
   },
   moreDevices: {
-    color: "#888",
+    color: "#8a97a6",
     fontSize: 13,
-    marginTop: 12,
+    marginTop: 10,
+    textAlign: "center",
   },
-  noDevicesContainer: {
+  noDevicesCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e7ecf2",
     alignItems: "center",
-    paddingVertical: 16,
+    paddingVertical: 22,
   },
   noDevicesText: {
-    fontSize: 16,
-    color: "#999",
+    fontSize: 15,
+    color: "#8a97a6",
     marginTop: 8,
     marginBottom: 12,
   },
@@ -674,34 +777,31 @@ const styles = StyleSheet.create({
   },
   addDeviceText: {
     fontSize: 14,
-    color: "#00509f",
-    fontWeight: "500",
+    color: BLUE,
+    fontWeight: "600",
   },
-  fixedButtonContainer: {
+  // Docked button (edge-to-edge)
+  dock: {
     position: "absolute",
-    bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 20,
-    backgroundColor: "transparent",
+    bottom: 0,
   },
   newReadingButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#002040",
     paddingVertical: 16,
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowColor: "#002040",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
+    elevation: 12,
   },
   newReadingText: {
     color: "#fff",
-    fontSize: 17,
-    fontWeight: "600",
+    fontSize: 16,
+    fontWeight: "700",
     marginLeft: 10,
   },
 });
