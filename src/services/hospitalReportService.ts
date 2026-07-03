@@ -43,6 +43,7 @@ interface HospitalReportResponse {
 async function postHospitalReport(body: {
   app_response_id: string;
   reported_at: number;
+  visit_date: string | null;
 }): Promise<HospitalReportResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -74,8 +75,10 @@ async function postHospitalReport(body: {
  * background sync. The local row id doubles as app_response_id, so server-side
  * dedup makes retries idempotent.
  */
-export function reportHospitalVisit(): string {
-  const id = saveScreeningResponse(HOSPITAL_REPORT_TYPE, {});
+export function reportHospitalVisit(visitDate: string): string {
+  // visitDate is a local YYYY-MM-DD "when did you go" answer; the row timestamp
+  // captures when they pressed the button. Both reach the EMR.
+  const id = saveScreeningResponse(HOSPITAL_REPORT_TYPE, { visitDate });
 
   // Fire-and-forget — the UI must not block on the network. A failure here
   // just leaves the row queued in screening_responses; the shared background
@@ -125,9 +128,21 @@ export async function syncPendingHospitalReports(): Promise<{
 
   for (const row of rows) {
     try {
+      // The "when did you go" date rides in the row's data JSON.
+      let visitDate: string | null = null;
+      try {
+        const parsed = row.data ? JSON.parse(row.data) : {};
+        if (typeof parsed.visitDate === "string") {
+          visitDate = parsed.visitDate;
+        }
+      } catch {
+        // Malformed data — send without a visit date rather than fail.
+      }
+
       const result = await postHospitalReport({
         app_response_id: row.id,
         reported_at: row.timestamp,
+        visit_date: visitDate,
       });
       if (result.success) {
         markScreeningResponseSynced(row.id);

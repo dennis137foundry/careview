@@ -733,9 +733,10 @@ export type UrineProteinData = {
 };
 
 export type HospitalVisitData = {
-  // v1 is a one-tap confirm — the event time is the row's timestamp, so no
-  // fields are required. Reserved for optional future context (which hospital,
-  // reason) without a schema change on either side.
+  // "When did you go" — local YYYY-MM-DD. The row timestamp captures when the
+  // button was pressed; this captures the day of the actual visit.
+  visitDate?: string;
+  // Reserved for optional future context without a schema change on either side.
   hospitalName?: string;
   reason?: string;
 };

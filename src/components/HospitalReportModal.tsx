@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Modal,
+  ScrollView,
   ActivityIndicator,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
@@ -12,6 +13,42 @@ import { reportHospitalVisit } from "../services/hospitalReportService";
 import { useToast } from "./Toast/ToastProvider";
 
 const TEAL = "#0e7c86";
+
+// How many recent days the "Earlier" list offers (starting 2 days back, since
+// Today/Yesterday are their own chips).
+const EARLIER_DAYS = 14;
+
+type VisitChoice = "today" | "yesterday" | "earlier";
+
+function toISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function dayStart(daysBack: number): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysBack);
+  return d;
+}
+
+function earlierOptions(): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = [];
+  for (let i = 2; i < EARLIER_DAYS + 2; i++) {
+    const d = dayStart(i);
+    out.push({
+      label: d.toLocaleDateString(undefined, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      }),
+      value: toISODate(d),
+    });
+  }
+  return out;
+}
 
 interface HospitalReportModalProps {
   visible: boolean;
@@ -21,29 +58,47 @@ interface HospitalReportModalProps {
 /**
  * "I Went To The Hospital" report.
  *
- * A one-tap confirmation the patient sends to their care team when they've
- * received care outside the home. On confirm we persist the event locally and
- * kick off a background sync to the EMR (hospital_report.php). Mirrors the
- * UrineProteinModal pattern: if the local save throws, keep the sheet open so
- * the patient can retry rather than showing a false success.
+ * The patient confirms the visit and picks WHEN it happened (Today / Yesterday /
+ * an earlier date). We persist the event locally and background-sync it to the
+ * EMR (hospital_report.php). We record both the visit date (when they went) and
+ * the report time (when they pressed the button). Mirrors the UrineProteinModal
+ * pattern: on a local save failure, keep the sheet open so they can retry.
  */
 export default function HospitalReportModal({
   visible,
   onClose,
 }: HospitalReportModalProps) {
   const [submitting, setSubmitting] = useState(false);
+  const [visitChoice, setVisitChoice] = useState<VisitChoice>("today");
+  const [earlierDate, setEarlierDate] = useState<string | null>(null);
   const { showToast } = useToast();
 
-  const handleConfirm = () => {
-    setSubmitting(true);
+  const visitDate =
+    visitChoice === "today"
+      ? toISODate(dayStart(0))
+      : visitChoice === "yesterday"
+      ? toISODate(dayStart(1))
+      : earlierDate;
 
+  const resetState = () => {
+    setVisitChoice("today");
+    setEarlierDate(null);
+    setSubmitting(false);
+  };
+
+  const handleConfirm = () => {
+    if (!visitDate) {
+      // "Earlier" chosen but no date picked yet.
+      showToast({ message: "Please pick the day you went.", type: "warning" });
+      return;
+    }
+
+    setSubmitting(true);
     try {
-      reportHospitalVisit();
+      reportHospitalVisit(visitDate);
     } catch (err) {
       console.error("[HospitalReport] Failed to save report:", err);
       setSubmitting(false);
-      // Keep the sheet open so the patient can try again — the report never
-      // left the phone.
       showToast({
         message: "Couldn't save your report. Please try again.",
         type: "error",
@@ -51,18 +106,25 @@ export default function HospitalReportModal({
       return;
     }
 
-    setSubmitting(false);
     showToast({
       message: "Your care team has been notified.",
       type: "success",
     });
+    resetState();
     onClose();
   };
 
   const handleCancel = () => {
     if (submitting) return;
+    resetState();
     onClose();
   };
+
+  const choices: { key: VisitChoice; label: string }[] = [
+    { key: "today", label: "Today" },
+    { key: "yesterday", label: "Yesterday" },
+    { key: "earlier", label: "Earlier" },
+  ];
 
   return (
     <Modal
@@ -85,15 +147,73 @@ export default function HospitalReportModal({
           <Text style={styles.body}>
             You are reporting to{" "}
             <Text style={styles.bodyStrong}>Trinity Home Health Services</Text>{" "}
-            that you have been to a hospital for medical care. To confirm this
-            action, please press the{" "}
-            <Text style={styles.bodyStrong}>Confirm</Text> button.
+            that you have been to a hospital for medical care.
           </Text>
+
+          {/* When did you go? */}
+          <Text style={styles.whenLabel}>When did you go?</Text>
+          <View style={styles.chipRow}>
+            {choices.map((opt) => {
+              const active = visitChoice === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[styles.chip, active && styles.chipActive]}
+                  onPress={() => setVisitChoice(opt.key)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[styles.chipText, active && styles.chipTextActive]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {visitChoice === "earlier" && (
+            <ScrollView
+              style={styles.earlierList}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+            >
+              {earlierOptions().map((d) => {
+                const active = earlierDate === d.value;
+                return (
+                  <TouchableOpacity
+                    key={d.value}
+                    style={[
+                      styles.earlierItem,
+                      active && styles.earlierItemActive,
+                    ]}
+                    onPress={() => setEarlierDate(d.value)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.earlierItemText,
+                        active && styles.earlierItemTextActive,
+                      ]}
+                    >
+                      {d.label}
+                    </Text>
+                    {active && (
+                      <MaterialIcons name="check" size={18} color={TEAL} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
 
           {/* Buttons */}
           <View style={styles.buttonContainer}>
             <TouchableOpacity
-              style={styles.confirmButton}
+              style={[
+                styles.confirmButton,
+                !visitDate && styles.confirmButtonDisabled,
+              ]}
               onPress={handleConfirm}
               disabled={submitting}
               activeOpacity={0.85}
@@ -161,10 +281,72 @@ const styles = StyleSheet.create({
     color: "#555",
     textAlign: "center",
     lineHeight: 22,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   bodyStrong: {
     color: "#222",
+    fontWeight: "700",
+  },
+  whenLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#002040",
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  chipRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 8,
+    marginBottom: 14,
+  },
+  chip: {
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "#d6dde6",
+    backgroundColor: "#fff",
+  },
+  chipActive: {
+    borderColor: TEAL,
+    backgroundColor: "#e4f4f5",
+  },
+  chipText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#5b6b7f",
+  },
+  chipTextActive: {
+    color: TEAL,
+  },
+  earlierList: {
+    maxHeight: 160,
+    alignSelf: "stretch",
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#eceff3",
+    borderRadius: 12,
+  },
+  earlierItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f0f3f6",
+  },
+  earlierItemActive: {
+    backgroundColor: "#e4f4f5",
+  },
+  earlierItemText: {
+    fontSize: 14,
+    color: "#333",
+    fontWeight: "500",
+  },
+  earlierItemTextActive: {
+    color: TEAL,
     fontWeight: "700",
   },
   buttonContainer: {
@@ -178,6 +360,9 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 15,
     gap: 8,
+  },
+  confirmButtonDisabled: {
+    backgroundColor: "#bcc7cf",
   },
   confirmButtonText: {
     color: "#fff",
