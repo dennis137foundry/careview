@@ -66,7 +66,9 @@ export function initDB() {
       source TEXT DEFAULT 'iHealthSDK',
       emrUnitId INTEGER DEFAULT NULL,
       emrAccessoryUnitId INTEGER DEFAULT NULL,
-      cuffSize TEXT DEFAULT NULL
+      cuffSize TEXT DEFAULT NULL,
+      lastBattery INTEGER DEFAULT NULL,
+      lastBatteryAt INTEGER DEFAULT NULL
     );
   `);
 
@@ -129,6 +131,20 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE devices ADD COLUMN cuffSize TEXT DEFAULT NULL;");
     console.log("[DB] Added 'cuffSize' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
+  // Migration: last-known battery level (percent) + when it was read.
+  // Populated from the iHealth SDK on each device connection.
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN lastBattery INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'lastBattery' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN lastBatteryAt INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'lastBatteryAt' column to devices");
   } catch (e) {
     // Column already exists
   }
@@ -341,6 +357,11 @@ export type DeviceRecord = {
   emrUnitId?: number | null;
   emrAccessoryUnitId?: number | null; // XXL cuffs register as a second unit
   cuffSize?: CuffSize | null; // BP only; null for scales
+
+  // Last-known battery level (0–100), read from the iHealth SDK on connect.
+  // null = never read (e.g. HS4S has no battery API, or not yet connected).
+  lastBattery?: number | null;
+  lastBatteryAt?: number | null; // epoch ms of the last battery read
 };
 
 export function saveDevice(device: DeviceRecord) {
@@ -375,6 +396,25 @@ export function saveDevice(device: DeviceRecord) {
 }
 
 /**
+ * Store the last-known battery level (0–100) for a device, with the time it
+ * was read. Targeted UPDATE (won't disturb other columns). Matched by MAC so
+ * the native battery event — which only carries mac — can find the row.
+ */
+export function updateDeviceBatteryByMac(mac: string, battery: number): void {
+  try {
+    db.execute(
+      "UPDATE devices SET lastBattery = ?, lastBatteryAt = ? WHERE mac = ? COLLATE NOCASE;",
+      [battery, Date.now(), mac]
+    );
+    if (__DEV__) {
+      console.log(`[DB] Battery ${battery}% stored for device mac ${mac}`);
+    }
+  } catch (e) {
+    console.error("[DB] Failed to update device battery:", e);
+  }
+}
+
+/**
  * Populate the EMR inventory-unit IDs on an existing device row after
  * device_register.php returns them. emrAccessoryUnitId is only set for
  * XXL-cuff BP registrations; pass null for everything else.
@@ -404,7 +444,7 @@ export function updateDeviceEmrUnits(
 export function getDevicesWithoutEmrUnitId(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -463,7 +503,7 @@ export function updateDeviceName(deviceId: string, newName: string) {
 export function getDevices(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices ORDER BY name;"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices ORDER BY name;"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -482,7 +522,7 @@ export function getDevices(): DeviceRecord[] {
 export function getDevice(id: string): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE id = ?;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices WHERE id = ?;",
       [id]
     );
     if (res.rows && res.rows.length > 0) {
@@ -498,7 +538,7 @@ export function getDevice(id: string): DeviceRecord | null {
 export function getDeviceByType(type: "BP" | "SCALE" | "BG"): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize FROM devices WHERE type = ? LIMIT 1;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices WHERE type = ? LIMIT 1;",
       [type]
     );
     if (res.rows && res.rows.length > 0) {
@@ -813,6 +853,36 @@ export function getScreeningResponsesByType(
     return out;
   } catch (e) {
     console.error("[DB] Failed to get screening responses by type:", e);
+    return [];
+  }
+}
+
+/**
+ * Get every screening response (all types), newest first. Used by the History
+ * export so the CSV includes urine protein, daily health checks, and hospital
+ * reports alongside device readings.
+ */
+export function getAllScreeningResponses(): ScreeningResponse[] {
+  try {
+    const res = db.execute(
+      "SELECT id, type, timestamp, data, synced FROM screening_responses ORDER BY timestamp DESC;"
+    );
+    const out: ScreeningResponse[] = [];
+    if (res.rows) {
+      for (let i = 0; i < res.rows.length; i++) {
+        const row = res.rows.item(i);
+        out.push({
+          id: row.id,
+          type: row.type as ScreeningType,
+          timestamp: row.timestamp,
+          data: row.data,
+          synced: row.synced === 1,
+        });
+      }
+    }
+    return out;
+  } catch (e) {
+    console.error("[DB] Failed to get all screening responses:", e);
     return [];
   }
 }

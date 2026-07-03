@@ -122,6 +122,15 @@ class IHealthDevicesManager {
     return NativeIHealthDevices.getBatteryLevel(mac);
   }
 
+  /**
+   * Fires when the native side reads a device's battery level (0–100) from
+   * the iHealth SDK, typically right after a connection is established.
+   * Payload: { mac, type, level, timestamp }.
+   */
+  onBatteryLevel(callback: (event: { mac: string; type?: string; level: number; timestamp?: number }) => void): Subscription {
+    return eventEmitter.addListener('onBatteryLevel', callback);
+  }
+
   removeAllListeners(): void {
     eventEmitter.removeAllListeners('onDeviceFound');
     eventEmitter.removeAllListeners('onScanStateChanged');

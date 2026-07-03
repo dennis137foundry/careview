@@ -21,6 +21,7 @@ import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { addReadingAndPersist } from "../../redux/readingSlice";
+import { setDeviceBattery } from "../../redux/deviceSlice";
 import { syncPendingReadings } from "../../services/vitalsSyncService";
 import { NativeModules, NativeEventEmitter } from "react-native";
 import type { RootState, AppDispatch } from "../../redux/store";
@@ -29,6 +30,9 @@ import { hasDailyHealthCheckToday } from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
+
+// Below this last-known battery %, warn the user to charge before a reading.
+const LOW_BATTERY_THRESHOLD = 20;
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -861,6 +865,12 @@ export default function CaptureScreen({ route, navigation }: any) {
         addLog(`BG: ${data.value} ${data.unit || "mg/dL"}`);
         promptForGlucoseTiming(data);
       }),
+      emitter.addListener("onBatteryLevel", (data: any) => {
+        if (typeof data?.level === "number" && data?.mac) {
+          addLog(`Battery: ${data.level}% (${data.type || "?"})`);
+          dispatch(setDeviceBattery({ mac: data.mac, battery: data.level }));
+        }
+      }),
       emitter.addListener("onError", (data: any) => {
         const msg = data.message || JSON.stringify(data);
         addLog(`Error: ${msg}`);
@@ -892,7 +902,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, promptForGlucoseTiming]);
+  }, [addLog, device, saveBPReading, saveWeightReading, promptForGlucoseTiming, dispatch]);
 
   // ============================================================================
   // START CAPTURE
@@ -1021,13 +1031,34 @@ export default function CaptureScreen({ route, navigation }: any) {
       return;
     }
 
-    if (device?.type === "BP" && !healthCheckCompleted) {
-      addLog("Daily health check required before BP measurement");
-      setShowHealthCheckModal(true);
+    // Continuation shared by the normal path and the low-battery "Try Anyway".
+    const proceed = () => {
+      if (device?.type === "BP" && !healthCheckCompleted) {
+        addLog("Daily health check required before BP measurement");
+        setShowHealthCheckModal(true);
+        return;
+      }
+      startCapture();
+    };
+
+    // Warn if the last-known battery (read on the previous connection) is low.
+    // Non-blocking: the patient can still try, since a reading may succeed.
+    const batt = device?.lastBattery;
+    if (typeof batt === "number" && batt >= 0 && batt < LOW_BATTERY_THRESHOLD) {
+      const label = device?.friendlyName || device?.name || "device";
+      addLog(`Low battery (${batt}%) — prompting to charge`);
+      Alert.alert(
+        "Charge Your Device",
+        `Your ${label} battery is low (${batt}%). Charge it soon for reliable readings. You can still try now.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Try Anyway", onPress: proceed },
+        ]
+      );
       return;
     }
 
-    startCapture();
+    proceed();
   }, [device, healthCheckCompleted, addLog, startCapture]);
 
   const cancel = useCallback(async () => {

@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { loadDevices, removeDevice, renameDevice } from "../../redux/deviceSlice";
 import { useToast } from "../../components/Toast";
 import RenameDeviceModal from "../../components/RenameDeviceModal";
@@ -31,6 +32,34 @@ const deviceTypeLabels: Record<string, string> = {
   SCALE: "Smart Scale",
   BG: "Glucose Meter",
 };
+
+function batteryColor(level: number): string {
+  if (level < 20) return "#c62828"; // red
+  if (level < 50) return "#e0952b"; // amber
+  return "#1f8a5b"; // green
+}
+
+// Phone-style battery graphic. Renders nothing until a level has been read
+// (battery is captured on each device connection). null/unknown => hidden.
+function BatteryIndicator({ level }: { level: number | null | undefined }) {
+  if (typeof level !== "number" || level < 0 || level > 100) return null;
+  const color = batteryColor(level);
+  const fillPct = Math.max(6, level); // keep a visible sliver even near 0
+  return (
+    <View style={styles.batteryRow}>
+      <View style={styles.batteryBody}>
+        <View
+          style={[
+            styles.batteryFill,
+            { width: `${fillPct}%`, backgroundColor: color },
+          ]}
+        />
+      </View>
+      <View style={styles.batteryNub} />
+      <Text style={[styles.batteryText, { color }]}>{Math.round(level)}%</Text>
+    </View>
+  );
+}
 
 // Swipeable Device Card Component
 function SwipeableDeviceCard({
@@ -160,6 +189,8 @@ function SwipeableDeviceCard({
 
           <Text style={styles.typeLabel}>{typeLabel}</Text>
 
+          <BatteryIndicator level={device.lastBattery} />
+
           {lastReading ? (
             <View style={styles.lastReadingRow}>
               <MaterialIcons name="schedule" size={14} color="#888" />
@@ -210,6 +241,9 @@ export default function DevicesScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+
+  // Dark blue header → white status-bar glyphs.
+  useStatusBarStyle("light-content");
   const { devices, loading } = useSelector((state: RootState) => state.devices);
   const readings = useSelector((state: RootState) => state.readings.items);
 
@@ -486,6 +520,37 @@ const styles = StyleSheet.create({
     color: "#00509f",
     fontWeight: "500",
     marginTop: 2,
+  },
+  batteryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+  },
+  batteryBody: {
+    width: 26,
+    height: 13,
+    borderWidth: 1.5,
+    borderColor: "#9aa7b5",
+    borderRadius: 3,
+    padding: 1.5,
+    justifyContent: "center",
+  },
+  batteryFill: {
+    height: "100%",
+    borderRadius: 1.5,
+  },
+  batteryNub: {
+    width: 2.5,
+    height: 5,
+    backgroundColor: "#9aa7b5",
+    borderTopRightRadius: 1,
+    borderBottomRightRadius: 1,
+    marginLeft: 1,
+  },
+  batteryText: {
+    fontSize: 12,
+    fontWeight: "700",
+    marginLeft: 6,
   },
   lastReadingRow: {
     flexDirection: "row",

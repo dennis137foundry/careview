@@ -491,9 +491,9 @@ export default function AddDeviceScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Android draws content behind a translucent status bar (targetSdk 36 edge-to-edge);
-          the navy header would otherwise hide the dark clock/battery icons. iOS is unaffected. */}
-      {Platform.OS === "android" && <StatusBar barStyle="light-content" />}
+      {/* Navy header on both platforms → white clock/battery glyphs. (Android
+          also draws content behind a translucent status bar with edge-to-edge.) */}
+      <StatusBar barStyle="light-content" />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity

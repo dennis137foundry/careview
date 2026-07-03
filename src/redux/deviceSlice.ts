@@ -7,6 +7,7 @@ import {
   updateDeviceFriendlyName as updateFriendlyNameInDB,
   updateDeviceName as updateNameInDB,
   updateDeviceEmrUnits as updateEmrUnitsInDB,
+  updateDeviceBatteryByMac as updateBatteryInDB,
   DeviceRecord
 } from "../services/sqliteService";
 
@@ -90,6 +91,22 @@ const deviceSlice = createSlice({
         updateEmrUnitsInDB(deviceId, emrUnitId, emrAccessoryUnitId ?? null);
       }
     },
+    // Store the last-known battery level read from the iHealth SDK on connect.
+    // Keyed by MAC because the native battery event only carries mac.
+    setDeviceBattery: (
+      state,
+      action: PayloadAction<{ mac: string; battery: number }>
+    ) => {
+      const { mac, battery } = action.payload;
+      updateBatteryInDB(mac, battery);
+      const device = state.devices.find(
+        (d) => d.mac?.toUpperCase() === mac.toUpperCase()
+      );
+      if (device) {
+        device.lastBattery = battery;
+        device.lastBatteryAt = Date.now();
+      }
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(loadDevices.fulfilled, (state, action) => {
@@ -106,6 +123,7 @@ export const {
   updateFriendlyName,
   renameDevice,
   setDeviceEmrUnits,
+  setDeviceBattery,
 } = deviceSlice.actions;
 
 export default deviceSlice.reducer;

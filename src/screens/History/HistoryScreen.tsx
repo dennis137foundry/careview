@@ -16,6 +16,7 @@ import {
   ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { useDispatch, useSelector } from "react-redux";
 import { loadReadings } from "../../redux/readingSlice";
 import { isBPHigh } from "../../redux/userSlice";
@@ -31,6 +32,7 @@ import {
 import type { RootState, AppDispatch } from "../../redux/store";
 import {
   getScreeningResponsesByType,
+  getAllScreeningResponses,
   type SavedReading,
   type ScreeningResponse,
 } from "../../services/sqliteService";
@@ -165,6 +167,10 @@ const segmentStyles = StyleSheet.create({
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
+
+  // Navy header → white status-bar glyphs.
+  useStatusBarStyle("light-content");
+
   const { items } = useSelector((state: RootState) => state.readings);
   const bpThresholds = useSelector(
     (state: RootState) => state.user.bpThresholds
@@ -315,8 +321,15 @@ export default function HistoryScreen() {
 
   const handleExport = async () => {
     try {
-      if (!items || items.length === 0) {
-        Alert.alert("No data", "There are no readings to export.");
+      const readings = items || [];
+      // Include screening responses (urine protein, daily health checks,
+      // hospital reports). Deferrals are UI memory, not clinical data — skip.
+      const screenings = getAllScreeningResponses().filter(
+        (s) => s.type !== "urine_protein_deferred"
+      );
+
+      if (readings.length === 0 && screenings.length === 0) {
+        Alert.alert("No data", "There is no history to export.");
         return;
       }
 
@@ -328,22 +341,69 @@ export default function HistoryScreen() {
         "Value2",
         "Unit",
         "Heart Rate",
-        "Sample Window",
+        "Sample Window / Notes",
         "Synced",
         "Timestamp",
       ];
-      const rows = items.map((r: SavedReading) => [
-        r.deviceName || "",
-        r.deviceId || "",
-        r.type || "",
-        r.value ?? "",
-        r.value2 ?? "",
-        r.unit ?? "",
-        r.heartRate ?? "",
-        r.measurementCondition ?? "",
-        r.synced ? "Yes" : "No",
-        new Date(r.ts).toLocaleString(),
-      ]);
+
+      type ExportRow = { ts: number; cols: (string | number)[] };
+
+      const readingRows: ExportRow[] = readings.map((r: SavedReading) => ({
+        ts: r.ts,
+        cols: [
+          r.deviceName || "",
+          r.deviceId || "",
+          r.type || "",
+          r.value ?? "",
+          r.value2 ?? "",
+          r.unit ?? "",
+          r.heartRate ?? "",
+          r.measurementCondition ?? "",
+          r.synced ? "Yes" : "No",
+          new Date(r.ts).toLocaleString(),
+        ],
+      }));
+
+      const screeningRows: ExportRow[] = screenings.map(
+        (s: ScreeningResponse) => {
+          const d = parseScreeningData(s);
+          let typeLabel: string = s.type;
+          let value = "";
+          let notes = "";
+          if (s.type === "urine_protein_result") {
+            typeLabel = "Urine Protein";
+            value = String(d.result ?? "");
+          } else if (s.type === "daily_health_check") {
+            typeLabel = "Daily Health Check";
+            value = `Headaches: ${yesNoLabel(
+              d.hasHeadaches
+            )}; Visual disturbances: ${yesNoLabel(d.hasVisualDisturbances)}`;
+            notes = typeof d.details === "string" ? d.details : "";
+          } else if (s.type === "hospital_visit_report") {
+            typeLabel = "Hospital Visit";
+            value = "Reported hospital visit";
+          }
+          return {
+            ts: s.timestamp,
+            cols: [
+              "",
+              "",
+              typeLabel,
+              value,
+              "",
+              "",
+              "",
+              notes,
+              s.synced ? "Yes" : "No",
+              new Date(s.timestamp).toLocaleString(),
+            ],
+          };
+        }
+      );
+
+      const rows = [...readingRows, ...screeningRows]
+        .sort((a, b) => b.ts - a.ts)
+        .map((r) => r.cols);
       const csv = [header, ...rows]
         .map((row) =>
           row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")
@@ -356,7 +416,7 @@ export default function HistoryScreen() {
       ).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}_${String(
         now.getHours()
       ).padStart(2, "0")}-${String(now.getMinutes()).padStart(2, "0")}`;
-      const path = `${RNFS.DocumentDirectoryPath}/TrinityReadings_${timestamp}.csv`;
+      const path = `${RNFS.DocumentDirectoryPath}/TrinityHistory_${timestamp}.csv`;
 
       await RNFS.writeFile(path, csv, "utf8");
       await Share.open({

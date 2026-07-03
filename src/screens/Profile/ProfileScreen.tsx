@@ -17,6 +17,7 @@ import {
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useDispatch, useSelector } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { launchImageLibrary, launchCamera } from "react-native-image-picker";
 import { logout } from "../../redux/userSlice";
@@ -59,6 +60,9 @@ export default function ProfileScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const user = useSelector((state: RootState) => state.user);
   const insets = useSafeAreaInsets();
+
+  // Light background → dark (black) status-bar glyphs, re-applied on focus.
+  useStatusBarStyle("dark-content");
 
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null);

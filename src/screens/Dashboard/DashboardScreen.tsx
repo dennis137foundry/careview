@@ -23,9 +23,13 @@ import {
   hasUrineProteinDeferredToday,
   getIsFirstLaunch,
   setFirstLaunchComplete,
+  saveScreeningResponse,
 } from "../../services/sqliteService";
+import { syncPendingScreening } from "../../services/vitalsSyncService";
 import UrineProteinModal from "../../components/UrineProteinModal";
+import UrineProteinPromptModal from "../../components/UrineProteinPromptModal";
 import HospitalReportModal from "../../components/HospitalReportModal";
+import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 
 // Map device types to images
 const deviceImages: Record<string, any> = {
@@ -82,6 +86,9 @@ export default function DashboardScreen() {
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
 
+  // Light background at the top → dark (black) status-bar glyphs are readable.
+  useStatusBarStyle("dark-content");
+
   const readings = useSelector((state: RootState) => state.readings.items);
   const devices = useSelector((state: RootState) => state.devices.devices);
   const user = useSelector((state: RootState) => state.user);
@@ -91,6 +98,7 @@ export default function DashboardScreen() {
   const [, setIsFirstLaunch] = useState<boolean>(false);
 
   // Urine Protein Modal State
+  const [showUrineIntro, setShowUrineIntro] = useState(false);
   const [showUrineProteinModal, setShowUrineProteinModal] = useState(false);
   const [showUrineProteinAlert, setShowUrineProteinAlert] = useState(false);
 
@@ -108,36 +116,40 @@ export default function DashboardScreen() {
     }
   }, []);
 
-  // Check for urine protein modal on focus (only if a device has been added)
-  const checkUrineProteinStatus = useCallback(() => {
-    if (devices.length === 0) {
-      setShowUrineProteinModal(false);
-      setShowUrineProteinAlert(false);
-      return;
-    }
-
+  // Decide what urine-protein UI (if any) is due. Only prompts once a device
+  // has been added.
+  const evaluateUrineProtein = useCallback((): "intro" | "alert" | "none" => {
+    if (devices.length === 0) return "none";
     const needsResponse = needsUrineProteinResponse();
     const hasDeferred = hasUrineProteinDeferredToday();
-
-    if (needsResponse && !hasDeferred) {
-      setShowUrineProteinModal(true);
-      setShowUrineProteinAlert(false);
-    } else if (needsResponse && hasDeferred) {
-      setShowUrineProteinModal(false);
-      setShowUrineProteinAlert(true);
-    } else {
-      setShowUrineProteinModal(false);
-      setShowUrineProteinAlert(false);
-    }
+    if (needsResponse && !hasDeferred) return "intro";
+    if (needsResponse && hasDeferred) return "alert";
+    return "none";
   }, [devices.length]);
 
   useEffect(() => {
-    if (isFocused) {
-      dispatch(loadReadings());
-      dispatch(loadDevices());
-      checkUrineProteinStatus();
+    if (!isFocused) return;
+    dispatch(loadReadings());
+    dispatch(loadDevices());
+
+    const decision = evaluateUrineProtein();
+    if (decision === "intro") {
+      // Let the patient land on the dashboard first, then gently prompt with a
+      // centered reminder (Skip / Enter Result) instead of the full picker.
+      setShowUrineProteinAlert(false);
+      const t = setTimeout(() => setShowUrineIntro(true), 2000);
+      return () => clearTimeout(t); // cancel if they navigate away first
     }
-  }, [dispatch, isFocused, checkUrineProteinStatus]);
+    if (decision === "alert") {
+      setShowUrineIntro(false);
+      setShowUrineProteinModal(false);
+      setShowUrineProteinAlert(true);
+    } else {
+      setShowUrineIntro(false);
+      setShowUrineProteinModal(false);
+      setShowUrineProteinAlert(false);
+    }
+  }, [dispatch, isFocused, evaluateUrineProtein]);
 
   // Filter for BP and Scale readings only
   const lastBP = readings
@@ -205,6 +217,25 @@ export default function DashboardScreen() {
 
   const handleAlertBarTap = () => {
     setShowUrineProteinModal(true);
+  };
+
+  // Intro "Enter Result" → open the full result picker.
+  const handleUrineIntroEnter = () => {
+    setShowUrineIntro(false);
+    setShowUrineProteinModal(true);
+  };
+
+  // Intro "Skip" → defer for now (persist so we don't re-prompt today) and
+  // leave the tappable reminder bar so they can still enter it later.
+  const handleUrineIntroSkip = () => {
+    setShowUrineIntro(false);
+    try {
+      saveScreeningResponse("urine_protein_deferred", { deferred: true });
+    } catch (err) {
+      console.error("[UrineProtein] Failed to save deferral:", err);
+    }
+    syncPendingScreening().catch(() => {});
+    setShowUrineProteinAlert(true);
   };
 
   const firstName = user.firstName || "there";
@@ -467,7 +498,14 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Urine Protein Modal */}
+      {/* Gentle centered reminder shown ~2s after landing */}
+      <UrineProteinPromptModal
+        visible={showUrineIntro}
+        onSkip={handleUrineIntroSkip}
+        onEnter={handleUrineIntroEnter}
+      />
+
+      {/* Urine Protein Modal (full result picker) */}
       <UrineProteinModal
         visible={showUrineProteinModal}
         onComplete={handleUrineProteinComplete}

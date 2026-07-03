@@ -123,7 +123,8 @@ RCT_EXPORT_MODULE();
 - (NSArray<NSString *> *)supportedEvents {
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
              @"onBloodPressureReading", @"onWeightReading", @"onBloodGlucoseReading",
-             @"onGlucoseMeterEvent", @"onBluetoothStateChanged", @"onError", @"onDebugLog"];
+             @"onGlucoseMeterEvent", @"onBluetoothStateChanged", @"onError", @"onDebugLog",
+             @"onBatteryLevel"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -149,6 +150,25 @@ RCT_EXPORT_MODULE();
     if (_hasListeners) {
         [self sendEventWithName:name body:body];
     }
+}
+
+// Emit a battery level (0–100) read from the iHealth SDK. Best-effort: a nil
+// or out-of-range value is ignored so we never report a bogus level.
+- (void)emitBatteryForMac:(NSString *)mac type:(NSString *)type level:(NSNumber *)level {
+    if (level == nil) return;
+    int pct = [level intValue];
+    if (pct < 0 || pct > 100) {
+        [self sendDebugLog:[NSString stringWithFormat:@"🔋 %@ battery out of range: %@", type, level]];
+        return;
+    }
+    [self sendDebugLog:[NSString stringWithFormat:@"🔋 %@ battery: %d%%", type, pct]];
+    [self sendEventSafe:@"onBatteryLevel" body:@{
+        @"mac": mac ?: @"",
+        @"type": type ?: @"",
+        @"level": @(pct),
+        @"source": @"iHealthSDK",
+        @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+    }];
 }
 
 - (NSDictionary *)bluetoothStatusPayload {
@@ -1162,6 +1182,12 @@ RCT_EXPORT_MODULE();
 
 - (void)handleBP3LConnected:(BP3L *)bp mac:(NSString *)mac {
     [self sendDebugLog:@"🩺 BP3L: Starting measurement..."];
+    // Best-effort battery read; never blocks or fails the measurement.
+    [bp commandEnergy:^(NSNumber *energyValue) {
+        [self emitBatteryForMac:mac type:@"BP3L" level:energyValue];
+    } errorBlock:^(BPDeviceError e) {
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP3L battery query error: %d", (int)e]];
+    }];
     [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP3L RESULT: %@", r]];
         [self sendEventSafe:@"onBloodPressureReading" body:@{
@@ -1178,6 +1204,12 @@ RCT_EXPORT_MODULE();
 
 - (void)handleBP5Connected:(BP5 *)bp mac:(NSString *)mac {
     [self sendDebugLog:@"🩺 BP5: Starting measurement..."];
+    // commandEnergy is inherited from BP7. Best-effort.
+    [bp commandEnergy:^(NSNumber *energyValue) {
+        [self emitBatteryForMac:mac type:@"BP5" level:energyValue];
+    } errorBlock:^(BPDeviceError e) {
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP5 battery query error: %d", (int)e]];
+    }];
     [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP5 RESULT: %@", r]];
         [self sendEventSafe:@"onBloodPressureReading" body:@{
@@ -1193,6 +1225,12 @@ RCT_EXPORT_MODULE();
 
 - (void)handleBP5SConnected:(BP5S *)bp mac:(NSString *)mac {
     [self sendDebugLog:@"🩺 BP5S: Starting measurement..."];
+    // BP5S battery command carries an extra charging-state block. Best-effort.
+    [bp commandEnergy:^(NSNumber *energyValue) {
+        [self emitBatteryForMac:mac type:@"BP5S" level:energyValue];
+    } energyState:^(NSNumber *energyState){} errorBlock:^(BPDeviceError e) {
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP5S battery query error: %d", (int)e]];
+    }];
     [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP5S RESULT: %@", r]];
         [self sendEventSafe:@"onBloodPressureReading" body:@{
@@ -1210,6 +1248,12 @@ RCT_EXPORT_MODULE();
 
 - (void)handleHS2Connected:(HS2 *)scale mac:(NSString *)mac {
     [self sendDebugLog:@"⚖️ HS2: Starting measurement..."];
+    // Best-effort battery read before measurement.
+    [scale commandGetHS2Battery:^(NSNumber *battary) {
+        [self emitBatteryForMac:mac type:@"HS2" level:battary];
+    } DiaposeErrorBlock:^(HS2DeviceError e) {
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ HS2 battery query error: %d", (int)e]];
+    }];
     [scale commandHS2MeasureWithUint:HSUnit_Kg Weight:^(NSNumber *w){} StableWeight:^(NSDictionary *r) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 HS2 STABLE: %@", r]];
         [self sendEventSafe:@"onWeightReading" body:@{
@@ -1229,6 +1273,13 @@ RCT_EXPORT_MODULE();
     user.height = @170; user.weight = @70; user.age = @30;
     user.sex = UserSex_Male;
     user.impedanceMark = HS2SImpedanceMark_NO;
+
+    // Best-effort battery read before measurement.
+    [scale commandGetHS2SBattery:^(NSNumber *battary) {
+        [self emitBatteryForMac:mac type:@"HS2S" level:battary];
+    } DiaposeErrorBlock:^(HS2SDeviceError e) {
+        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ HS2S battery query error: %d", (int)e]];
+    }];
 
     [scale commandStartHS2SMeasureWithUser:user weight:^(NSNumber *w){} stableWeight:^(NSNumber *w) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 HS2S STABLE: %@", w]];

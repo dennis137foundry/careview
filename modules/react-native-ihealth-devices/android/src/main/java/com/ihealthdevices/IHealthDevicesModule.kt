@@ -343,6 +343,11 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                     // offline-record pull, the same way iOS does on connect.
                     if (normalizedType == "BG5S") {
                         prepareBg5s(mac)
+                    } else {
+                        // BP/HS: best-effort battery read. The result arrives async via
+                        // onDeviceNotify (action battery_bp / battery_hs) and is forwarded
+                        // as an onBatteryLevel event. Never blocks measurement.
+                        queryDeviceBattery(mac, normalizedType)
                     }
                 }
                 iHealthDevicesManager.DEVICE_STATE_DISCONNECTED -> {
@@ -399,9 +404,54 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     // Blood Pressure Notification Handler
     // =========================================================================
 
+    /**
+     * Best-effort battery query on connect. getBattery() is void; the result
+     * comes back asynchronously through onDeviceNotify (handled by emitBattery).
+     * HS4S has no battery API in the SDK, so it is skipped (stays "unknown").
+     */
+    private fun queryDeviceBattery(mac: String, deviceType: String) {
+        try {
+            val mgr = iHealthDevicesManager.getInstance()
+            when (deviceType) {
+                "BP3L" -> mgr.getBp3lControl(mac)?.getBattery()
+                "BP5"  -> mgr.getBp5Control(mac)?.getBattery()
+                "BP5S" -> mgr.getBp5sControl(mac)?.getBattery()
+                "HS2"  -> mgr.getHs2Control(mac)?.getBattery()
+                "HS2S" -> mgr.getHs2sControl(mac)?.getBattery()
+                else   -> sendDebugLog("Battery: no SDK API for $deviceType")
+            }
+        } catch (e: Exception) {
+            sendDebugLog("Battery query error for $mac: ${e.message}")
+        }
+    }
+
+    /**
+     * Forward a battery reading (from onDeviceNotify) to JS as onBatteryLevel.
+     * Ignores out-of-range values so a bogus reading never reaches the UI.
+     */
+    private fun emitBattery(mac: String, deviceType: String, json: JSONObject) {
+        val level = json.optInt("battery", json.optInt("Battery", -1))
+        if (level in 0..100) {
+            sendDebugLog("BATTERY[$deviceType]: $level%")
+            val params = Arguments.createMap().apply {
+                putString("mac", mac)
+                putString("type", deviceType)
+                putInt("level", level)
+                putString("source", "iHealthSDK")
+                putDouble("timestamp", System.currentTimeMillis().toDouble())
+            }
+            sendEvent("onBatteryLevel", params)
+        } else {
+            sendDebugLog("BATTERY[$deviceType]: out of range ($level) json=$json")
+        }
+    }
+
     private fun handleBPNotification(mac: String, deviceType: String, action: String, json: JSONObject) {
         sendDebugLog("BP[$deviceType]: action=$action keys=${json.keys().asSequence().toList()}")
         when {
+            action.contains("battery", ignoreCase = true) -> {
+                emitBattery(mac, deviceType, json)
+            }
             action.contains("result", ignoreCase = true) -> {
                 // iHealth Android SDK sends uppercase keys (HP, LP, PR, AHR).
                 // Fallback to lowercase variants for defensive compatibility.
@@ -441,6 +491,9 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     private fun handleHSNotification(mac: String, deviceType: String, action: String, json: JSONObject) {
         sendDebugLog("HS[$deviceType]: action=$action keys=${json.keys().asSequence().toList()}")
         when {
+            action.contains("battery", ignoreCase = true) -> {
+                emitBattery(mac, deviceType, json)
+            }
             action.contains("unstable", ignoreCase = true) || action.contains("unsteady", ignoreCase = true) -> {
                 sendDebugLog("HS UNSTABLE: weight=${json.optDouble("weight", 0.0)} kg")
             }
