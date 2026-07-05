@@ -198,6 +198,14 @@ export default function CaptureScreen({ route, navigation }: any) {
     () => devices.find((d) => d.id === deviceId),
     [devices, deviceId]
   );
+  // Stable primitive for effect dependencies. The `device` OBJECT gets a
+  // new identity on every Redux devices update (battery events,
+  // loadDevices refreshes). Effects keyed on the object re-ran on those
+  // updates — and the focus effect's re-run executes its CLEANUP first
+  // (stopScan + disconnectAll), killing an in-flight measurement and
+  // replaying the entry fade ("fades in over itself"). Key effects on
+  // this instead; it never changes for a given deviceId.
+  const deviceType = device?.type;
 
   const theme = deviceThemes[device?.type || "BP"] || deviceThemes.BP;
 
@@ -278,23 +286,28 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   // Check if daily health check is needed for BP devices
   useEffect(() => {
-    if (device?.type === "BP") {
+    if (deviceType === "BP") {
       const hasCompletedToday = hasDailyHealthCheckToday();
       addLog(`Daily health check completed today: ${hasCompletedToday}`);
       setHealthCheckCompleted(hasCompletedToday);
     } else {
       setHealthCheckCompleted(true);
     }
-  }, [device, addLog]);
+  }, [deviceType, addLog]);
 
   // ============================================================================
   // Focus effect — reset JS state on entry, BLE cleanup on EXIT only
   // ============================================================================
   useFocusEffect(
+    // Deps MUST stay identity-stable while the screen is focused: when the
+    // callback identity changes, useFocusEffect re-runs — cleanup FIRST —
+    // which tears down BLE (stopScan/disconnectAll) mid-measurement and
+    // replays the entry animation. Keying on the `device` object did
+    // exactly that on every battery/devices Redux update.
     useCallback(() => {
       resetState();
 
-      if (device?.type === "BP") {
+      if (deviceType === "BP") {
         setHealthCheckCompleted(hasDailyHealthCheckToday());
       }
 
@@ -320,7 +333,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         // Allow screen to sleep when leaving capture
         IHealthDevices?.allowSleep?.();
       };
-    }, [resetState, fadeAnim, scaleAnim, device])
+    }, [resetState, fadeAnim, scaleAnim, deviceType])
   );
 
   // Pulse animation when busy

@@ -102,7 +102,12 @@ const deviceSlice = createSlice({
       const device = state.devices.find(
         (d) => d.mac?.toUpperCase() === mac.toUpperCase()
       );
-      if (device) {
+      // Only touch Redux when the displayed level actually changes.
+      // Replacing the device object re-renders every consumer — and
+      // CaptureScreen effects react to device updates, so gratuitous
+      // churn mid-capture is worth avoiding. The DB timestamp above is
+      // still refreshed on every reading.
+      if (device && device.lastBattery !== battery) {
         device.lastBattery = battery;
         device.lastBatteryAt = Date.now();
       }
