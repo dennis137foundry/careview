@@ -32,6 +32,7 @@ import UrineProteinModal from "../../components/UrineProteinModal";
 import UrineProteinPromptModal from "../../components/UrineProteinPromptModal";
 import HospitalReportModal from "../../components/HospitalReportModal";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
+import { useToast } from "../../components/Toast";
 import { BTN } from "../../constants/buttons";
 
 // Map device types to images
@@ -87,6 +88,7 @@ export default function DashboardScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
+  const { showToast } = useToast();
 
   // The navy CareView header (AppNavigator) sits behind the status bar on
   // this screen — white glyphs, or the clock/signal disappear into it.
@@ -226,6 +228,11 @@ export default function DashboardScreen() {
   const handleUrineProteinComplete = (_result: string) => {
     setShowUrineProteinModal(false);
     setShowUrineProteinAlert(false);
+    showToast({
+      message: "Urine protein result saved",
+      type: "success",
+      duration: 2500,
+    });
   };
 
   const handleUrineProteinDefer = () => {
@@ -383,7 +390,14 @@ export default function DashboardScreen() {
             <>
               <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
               <DueDateForm
-                onSave={(edd) => dispatch(setEdd({ edd, source: "patient" }))}
+                onSave={(edd) => {
+                  dispatch(setEdd({ edd, source: "patient" }));
+                  showToast({
+                    message: "Due date saved",
+                    type: "success",
+                    duration: 2500,
+                  });
+                }}
               />
             </>
           )}

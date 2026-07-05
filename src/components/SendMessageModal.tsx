@@ -17,6 +17,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { authedFetch } from "../services/authToken";
 import { isDemoAccount } from "../services/seedDemoData";
 import { getUser } from "../services/sqliteService";
+import { useToast } from "./Toast";
 import { BTN } from "../constants/buttons";
 
 interface SendMessageModalProps {
@@ -108,21 +109,31 @@ export default function SendMessageModal({
   patientId,
 }: SendMessageModalProps) {
   const insets = useSafeAreaInsets();
+  const { showToast } = useToast();
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
   const inputRef = useRef<TextInput>(null);
 
   // Reset state when modal opens
   useEffect(() => {
     if (visible) {
       setMessage("");
-      setSent(false);
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
     }
   }, [visible]);
+
+  // Uniform confirmation: same toast pattern as every other data entry
+  // in the app (hospital report, urine protein, device add).
+  const confirmSent = () => {
+    showToast({
+      message: "Message sent — your care team will respond shortly",
+      type: "success",
+      duration: 3000,
+    });
+    handleClose();
+  };
 
   const handleSend = async () => {
     const trimmed = message.trim();
@@ -138,8 +149,8 @@ export default function SendMessageModal({
     const user = await getUser();
     if (user?.phone && isDemoAccount(user.phone)) {
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 400));
-      setSent(true);
       setSending(false);
+      confirmSent();
       return;
     }
 
@@ -161,7 +172,7 @@ export default function SendMessageModal({
       }
 
       // Success
-      setSent(true);
+      confirmSent();
     } catch (error: any) {
       console.error("[SendMessage] Error:", error);
 
@@ -177,7 +188,6 @@ export default function SendMessageModal({
 
   const handleClose = () => {
     setMessage("");
-    setSent(false);
     onClose();
   };
 
@@ -214,95 +224,72 @@ export default function SendMessageModal({
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
-          {sent ? (
-            // Success State
-            <View style={styles.successContainer}>
-              <View style={styles.successIconCircle}>
-                <MaterialIcons name="check" size={48} color="#fff" />
-              </View>
-              <Text style={styles.successTitle}>Message Sent</Text>
-              <Text style={styles.successSubtitle}>
-                Thank you for reaching out. A member of our care team will respond shortly.
+          {/* Emergency Warning */}
+          <View style={styles.warningBox}>
+            <MaterialIcons name="warning" size={24} color="#c62828" />
+            <Text style={styles.warningText}>
+              <Text style={styles.warningBold}>
+                If you are experiencing a medical emergency, call 9-1-1.
               </Text>
-              <TouchableOpacity
-                style={styles.doneButton}
-                onPress={handleClose}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.doneButtonText}>Done</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            // Form State
-            <>
-              {/* Emergency Warning */}
-              <View style={styles.warningBox}>
-                <MaterialIcons name="warning" size={24} color="#c62828" />
-                <Text style={styles.warningText}>
-                  <Text style={styles.warningBold}>
-                    If you are experiencing a medical emergency, call 9-1-1.
-                  </Text>
-                  {" "}This form is not for emergency medical assistance.
-                </Text>
-              </View>
+              {" "}This form is not for emergency medical assistance.
+            </Text>
+          </View>
 
-              {/* Message Input */}
-              <Text style={styles.label}>Your Message</Text>
-              <TextInput
-                ref={inputRef}
-                style={[
-                  styles.textArea,
-                  isOverLimit && styles.textAreaError,
-                ]}
-                placeholder="Type your message here..."
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={6}
-                textAlignVertical="top"
-                value={message}
-                onChangeText={setMessage}
-                maxLength={maxChars + 50} // Allow slight overage for UX
-                editable={!sending}
-              />
-              <Text
-                style={[
-                  styles.charCount,
-                  isOverLimit && styles.charCountError,
-                ]}
-              >
-                {charCount}/{maxChars}
-              </Text>
+          {/* Message Input */}
+          <Text style={styles.label}>Your Message</Text>
+          <TextInput
+            ref={inputRef}
+            style={[
+              styles.textArea,
+              isOverLimit && styles.textAreaError,
+            ]}
+            placeholder="Type your message here..."
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={6}
+            textAlignVertical="top"
+            value={message}
+            onChangeText={setMessage}
+            maxLength={maxChars + 50} // Allow slight overage for UX
+            editable={!sending}
+          />
+          <Text
+            style={[
+              styles.charCount,
+              isOverLimit && styles.charCountError,
+            ]}
+          >
+            {charCount}/{maxChars}
+          </Text>
 
-              {/* Send Button */}
-              <TouchableOpacity
-                style={[
-                  styles.sendButton,
-                  (sending || isOverLimit || !message.trim()) &&
-                    styles.sendButtonDisabled,
-                ]}
-                onPress={handleSend}
-                disabled={sending || isOverLimit || !message.trim()}
-                activeOpacity={0.8}
-              >
-                {sending ? (
-                  <>
-                    <ActivityIndicator color="#fff" size="small" />
-                    <Text style={styles.sendButtonText}>Sending...</Text>
-                  </>
-                ) : (
-                  <>
-                    <MaterialIcons name="send" size={20} color="#fff" />
-                    <Text style={styles.sendButtonText}>Send Message</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+          {/* Send Button */}
+          <TouchableOpacity
+            style={[
+              styles.sendButton,
+              (sending || isOverLimit || !message.trim()) &&
+                styles.sendButtonDisabled,
+            ]}
+            onPress={handleSend}
+            disabled={sending || isOverLimit || !message.trim()}
+            activeOpacity={0.8}
+          >
+            {sending ? (
+              <>
+                <ActivityIndicator color="#fff" size="small" />
+                <Text style={styles.sendButtonText}>Sending...</Text>
+              </>
+            ) : (
+              <>
+                <MaterialIcons name="send" size={20} color="#fff" />
+                <Text style={styles.sendButtonText}>Send Message</Text>
+              </>
+            )}
+          </TouchableOpacity>
 
-              {/* Info Note */}
-              <Text style={styles.infoNote}>
-                Messages are typically responded to within 1 business day.
-              </Text>
-            </>
-          )}
+          {/* Info Note */}
+          <Text style={styles.infoNote}>
+            Messages are typically responded to within 1 business day.
+          </Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
@@ -428,47 +415,6 @@ const styles = StyleSheet.create({
     color: "#888",
     textAlign: "center",
     marginTop: 16,
-  },
-  // Success State
-  successContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 60,
-  },
-  successIconCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: "#43a047",
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 24,
-  },
-  successTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#1a2a3a",
-    marginBottom: 12,
-  },
-  successSubtitle: {
-    fontSize: 16,
-    color: "#666",
-    textAlign: "center",
-    lineHeight: 24,
-    paddingHorizontal: 20,
-    marginBottom: 32,
-  },
-  doneButton: {
-    backgroundColor: BTN.primary,
-    borderRadius: BTN.radius,
-    paddingVertical: 14,
-    paddingHorizontal: 48,
-  },
-  doneButtonText: {
-    fontSize: 17,
-    fontWeight: "600",
-    color: "#fff",
   },
   headerSpacer: {
     width: 40,

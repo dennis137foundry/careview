@@ -1008,6 +1008,14 @@ export default function CaptureScreen({ route, navigation }: any) {
       setShowHealthCheckModal(false);
       setHealthCheckCompleted(true);
 
+      // Uniform confirmation: same toast pattern as every other data
+      // entry in the app.
+      showToast({
+        message: "Daily health check saved",
+        type: "success",
+        duration: 2500,
+      });
+
       if (data.hasHeadaches || data.hasVisualDisturbances) {
         addLog("Symptoms reported - care team will be notified");
       }
@@ -1017,7 +1025,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         startCapture();
       }, 400);
     },
-    [addLog, startCapture]
+    [addLog, startCapture, showToast]
   );
 
   // ============================================================================
