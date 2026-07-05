@@ -26,7 +26,7 @@ import { syncPendingReadings } from "../../services/vitalsSyncService";
 import { NativeModules, NativeEventEmitter } from "react-native";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
-import { hasDailyHealthCheckToday } from "../../services/sqliteService";
+import { hasDailyHealthCheckToday, readingExists } from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
@@ -206,6 +206,7 @@ export default function CaptureScreen({ route, navigation }: any) {
   // replaying the entry fade ("fades in over itself"). Key effects on
   // this instead; it never changes for a given deviceId.
   const deviceType = device?.type;
+  const deviceDbId = device?.id;
 
   const theme = deviceThemes[device?.type || "BP"] || deviceThemes.BP;
 
@@ -716,6 +717,32 @@ export default function CaptureScreen({ route, navigation }: any) {
         return;
       }
 
+      // The meter re-delivers its stored records on every connection (we
+      // never erase its memory). Reading ids are deterministic — built
+      // from the meter's own record id — so an id hit means this exact
+      // record was already captured: don't re-prompt for the sample
+      // window, don't re-save (a re-save resets the synced flag and
+      // triggers a redundant EMR round-trip the server would just dedup).
+      const candidateId = buildBGReadingId(deviceDbId || "", {
+        ...data,
+        timestamp: parseBGTimestamp(data),
+      });
+      if (readingExists(candidateId)) {
+        addLog(`BG5S record already captured (${candidateId}) — skipping`);
+        IHealthDevices?.stopScan?.().catch(() => {});
+        IHealthDevices?.disconnectAll?.().catch(() => {});
+        IHealthDevices?.allowSleep?.();
+        targetMacRef.current = "";
+        setBusy(false);
+        setPhase("idle");
+        setStatusText("");
+        Alert.alert(
+          "No New Readings",
+          "The reading stored on your meter has already been captured. Take a new reading on the meter, then capture again."
+        );
+        return;
+      }
+
       readingReceivedRef.current = true;
       IHealthDevices?.stopScan?.().catch(() => {});
       IHealthDevices?.disconnectAll?.().catch(() => {});
@@ -726,7 +753,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       setStatusText("Select sample window");
       setShowGlucoseTimingModal(true);
     },
-    [addLog]
+    [addLog, deviceDbId]
   );
 
   const saveGlucoseReading = useCallback(
@@ -736,7 +763,9 @@ export default function CaptureScreen({ route, navigation }: any) {
 
       const value = Number(data?.value);
       const ts = parseBGTimestamp(data);
-      const deviceIdForReading = device?.id || "";
+      // Same source as the already-captured check in promptForGlucoseTiming
+      // — the two MUST build identical ids.
+      const deviceIdForReading = deviceDbId || "";
       const unit = data?.unit || "mg/dL";
 
       try {

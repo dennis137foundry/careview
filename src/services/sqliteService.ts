@@ -664,6 +664,21 @@ export function saveReading(
   }
 }
 
+/**
+ * True if a reading with this id is already stored. Used by the BG5S
+ * capture flow to recognize a meter record that was already captured
+ * (the meter re-delivers stored records on every connection).
+ */
+export function readingExists(id: string): boolean {
+  try {
+    const res = db.execute("SELECT 1 FROM readings WHERE id = ? LIMIT 1;", [id]);
+    return !!res.rows && res.rows.length > 0;
+  } catch (e) {
+    console.error("[DB] Failed to check reading existence:", e);
+    return false;
+  }
+}
+
 export function getAllReadings(): SavedReading[] {
   try {
     const res = db.execute("SELECT * FROM readings ORDER BY ts DESC;");
