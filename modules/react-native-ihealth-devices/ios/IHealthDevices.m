@@ -1749,13 +1749,19 @@ RCT_EXPORT_METHOD(connectForBattery:(NSString *)mac deviceType:(NSString *)devic
     resolve(result == 1 ? @YES : @NO);
 
     // Failsafe: if the device dozed off or the battery round-trip stalls,
-    // clear the flag and drop any half-open connection so a later real
-    // capture starts clean.
+    // clear the flag and drop the half-open connection so a later real
+    // capture starts clean. ONLY act when this battery-only session is
+    // still pending — otherwise a completed battery read followed by a
+    // real capture on the same device within 15s would get its live
+    // measurement disconnected by this stale timer.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (self->_batteryOnlyMAC && [[self->_batteryOnlyMAC uppercaseString] isEqualToString:[mac uppercaseString]]) {
-            self->_batteryOnlyMAC = nil;
-        }
+        BOOL stillPending = self->_batteryOnlyMAC &&
+            [[self->_batteryOnlyMAC uppercaseString] isEqualToString:[mac uppercaseString]];
+        if (!stillPending) return;
+
+        self->_batteryOnlyMAC = nil;
         if (self->_connectedDevices[mac]) {
+            [self sendDebugLog:[NSString stringWithFormat:@"🔋 Battery-only timeout — disconnecting %@", mac]];
             [self disconnectSDKDevice:mac type:deviceType];
             [self->_connectedDevices removeObjectForKey:mac];
         }

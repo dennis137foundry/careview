@@ -314,15 +314,6 @@ export default function DevicesScreen({ navigation }: any) {
         <View style={styles.headerRow}>
           <Text style={styles.title}>Your Devices</Text>
           <View style={styles.headerActions}>
-            {__DEV__ ? (
-              <TouchableOpacity
-                style={styles.debugButton}
-                onPress={() => navigation.navigate("BG5SDebug")}
-                activeOpacity={0.8}
-              >
-                <MaterialIcons name="bug-report" size={20} color="#00509f" />
-              </TouchableOpacity>
-            ) : null}
             <TouchableOpacity
               style={styles.addButton}
               onPress={() => navigation.navigate("AddDevice")}
@@ -413,16 +404,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-  },
-  debugButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "rgba(0, 80, 159, 0.18)",
   },
   title: {
     fontSize: 28,

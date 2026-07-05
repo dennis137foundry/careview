@@ -885,9 +885,11 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             iHealthDevicesManager.getInstance().connectDevice("", mac, getDeviceTypeName(deviceType))
             promise.resolve(true)
 
-            scanHandler.postDelayed({
-                connectedDevices.remove(mac)
-            }, 12_000)
+            // No delayed cleanup here on purpose: the SDK's own
+            // DEVICE_STATE_DISCONNECTED callback maintains connectedDevices.
+            // A blind timed removal raced with a real capture started on the
+            // same device shortly after adding it, making startMeasurement
+            // reject with NOT_CONNECTED while the BLE link was actually up.
         } catch (e: Exception) {
             promise.reject("CONNECT_ERROR", "Failed battery-only connect: ${e.message}", e)
         }
