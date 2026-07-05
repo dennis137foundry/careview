@@ -516,25 +516,20 @@ export default function DashboardScreen() {
         <View style={{ height: 92 }} />
       </ScrollView>
 
-      {/* Docked New Reading button — floats above the tab bar */}
+      {/* Docked New Reading button — solid edge-to-edge block sitting
+          flush on the bottom tab bar */}
       <View style={styles.dock}>
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={() =>
             navigation.navigate("Devices", { screen: "DevicesMain" })
           }
+          style={styles.newReadingButton}
         >
-          <LinearGradient
-            colors={["#00325f", NAVY]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 0, y: 1 }}
-            style={styles.newReadingButton}
-          >
-            <MaterialIcons name="add-circle-outline" size={22} color="#fff" />
-            <Text style={styles.newReadingText} maxFontSizeMultiplier={1.2}>
-              New Reading
-            </Text>
-          </LinearGradient>
+          <MaterialIcons name="add-circle-outline" size={22} color="#fff" />
+          <Text style={styles.newReadingText} maxFontSizeMultiplier={1.2}>
+            New Reading
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -884,24 +879,24 @@ const styles = StyleSheet.create({
     color: BLUE,
     fontWeight: "600",
   },
-  // Docked button — rounded pill floating just above the tab bar. The old
-  // edge-to-edge strip at bottom:0 read as a glitch band and its content
-  // clipped against the tab bar at larger font sizes.
+  // Docked button — edge-to-edge solid block, flush against the tab bar.
+  // Teal (the app's secondary accent) so it reads as its own control and
+  // doesn't blend into the navy tab bar below it.
   dock: {
     position: "absolute",
-    left: 18,
-    right: 18,
-    bottom: 14,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   newReadingButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 15,
-    borderRadius: 18,
+    paddingVertical: 16,
+    backgroundColor: TEAL,
     shadowColor: "#002040",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.28,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.16,
     shadowRadius: 10,
     elevation: 12,
   },
