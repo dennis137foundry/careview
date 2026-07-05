@@ -4,7 +4,6 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import DevicesScreen from "../screens/Devices/DevicesScreen";
 import AddDeviceScreen from "../screens/Devices/AddDeviceScreen";
 import CaptureScreen from "../screens/Capture/CaptureScreen";
-import ScanQRScreen from "../screens/Devices/ScanQRScreen";
 import BG5SDebugScreen from "../screens/Devices/BG5SDebugScreen";
 
 export type DevicesStackParamList = {
@@ -13,11 +12,6 @@ export type DevicesStackParamList = {
     scannedId?: string;
     scannedBottleCode?: string;
     forDeviceId?: string;
-  } | undefined;
-  ScanQR: { 
-    deviceId?: string;
-    deviceName?: string;
-    returnTo?: 'AddDevice' | 'Capture';
   } | undefined;
   BG5SDebug: undefined;
   Capture: { 
@@ -40,11 +34,6 @@ export default function DevicesNavigator() {
         name="AddDevice"
         component={AddDeviceScreen}
         options={{ title: "Add Device" }}
-      />
-      <Stack.Screen
-        name="ScanQR"
-        component={ScanQRScreen}
-        options={{ title: "Scan QR Code" }}
       />
       <Stack.Screen
         name="BG5SDebug"

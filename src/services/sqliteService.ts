@@ -371,8 +371,22 @@ export function saveDevice(device: DeviceRecord) {
     if (__DEV__) {
       console.log("[DB] Saving device:", JSON.stringify(device));
     }
+    // Upsert instead of INSERT OR REPLACE so columns not written here
+    // (lastBattery / lastBatteryAt) survive a re-pair of an existing device.
     db.execute(
-      "INSERT OR REPLACE INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+      `INSERT INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         type = excluded.type,
+         mac = excluded.mac,
+         model = excluded.model,
+         bottleCode = excluded.bottleCode,
+         friendlyName = excluded.friendlyName,
+         source = excluded.source,
+         emrUnitId = excluded.emrUnitId,
+         emrAccessoryUnitId = excluded.emrAccessoryUnitId,
+         cuffSize = excluded.cuffSize;`,
       [
         device.id,
         device.name,
