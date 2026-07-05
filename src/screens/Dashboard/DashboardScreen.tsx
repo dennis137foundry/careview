@@ -7,6 +7,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  FlatList,
+  useWindowDimensions,
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { useSelector, useDispatch } from "react-redux";
@@ -158,14 +160,23 @@ export default function DashboardScreen() {
     }
   }, [dispatch, isFocused, evaluateUrineProtein]);
 
-  // Filter for BP and Scale readings only
-  const lastBP = readings
-    ?.filter((r: any) => r.type === "BP")
-    .sort((a: any, b: any) => b.ts - a.ts)[0];
+  // Latest-readings slider: every reading from the last 48 hours — BP,
+  // weight, and glucose interleaved — newest first, one per slide.
+  const { width: windowWidth } = useWindowDimensions();
+  const slideWidth = windowWidth - 36; // scrollContainer padding 18 each side
 
-  const lastScale = readings
-    ?.filter((r: any) => r.type === "SCALE")
-    .sort((a: any, b: any) => b.ts - a.ts)[0];
+  const recentReadings = React.useMemo(() => {
+    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
+    return (readings || [])
+      .filter((r: any) => r.ts >= cutoff)
+      .sort((a: any, b: any) => b.ts - a.ts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readings, isFocused]);
+
+  const [readingSlide, setReadingSlide] = useState(0);
+  useEffect(() => {
+    setReadingSlide(0); // new data → snap back to the newest reading
+  }, [recentReadings.length]);
 
   const deviceList = devices || [];
   const deviceCount = deviceList.length;
@@ -246,7 +257,48 @@ export default function DashboardScreen() {
   };
 
   const firstName = user.firstName || "there";
-  const bpHigh = isBPReadingHigh(lastBP);
+
+  // One slide per reading in the 48h window. BP slides carry the
+  // threshold coloring; glucose slides show the timing context.
+  const renderReadingSlide = ({ item }: { item: any }) => {
+    const isBP = item.type === "BP";
+    const isBG = item.type === "BG";
+    const high = isBP && isBPReadingHigh(item);
+
+    const iconName = isBP ? "favorite" : isBG ? "opacity" : "monitor-weight";
+    const iconColor = isBP ? (high ? ALERT : "#c62828") : isBG ? "#e65100" : BLUE;
+    const iconBg = isBP ? (high ? "#f7d6d6" : "#fdecec") : isBG ? "#fff3e0" : "#e6f1fb";
+    const label = isBP ? "Blood pressure" : isBG ? "Blood glucose" : "Weight";
+
+    return (
+      <View style={[styles.readSlide, { width: slideWidth }, high && styles.statCardAlert]}>
+        <View style={styles.statTop}>
+          <View style={[styles.statIcon, { backgroundColor: iconBg }]}>
+            <MaterialIcons name={iconName} size={15} color={iconColor} />
+          </View>
+          <Text style={styles.statLabel}>{label}</Text>
+          <Text style={styles.statWhen}>{formatWhen(item.ts)}</Text>
+        </View>
+        <Text style={[styles.statValue, high && { color: ALERT }]}>
+          {isBP ? `${item.value}/${item.value2}` : item.value}
+          <Text style={styles.statUnit}>
+            {" "}
+            {item.unit || (isBG ? "mg/dL" : "")}
+          </Text>
+        </Text>
+        {isBP ? (
+          <Text style={[styles.statTrend, { color: high ? ALERT : OK }]}>
+            {high ? "Above range" : "In range"}
+            {item.heartRate ? ` · HR ${item.heartRate}` : ""}
+          </Text>
+        ) : isBG && item.measurementCondition ? (
+          <Text style={styles.statTrendMuted}>{item.measurementCondition}</Text>
+        ) : (
+          <Text style={[styles.statTrend, { color: OK }]}>Recorded</Text>
+        )}
+      </View>
+    );
+  };
 
   return (
     <View style={styles.root}>
@@ -345,79 +397,50 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.readsRow}>
-          {/* Blood pressure */}
-          <View
-            style={[styles.statCard, bpHigh && styles.statCardAlert]}
-          >
-            <View style={styles.statTop}>
-              <View
-                style={[
-                  styles.statIcon,
-                  { backgroundColor: bpHigh ? "#f7d6d6" : "#fdecec" },
-                ]}
-              >
-                <MaterialIcons
-                  name="favorite"
-                  size={15}
-                  color={bpHigh ? ALERT : "#e53935"}
-                />
+        {recentReadings.length === 0 ? (
+          <View style={styles.emptyReadingsCard}>
+            <Text style={styles.statValue}>—</Text>
+            <Text style={styles.statTrendMuted}>
+              No readings in the last 48 hours
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.sliderWrap}>
+            <FlatList
+              data={recentReadings}
+              keyExtractor={(item: any) => item.id}
+              renderItem={renderReadingSlide}
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={(e) =>
+                setReadingSlide(
+                  Math.round(e.nativeEvent.contentOffset.x / slideWidth)
+                )
+              }
+            />
+            {recentReadings.length > 1 && (
+              <View style={styles.sliderMeta}>
+                <View style={styles.dotsRow}>
+                  {recentReadings.length <= 6 &&
+                    recentReadings.map((r: any, i: number) => (
+                      <View
+                        key={r.id}
+                        style={[
+                          styles.dot,
+                          i === readingSlide && styles.dotActive,
+                        ]}
+                      />
+                    ))}
+                </View>
+                <Text style={styles.sliderCount}>
+                  {readingSlide + 1} of {recentReadings.length} · swipe · last
+                  48 hrs
+                </Text>
               </View>
-              <Text style={styles.statLabel}>Blood pressure</Text>
-            </View>
-            {lastBP ? (
-              <>
-                <Text
-                  style={[styles.statValue, bpHigh && { color: ALERT }]}
-                >
-                  {lastBP.value}/{lastBP.value2}
-                  <Text style={styles.statUnit}> {lastBP.unit}</Text>
-                </Text>
-                <Text
-                  style={[
-                    styles.statTrend,
-                    { color: bpHigh ? ALERT : OK },
-                  ]}
-                >
-                  {bpHigh ? "Above range" : "In range"} · {formatWhen(lastBP.ts)}
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={styles.statValue}>—</Text>
-                <Text style={styles.statTrendMuted}>No readings yet</Text>
-              </>
             )}
           </View>
-
-          {/* Weight */}
-          <View style={styles.statCard}>
-            <View style={styles.statTop}>
-              <View
-                style={[styles.statIcon, { backgroundColor: "#e6f1fb" }]}
-              >
-                <MaterialIcons name="monitor-weight" size={15} color={BLUE} />
-              </View>
-              <Text style={styles.statLabel}>Weight</Text>
-            </View>
-            {lastScale ? (
-              <>
-                <Text style={styles.statValue}>
-                  {lastScale.value}
-                  <Text style={styles.statUnit}> {lastScale.unit}</Text>
-                </Text>
-                <Text style={[styles.statTrend, { color: OK }]}>
-                  {formatWhen(lastScale.ts)}
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={styles.statValue}>—</Text>
-                <Text style={styles.statTrendMuted}>No readings yet</Text>
-              </>
-            )}
-          </View>
-        </View>
+        )}
 
         {/* Health Events — hospital report */}
         <View style={styles.eventsCard}>
@@ -690,14 +713,11 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: BLUE,
   },
-  // Reading stat cards
-  readsRow: {
-    flexDirection: "row",
-    gap: 12,
+  // Latest-readings slider (one reading per slide, last 48 hours)
+  sliderWrap: {
     marginBottom: 22,
   },
-  statCard: {
-    flex: 1,
+  readSlide: {
     backgroundColor: "#fff",
     borderRadius: 16,
     borderWidth: 1,
@@ -705,14 +725,54 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     paddingHorizontal: 14,
   },
+  emptyReadingsCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#e7ecf2",
+    paddingVertical: 13,
+    paddingHorizontal: 14,
+    marginBottom: 22,
+  },
   statCardAlert: {
     borderColor: "#f0c4c4",
     backgroundColor: "#fdf2f2",
+  },
+  sliderMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 8,
+    paddingHorizontal: 4,
+  },
+  dotsRow: {
+    flexDirection: "row",
+    gap: 5,
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#c5d1de",
+  },
+  dotActive: {
+    backgroundColor: NAVY,
+  },
+  sliderCount: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#8a97a6",
   },
   statTop: {
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
+  },
+  statWhen: {
+    marginLeft: "auto",
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#8a97a6",
   },
   statIcon: {
     width: 24,
