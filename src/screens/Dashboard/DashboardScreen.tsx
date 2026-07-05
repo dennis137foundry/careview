@@ -362,11 +362,17 @@ export default function DashboardScreen() {
         >
           {dailyFact ? (
             <>
+              {/* allowFontScaling={false} on purpose: on this RN version
+                  maxFontSizeMultiplier is measured but not rendered
+                  (new-arch bug) — scaled text draws bigger than the box
+                  Yoga measured, so the badge clipped off the card edge
+                  and the fact was chopped mid-sentence. Fixed sizes are
+                  the only reliable geometry for this card. */}
               <View style={styles.heroTagRow}>
                 <Text
                   style={[styles.heroTag, styles.heroTagInRow]}
                   numberOfLines={1}
-                  maxFontSizeMultiplier={1.15}
+                  allowFontScaling={false}
                 >
                   Maternal Wellness Daily
                 </Text>
@@ -374,7 +380,7 @@ export default function DashboardScreen() {
                   <Text
                     style={styles.heroWeekBadgeText}
                     numberOfLines={1}
-                    maxFontSizeMultiplier={1.15}
+                    allowFontScaling={false}
                   >
                     {dailyFact.isPostpartum
                       ? "After Delivery"
@@ -382,7 +388,7 @@ export default function DashboardScreen() {
                   </Text>
                 </View>
               </View>
-              <Text style={styles.heroTip} maxFontSizeMultiplier={1.3}>
+              <Text style={styles.heroTip} allowFontScaling={false}>
                 {dailyFact.fact}
               </Text>
             </>
@@ -703,9 +709,10 @@ const styles = StyleSheet.create({
     color: "#cfe3f7",
   },
   heroTip: {
-    // No fixed lineHeight — iOS clips scaled Dynamic Type text against a
-    // hard lineHeight, which was cutting facts off mid-sentence.
-    fontSize: 15,
+    // Slightly larger than the old 15 since this text doesn't follow
+    // Dynamic Type (allowFontScaling={false} — see the hero JSX).
+    fontSize: 16,
+    lineHeight: 23,
     color: "#eaf2fb",
     fontWeight: "500",
   },
