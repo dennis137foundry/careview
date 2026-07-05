@@ -10,9 +10,13 @@ export const addReadingAndPersist = createAsyncThunk(
   'readings/addAndPersist',
   async (payload: Omit<SavedReading, 'id'|'ts'> & { id?: string; ts?: number }, { rejectWithValue }) => {
     try {
-      const r: SavedReading = { 
-        id: nanoid(), 
-        ts: Date.now(), 
+      const r: SavedReading = {
+        id: nanoid(),
+        ts: Date.now(),
+        // Live captures enter the app now, even when the sample itself is
+        // older (BG5S stored records carry the meter's ts). Callers may
+        // override via payload. Demo seeding bypasses this thunk.
+        capturedAt: Date.now(),
         ...payload,
         // Ensure measurementCondition is included if provided
         measurementCondition: payload.measurementCondition,

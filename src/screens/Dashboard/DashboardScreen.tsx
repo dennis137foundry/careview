@@ -175,10 +175,17 @@ export default function DashboardScreen() {
   const heroInnerWidth = windowWidth - 36 - 40;
 
   const recentReadings = React.useMemo(() => {
+    // Windowed on capturedAt (when the reading ENTERED the app), not ts
+    // (when the sample was taken): a BG5S stored record captured today is
+    // a new reading here even if the meter took it days ago. Cards still
+    // display the clinical ts. capturedAt falls back to ts for rows saved
+    // before the column existed.
     const cutoff = Date.now() - 48 * 60 * 60 * 1000;
     return (readings || [])
-      .filter((r: any) => r.ts >= cutoff)
-      .sort((a: any, b: any) => b.ts - a.ts);
+      .filter((r: any) => (r.capturedAt ?? r.ts) >= cutoff)
+      .sort(
+        (a: any, b: any) => (b.capturedAt ?? b.ts) - (a.capturedAt ?? a.ts)
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readings, isFocused]);
 

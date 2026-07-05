@@ -67,29 +67,10 @@ const deviceImages: Record<string, any> = {
   BG: require("../../assets/bg5.png"),
 };
 
-const deviceThemes: Record<
-  string,
-  { primary: string; secondary: string; gradient: string[]; icon: string }
-> = {
-  BP: {
-    primary: "#E53935",
-    secondary: "#FF8A80",
-    gradient: ["#E53935", "#C62828", "#B71C1C"],
-    icon: "favorite",
-  },
-  SCALE: {
-    primary: "#00ACC1",
-    secondary: "#84FFFF",
-    gradient: ["#00ACC1", "#0097A7", "#00838F"],
-    icon: "fitness-center",
-  },
-  BG: {
-    primary: "#43A047",
-    secondary: "#A5D6A7",
-    gradient: ["#43A047", "#2E7D32", "#1B5E20"],
-    icon: "opacity",
-  },
-};
+// Uniform capture accent for ALL device types — the app's teal primary.
+// (Per-device color themes were removed on purpose: one look everywhere.)
+const CAPTURE_ACCENT = BTN.primary;
+const CAPTURE_ACCENT_SOFT = "#7fd6de";
 
 const GLUCOSE_TIMING_OPTIONS = [
   { label: "Overnight", value: "overnight" },
@@ -208,7 +189,6 @@ export default function CaptureScreen({ route, navigation }: any) {
   const deviceType = device?.type;
   const deviceDbId = device?.id;
 
-  const theme = deviceThemes[device?.type || "BP"] || deviceThemes.BP;
 
   // ==========================================================================
   // Dev-only logging (no UI, just console in __DEV__)
@@ -1250,7 +1230,7 @@ export default function CaptureScreen({ route, navigation }: any) {
               <MaterialIcons
                 name="favorite"
                 size={isSuccess ? 16 : 18}
-                color={theme.secondary}
+                color={CAPTURE_ACCENT_SOFT}
               />
               <Text style={[styles.pulseText, isSuccess && styles.pulseTextSuccess]}>{lastReading.pulse} bpm</Text>
             </View>
@@ -1386,7 +1366,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                 styles.deviceRing,
                 isSuccess && styles.deviceRingSuccess,
                 {
-                  borderColor: theme.primary,
+                  borderColor: CAPTURE_ACCENT,
                   transform: [
                     { scale: pulseAnim },
                     {
@@ -1403,14 +1383,14 @@ export default function CaptureScreen({ route, navigation }: any) {
                     style={[
                       styles.ringDot,
                       styles.ringDot1,
-                      { backgroundColor: theme.primary },
+                      { backgroundColor: CAPTURE_ACCENT },
                     ]}
                   />
                   <View
                     style={[
                       styles.ringDot,
                       styles.ringDot2,
-                      { backgroundColor: theme.secondary },
+                      { backgroundColor: CAPTURE_ACCENT_SOFT },
                     ]}
                   />
                 </>
@@ -1430,7 +1410,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                       styles.successRing,
                       isSuccess && styles.successRingSuccess,
                       {
-                        borderColor: theme.primary,
+                        borderColor: CAPTURE_ACCENT,
                         transform: [{ scale: successRingScale }],
                         opacity: successRingOpacity,
                       },
@@ -1440,7 +1420,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                     style={[
                       styles.successBadge,
                       isSuccess && styles.successBadgeSuccess,
-                      { backgroundColor: theme.primary, transform: [{ scale: successScale }] },
+                      { backgroundColor: CAPTURE_ACCENT, transform: [{ scale: successScale }] },
                     ]}
                   >
                     <MaterialIcons name="check" size={isSuccess ? 20 : 24} color="#fff" />
@@ -1464,7 +1444,7 @@ export default function CaptureScreen({ route, navigation }: any) {
               <Text
                 style={[
                   styles.statusText,
-                  busy ? { color: theme.secondary } : styles.statusTextIdle,
+                  busy ? { color: CAPTURE_ACCENT_SOFT } : styles.statusTextIdle,
                 ]}
               >
                 {getPhaseMessage()}
@@ -1482,7 +1462,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                 style={[
                   styles.progressBar,
                   {
-                    backgroundColor: theme.primary,
+                    backgroundColor: CAPTURE_ACCENT,
                     width: progressAnim.interpolate({
                       inputRange: [0, 1],
                       outputRange: ["0%", "100%"],
@@ -1496,39 +1476,33 @@ export default function CaptureScreen({ route, navigation }: any) {
           {/* Action Buttons */}
           <View style={[styles.buttonContainer, isSuccess && styles.buttonContainerSuccess]}>
             {phase === "idle" && (
-              <TouchableOpacity onPress={start} activeOpacity={0.8}>
-                <LinearGradient
-                  colors={theme.gradient}
-                  style={styles.primaryButton}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                >
-                  <Text style={styles.primaryButtonText}>Capture Reading</Text>
-                </LinearGradient>
+              <TouchableOpacity
+                onPress={start}
+                activeOpacity={0.8}
+                style={styles.primaryButton}
+              >
+                <Text style={styles.primaryButtonText}>Capture Reading</Text>
               </TouchableOpacity>
             )}
 
             {busy && phase !== "success" && (
               <TouchableOpacity
-                style={styles.secondaryButton}
+                style={styles.cancelButton}
                 onPress={cancel}
                 activeOpacity={0.8}
               >
-                <Text style={styles.secondaryButtonText}>Cancel</Text>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
             )}
 
             {phase === "success" && (
               <Animated.View style={{ transform: [{ translateY: buttonSlide }], opacity: readingFade }}>
-                <TouchableOpacity onPress={done} activeOpacity={0.8}>
-                  <LinearGradient
-                    colors={theme.gradient}
-                    style={[styles.primaryButton, isSuccess && styles.primaryButtonSuccess]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                  >
-                    <Text style={styles.primaryButtonText}>Done</Text>
-                  </LinearGradient>
+                <TouchableOpacity
+                  onPress={done}
+                  activeOpacity={0.8}
+                  style={[styles.primaryButton, isSuccess && styles.primaryButtonSuccess]}
+                >
+                  <Text style={styles.primaryButtonText}>Done</Text>
                 </TouchableOpacity>
               </Animated.View>
             )}
@@ -1913,6 +1887,7 @@ const styles = StyleSheet.create({
     borderRadius: BTN.radius,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: CAPTURE_ACCENT,
   },
   primaryButtonSuccess: {
     height: 50,
@@ -1922,20 +1897,19 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
   },
-  secondaryButton: {
+  // Red while the capture process is active — clear stop affordance.
+  cancelButton: {
     width: SCREEN_WIDTH - 48,
     height: 56,
     borderRadius: BTN.radius,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.2)",
+    backgroundColor: BTN.destructive,
   },
-  secondaryButtonText: {
+  cancelButtonText: {
     color: "#fff",
     fontSize: 18,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   modalOverlay: {
     flex: 1,

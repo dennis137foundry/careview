@@ -179,7 +179,8 @@ export function initDB() {
       unit TEXT,
       ts INTEGER,
       synced INTEGER DEFAULT 0,
-      measurementCondition TEXT
+      measurementCondition TEXT,
+      capturedAt INTEGER DEFAULT NULL
     );
   `);
 
@@ -195,6 +196,17 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE readings ADD COLUMN measurementCondition TEXT;");
     console.log("[DB] Added 'measurementCondition' column to readings");
+  } catch (e) {
+    // Column already exists
+  }
+
+  // Migration: when the reading ENTERED the app, as opposed to `ts` (when
+  // the sample was taken — a BG5S stored record can be days older). The
+  // dashboard's "last 48 hours" window keys on capturedAt; the EMR and
+  // History keep the clinical ts.
+  try {
+    db.execute("ALTER TABLE readings ADD COLUMN capturedAt INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'capturedAt' column to readings");
   } catch (e) {
     // Column already exists
   }
@@ -625,6 +637,10 @@ export type SavedReading = {
   ts: number;
   synced?: boolean;
   measurementCondition?: string;
+  // When the reading entered the app (capture/sync moment). Defaults to
+  // `ts` when not provided (e.g. seeded demo data). BG5S stored records
+  // make the two diverge: ts = sample time on the meter, capturedAt = now.
+  capturedAt?: number;
 };
 
 export function saveReading(
@@ -636,8 +652,10 @@ export function saveReading(
   const id =
     r.id || `reading_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   const ts = r.ts || Date.now();
+  // Falls back to ts so seeded/legacy rows behave as if captured when taken.
+  const capturedAt = r.capturedAt ?? ts;
   db.execute(
-    "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+    "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition, capturedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
     [
       id,
       r.deviceId,
@@ -650,6 +668,7 @@ export function saveReading(
       ts,
       r.synced ? 1 : 0,
       r.measurementCondition ?? null,
+      capturedAt,
     ]
   );
   // Reading ID + measurement_condition (contains pulse for BP) — PHI.
