@@ -10,7 +10,6 @@ import {
   FlatList,
   useWindowDimensions,
 } from "react-native";
-import LinearGradient from "react-native-linear-gradient";
 import { useSelector, useDispatch } from "react-redux";
 import { getDailyFact } from "../../utils/getDailyFact";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
@@ -166,6 +165,14 @@ export default function DashboardScreen() {
   // weight, and glucose interleaved — newest first, one per slide.
   const { width: windowWidth } = useWindowDimensions();
   const slideWidth = windowWidth - 36; // scrollContainer padding 18 each side
+
+  // Hero card content width, computed EXPLICITLY from the screen:
+  // window − 36 (scroll padding) − 40 (hero padding). The card's text
+  // previously relied on the container to constrain it, and the
+  // container lied (text rendered unwrapped and clipped). An absolute
+  // width forces the text engine to wrap correctly no matter what any
+  // parent reports.
+  const heroInnerWidth = windowWidth - 36 - 40;
 
   const recentReadings = React.useMemo(() => {
     const cutoff = Date.now() - 48 * 60 * 60 * 1000;
@@ -352,29 +359,34 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Maternal Wellness Daily Fact — navy hero. Aligned to the
-            pregnancy via EDD; asks for the due date when none is known. */}
-        <LinearGradient
-          colors={["#00325f", NAVY]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
-        >
-          {dailyFact ? (
-            <>
-              {/* allowFontScaling={false} on purpose: on this RN version
-                  maxFontSizeMultiplier is measured but not rendered
-                  (new-arch bug) — scaled text draws bigger than the box
-                  Yoga measured, so the badge clipped off the card edge
-                  and the fact was chopped mid-sentence. Fixed sizes are
-                  the only reliable geometry for this card. */}
-              <View style={styles.heroTagRow}>
+        {/* Maternal Wellness Daily Fact — solid navy hero with a teal
+            accent bar. Aligned to the pregnancy via EDD; asks for the due
+            date when none is known.
+
+            Construction notes (do not "simplify"): plain View instead of
+            LinearGradient — the gradient container fed its children a bad
+            width constraint on-device (text rendered unwrapped and was
+            clipped by the card). Every text is width-pinned to
+            heroInnerWidth and has allowFontScaling={false}: absolute
+            geometry, nothing depends on parent measurement or Dynamic
+            Type. The week pill sits on its own line so nothing competes
+            for horizontal space. */}
+        <View style={styles.hero}>
+          <View style={{ width: heroInnerWidth }}>
+            {dailyFact ? (
+              <>
                 <Text
-                  style={[styles.heroTag, styles.heroTagInRow]}
+                  style={[styles.heroTag, { width: heroInnerWidth }]}
                   numberOfLines={1}
                   allowFontScaling={false}
                 >
                   Maternal Wellness Daily
+                </Text>
+                <Text
+                  style={[styles.heroTip, { width: heroInnerWidth }]}
+                  allowFontScaling={false}
+                >
+                  {dailyFact.fact}
                 </Text>
                 <View style={styles.heroWeekBadge}>
                   <Text
@@ -387,27 +399,30 @@ export default function DashboardScreen() {
                       : `Week ${dailyFact.week} • Day ${dailyFact.dayOfWeek}`}
                   </Text>
                 </View>
-              </View>
-              <Text style={styles.heroTip} allowFontScaling={false}>
-                {dailyFact.fact}
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
-              <DueDateForm
-                onSave={(edd) => {
-                  dispatch(setEdd({ edd, source: "patient" }));
-                  showToast({
-                    message: "Due date saved",
-                    type: "success",
-                    duration: 2500,
-                  });
-                }}
-              />
-            </>
-          )}
-        </LinearGradient>
+              </>
+            ) : (
+              <>
+                <Text
+                  style={[styles.heroTag, { width: heroInnerWidth }]}
+                  numberOfLines={1}
+                  allowFontScaling={false}
+                >
+                  Maternal Wellness Daily
+                </Text>
+                <DueDateForm
+                  onSave={(edd) => {
+                    dispatch(setEdd({ edd, source: "patient" }));
+                    showToast({
+                      message: "Due date saved",
+                      type: "success",
+                      duration: 2500,
+                    });
+                  }}
+                />
+              </>
+            )}
+          </View>
+        </View>
 
         {/* Latest Readings */}
         <View style={styles.sectionRow}>
@@ -668,11 +683,15 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#E65100",
   },
-  // Hero
+  // Hero — solid navy with a teal accent bar (see construction notes in
+  // the JSX; geometry is intentionally absolute).
   hero: {
+    backgroundColor: "#00325f",
     borderRadius: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: BTN.primary,
     paddingVertical: 18,
-    paddingHorizontal: 18,
+    paddingHorizontal: 20,
     marginBottom: 22,
   },
   heroTag: {
@@ -683,38 +702,26 @@ const styles = StyleSheet.create({
     color: "#9dc2ec",
     marginBottom: 8,
   },
-  // Row variant: flex+shrink so the uppercase tag gives way to the week
-  // badge instead of pushing it off the card at larger font sizes.
-  heroTagInRow: {
-    flex: 1,
-    flexShrink: 1,
-    marginBottom: 0,
-    marginRight: 8,
-  },
-  heroTagRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  heroWeekBadge: {
-    flexShrink: 0,
-    backgroundColor: "rgba(255,255,255,0.14)",
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  heroWeekBadgeText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#cfe3f7",
-  },
   heroTip: {
-    // Slightly larger than the old 15 since this text doesn't follow
-    // Dynamic Type (allowFontScaling={false} — see the hero JSX).
     fontSize: 16,
     lineHeight: 23,
     color: "#eaf2fb",
     fontWeight: "500",
+  },
+  // Footer pill on its own line — nothing competes with it horizontally.
+  heroWeekBadge: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(5, 110, 120, 0.45)",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginTop: 12,
+  },
+  heroWeekBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#9fdce2",
+    letterSpacing: 0.3,
   },
   // Sections
   sectionRow: {

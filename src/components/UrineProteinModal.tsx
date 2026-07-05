@@ -115,7 +115,7 @@ export default function UrineProteinModal({
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.iconContainer}>
-              <MaterialIcons name="science" size={32} color="#9C27B0" />
+              <MaterialIcons name="science" size={32} color={BTN.primary} />
             </View>
             <Text style={styles.title}>Urine Protein Check</Text>
             <Text style={styles.subtitle}>
@@ -240,7 +240,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: "rgba(156, 39, 176, 0.1)",
+    backgroundColor: "rgba(5, 110, 120, 0.1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 16,

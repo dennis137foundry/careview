@@ -9,7 +9,6 @@ import {
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { BTN } from "../constants/buttons";
 
-const PURPLE = "#9C27B0";
 
 interface UrineProteinPromptModalProps {
   visible: boolean;
@@ -38,7 +37,7 @@ export default function UrineProteinPromptModal({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.iconContainer}>
-            <MaterialIcons name="science" size={30} color={PURPLE} />
+            <MaterialIcons name="science" size={30} color={BTN.primary} />
           </View>
           <Text style={styles.title}>Urine Protein Check</Text>
           <Text style={styles.subtitle}>
@@ -87,7 +86,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 18,
-    backgroundColor: "rgba(156, 39, 176, 0.1)",
+    backgroundColor: "rgba(5, 110, 120, 0.1)",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
