@@ -65,6 +65,10 @@ static NSString * const kBLEWeightFeatureCharUUID = @"2A9E";     // Weight Scale
     NSMutableDictionary *_connectedDevices;
     NSString *_targetMAC;
     NSString *_targetType;
+
+    // Set by connectForBattery: connect → read battery → disconnect,
+    // WITHOUT auto-starting a measurement. Cleared once consumed.
+    NSString *_batteryOnlyMAC;
     
     // CoreBluetooth for BLE GATT devices
     CBCentralManager *_centralManager;
@@ -169,6 +173,67 @@ RCT_EXPORT_MODULE();
         @"source": @"iHealthSDK",
         @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
     }];
+}
+
+// Battery-only connection path (connectForBattery): query the battery for
+// the given type, emit it, then always disconnect. Never starts a
+// measurement — this is what makes it safe to call from the add-device
+// flow (the normal connect path auto-inflates BP cuffs).
+- (void)queryBatteryOnly:(NSString *)mac type:(NSString *)type {
+    void (^done)(void) = ^{
+        // Small delay so the SDK finishes the command round-trip cleanly.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self sendDebugLog:[NSString stringWithFormat:@"🔋 Battery-only done — disconnecting %@", mac]];
+            [self disconnectSDKDevice:mac type:type];
+        });
+    };
+
+    if ([type isEqualToString:@"BP3L"]) {
+        BP3L *d = [self getBP3LWithMac:mac];
+        if (!d) { done(); return; }
+        [d commandEnergy:^(NSNumber *energyValue) {
+            [self emitBatteryForMac:mac type:type level:energyValue];
+            done();
+        } errorBlock:^(BPDeviceError e) { done(); }];
+    } else if ([type isEqualToString:@"BP5"]) {
+        BP5 *d = [self getBP5WithMac:mac];
+        if (!d) { done(); return; }
+        [d commandEnergy:^(NSNumber *energyValue) {
+            [self emitBatteryForMac:mac type:type level:energyValue];
+            done();
+        } errorBlock:^(BPDeviceError e) { done(); }];
+    } else if ([type isEqualToString:@"BP5S"]) {
+        BP5S *d = [self getBP5SWithMac:mac];
+        if (!d) { done(); return; }
+        [d commandEnergy:^(NSNumber *energyValue) {
+            [self emitBatteryForMac:mac type:type level:energyValue];
+            done();
+        } energyState:^(NSNumber *energyState){} errorBlock:^(BPDeviceError e) { done(); }];
+    } else if ([type isEqualToString:@"HS2"]) {
+        HS2 *d = [self getHS2WithMac:mac];
+        if (!d) { done(); return; }
+        [d commandGetHS2Battery:^(NSNumber *battary) {
+            [self emitBatteryForMac:mac type:type level:battary];
+            done();
+        } DiaposeErrorBlock:^(HS2DeviceError e) { done(); }];
+    } else if ([type isEqualToString:@"HS2S"]) {
+        HS2S *d = [self getHS2SWithMac:mac];
+        if (!d) { done(); return; }
+        [d commandGetHS2SBattery:^(NSNumber *battary) {
+            [self emitBatteryForMac:mac type:type level:battary];
+            done();
+        } DiaposeErrorBlock:^(HS2SDeviceError e) { done(); }];
+    } else if ([type isEqualToString:@"BG5S"]) {
+        BG5S *d = [self getBG5SWithMac:mac];
+        if (!d) { done(); return; }
+        [d queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
+            [self emitBatteryForMac:mac type:type level:@(stateInfo.batteryValue)];
+            done();
+        } errorBlock:^(BG5SError error, NSString *detailInfo) { done(); }];
+    } else {
+        // HS4S and unknown types have no battery API.
+        done();
+    }
 }
 
 - (NSDictionary *)bluetoothStatusPayload {
@@ -824,6 +889,16 @@ RCT_EXPORT_MODULE();
         @"source": @"iHealthSDK"
     }];
 
+    // Battery-only connect (add-device flow): read battery + disconnect.
+    // MUST short-circuit here — the handlers below auto-start measurement.
+    if (_batteryOnlyMAC && [[mac uppercaseString] isEqualToString:[_batteryOnlyMAC uppercaseString]]) {
+        _batteryOnlyMAC = nil;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self queryBatteryOnly:mac type:type];
+        });
+        return;
+    }
+
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if ([type isEqualToString:@"BP3L"]) {
             BP3L *d = [self getBP3LWithMac:mac];
@@ -891,6 +966,16 @@ RCT_EXPORT_MODULE();
         @"connected": @YES,
         @"source": @"iHealthSDK"
     }];
+
+    // Battery-only connect (add-device flow): read battery + disconnect,
+    // skipping delegate/measurement setup.
+    if (_batteryOnlyMAC && [[mac uppercaseString] isEqualToString:[_batteryOnlyMAC uppercaseString]]) {
+        _batteryOnlyMAC = nil;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self queryBatteryOnly:mac type:@"BG5S"];
+        });
+        return;
+    }
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         BG5S *device = [self getBG5SWithMac:mac];
@@ -1122,6 +1207,9 @@ RCT_EXPORT_MODULE();
     [self sendBG5SEvent:@"query_state" mac:mac message:@"Querying BG5S state before measurement" extra:nil];
     [device queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
         [self sendBG5SEvent:@"query_state_ok" mac:mac message:@"queryStateInfo succeeded" extra:[self bg5sStatePayload:stateInfo]];
+        // BG5S battery rides along with the state info — surface it the
+        // same way BP/scale batteries are surfaced.
+        [self emitBatteryForMac:mac type:@"BG5S" level:@(stateInfo.batteryValue)];
         setTimeBlock();
     } errorBlock:^(BG5SError error, NSString *detailInfo) {
         NSString *text = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
@@ -1352,6 +1440,7 @@ RCT_EXPORT_METHOD(debugBG5SQueryState:(NSString *)mac resolver:(RCTPromiseResolv
     [device queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
         NSDictionary *payload = [self bg5sStatePayload:stateInfo];
         [self sendBG5SEvent:@"query_state_ok" mac:mac message:@"queryStateInfo succeeded" extra:payload];
+        [self emitBatteryForMac:mac type:@"BG5S" level:@(stateInfo.batteryValue)];
         resolve(payload);
     } errorBlock:^(BG5SError error, NSString *detailInfo) {
         NSString *message = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
@@ -1626,6 +1715,40 @@ RCT_EXPORT_METHOD(getConnectedDevices:(RCTPromiseResolveBlock)resolve rejecter:(
 
 RCT_EXPORT_METHOD(getBatteryLevel:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
     resolve(@(-1));
+}
+
+// Connect solely to read the battery level (add-device flow). The normal
+// connect path auto-starts a measurement — this one queries battery and
+// disconnects instead (see the _batteryOnlyMAC branch in onConnected /
+// the BG5S connect handler). HS4S has no battery API: resolves NO
+// without connecting. Battery arrives via the onBatteryLevel event.
+RCT_EXPORT_METHOD(connectForBattery:(NSString *)mac deviceType:(NSString *)deviceType resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    NSArray *supported = @[@"BP3L", @"BP5", @"BP5S", @"HS2", @"HS2S", @"BG5S"];
+    if (!mac || ![supported containsObject:deviceType]) {
+        resolve(@NO);
+        return;
+    }
+
+    [self sendDebugLog:[NSString stringWithFormat:@"🔋 Connect for battery: %@ (%@)", mac, deviceType]];
+    _batteryOnlyMAC = mac;
+    _targetMAC = mac;
+    _targetType = deviceType;
+
+    int result = [[ConnectDeviceController commandGetInstance] commandContectDeviceWithDeviceType:[self deviceTypeFromString:deviceType] andSerialNub:mac];
+    resolve(result == 1 ? @YES : @NO);
+
+    // Failsafe: if the device dozed off or the battery round-trip stalls,
+    // clear the flag and drop any half-open connection so a later real
+    // capture starts clean.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self->_batteryOnlyMAC && [[self->_batteryOnlyMAC uppercaseString] isEqualToString:[mac uppercaseString]]) {
+            self->_batteryOnlyMAC = nil;
+        }
+        if (self->_connectedDevices[mac]) {
+            [self disconnectSDKDevice:mac type:deviceType];
+            [self->_connectedDevices removeObjectForKey:mac];
+        }
+    });
 }
 
 RCT_EXPORT_METHOD(keepAwake) {

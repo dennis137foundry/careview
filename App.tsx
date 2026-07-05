@@ -9,7 +9,9 @@ import { AppState, StatusBar } from "react-native";
 import { store } from "./src/redux/store";
 import { initDB } from "./src/services/sqliteService";
 import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
+import { setDeviceBattery } from "./src/redux/deviceSlice";
 import { checkDailyProfileRefresh } from "./src/services/profileRefreshService";
+import deviceService from "./src/services/deviceService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
 import {
   loadAuthTokensFromStorage,
@@ -82,9 +84,20 @@ function RootApp() {
       }
     });
 
+    // App-wide battery capture: native emits onBatteryLevel on every
+    // device connection (capture AND the battery-only connect after
+    // adding a device). Listening here — not per-screen — means no
+    // reading is ever missed regardless of where the user is.
+    const batterySub = deviceService.onBatteryLevel(({ mac, level }) => {
+      if (typeof level === "number" && level >= 0 && level <= 100 && mac) {
+        store.dispatch(setDeviceBattery({ mac, battery: level }));
+      }
+    });
+
     // Cleanup on unmount
     return () => {
       appStateSub.remove();
+      batterySub.remove();
       if (cleanupSync) {
         cleanupSync();
       }

@@ -855,6 +855,45 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     }
 
     /**
+     * connectForBattery(mac: String, deviceType: String, promise: Promise)
+     *
+     * Connect briefly just to capture a battery level (add-device flow).
+     * Android's connect handler already queries battery on every connection
+     * and never auto-starts a measurement, so this is a plain connect plus
+     * scheduled bookkeeping cleanup — the SDK drops the link itself when
+     * the device goes back to sleep. HS4S has no battery API: resolves
+     * false without connecting. Battery arrives via onBatteryLevel.
+     *
+     * iOS sig: connectForBattery:(NSString *)mac deviceType:(NSString *)deviceType resolver:reject:
+     */
+    @ReactMethod
+    fun connectForBattery(mac: String, deviceType: String, promise: Promise) {
+        val supported = setOf("BP3L", "BP5", "BP5S", "HS2", "HS2S", "BG5S")
+        if (deviceType !in supported) {
+            promise.resolve(false)
+            return
+        }
+        try {
+            sendDebugLog("Battery-only connect: $deviceType at $mac")
+            targetMAC = mac
+            targetType = deviceType
+
+            isScanningActive = false
+            scanHandler.removeCallbacks(scanNextRunnable)
+            iHealthDevicesManager.getInstance().stopDiscovery()
+
+            iHealthDevicesManager.getInstance().connectDevice("", mac, getDeviceTypeName(deviceType))
+            promise.resolve(true)
+
+            scanHandler.postDelayed({
+                connectedDevices.remove(mac)
+            }, 12_000)
+        } catch (e: Exception) {
+            promise.reject("CONNECT_ERROR", "Failed battery-only connect: ${e.message}", e)
+        }
+    }
+
+    /**
      * disconnectDevice(mac: String, promise: Promise)
      *
      * JS calls: IHealthDevices.disconnectDevice(mac)

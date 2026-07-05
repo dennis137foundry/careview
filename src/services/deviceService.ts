@@ -345,6 +345,24 @@ const deviceService = {
     }
   },
 
+  /**
+   * Connect briefly just to read the battery level (add-device flow).
+   * Never starts a measurement; the native side disconnects on its own
+   * once the battery query completes. Result arrives via onBatteryLevel.
+   * Returns false for types with no battery API (HS4S, GATT devices).
+   */
+  connectForBattery: async (mac: string, deviceType: string): Promise<boolean> => {
+    try {
+      if (typeof IHealthDevices?.connectForBattery !== "function") {
+        return false; // Older native binary without the method
+      }
+      return await IHealthDevices.connectForBattery(mac, deviceType);
+    } catch (error) {
+      console.warn("[deviceService] Battery-only connect error:", error);
+      return false;
+    }
+  },
+
   // ============================================================
   // Event Listeners
   // ============================================================
@@ -371,6 +389,15 @@ const deviceService = {
    */
   onConnectionStateChanged: (callback: (event: ConnectionEvent) => void): EmitterSubscription => {
     return eventEmitter.addListener("onConnectionStateChanged", callback);
+  },
+
+  /**
+   * Listen for battery levels (emitted on every device connection).
+   */
+  onBatteryLevel: (
+    callback: (event: { mac: string; type: string; level: number }) => void
+  ): EmitterSubscription => {
+    return eventEmitter.addListener("onBatteryLevel", callback);
   },
 
   /**

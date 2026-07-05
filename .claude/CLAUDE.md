@@ -153,12 +153,13 @@ isAuthenticated() → Promise<boolean>
 startScan(deviceTypes[]) → Promise<void>
 stopScan() → Promise<void>
 connectDevice(mac, deviceType) → Promise<boolean>
+connectForBattery(mac, deviceType) → Promise<boolean>  // Battery-only: connect → query battery → disconnect, never measures. Result via onBatteryLevel. Resolves false for HS4S/GATT.
 disconnectDevice(mac) → Promise<void>
 disconnectAll() → Promise<void>
 startMeasurement(mac) → Promise<void>
 stopMeasurement(mac) → Promise<void>
 getConnectedDevices() → Promise<Array>
-getBatteryLevel(mac) → Promise<number>  // Returns -1 (not implemented)
+getBatteryLevel(mac) → Promise<number>  // Returns -1 (stub; battery arrives via onBatteryLevel events)
 keepAwake() / allowSleep()               // iOS only - screen idle timer
 ```
 
@@ -169,6 +170,7 @@ onConnectionStateChanged → { mac, type, connected, source }
 onScanStateChanged  → { scanning: boolean }
 onBloodPressureReading → { mac, type, systolic, diastolic, pulse, timestamp, source }
 onWeightReading     → { mac, type, weight, unit, timestamp, source }
+onBatteryLevel      → { mac, type, level, source, timestamp }  // Emitted on every connection (capture + battery-only connect after add). Global listener in App.tsx dispatches setDeviceBattery. No battery API: HS4S, GATT devices.
 onError             → { code, message }
 onDebugLog          → { message }
 ```
