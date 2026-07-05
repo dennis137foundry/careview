@@ -11,6 +11,7 @@ import {
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { reportHospitalVisit } from "../services/hospitalReportService";
 import { useToast } from "./Toast/ToastProvider";
+import { BTN } from "../constants/buttons";
 
 const TEAL = "#0e7c86";
 
@@ -199,7 +200,7 @@ export default function HospitalReportModal({
                       {d.label}
                     </Text>
                     {active && (
-                      <MaterialIcons name="check" size={18} color={TEAL} />
+                      <MaterialIcons name="check" size={18} color={BTN.primary} />
                     )}
                   </TouchableOpacity>
                 );
@@ -303,13 +304,13 @@ const styles = StyleSheet.create({
   chip: {
     paddingVertical: 9,
     paddingHorizontal: 16,
-    borderRadius: 20,
+    borderRadius: BTN.radius,
     borderWidth: 1.5,
     borderColor: "#d6dde6",
     backgroundColor: "#fff",
   },
   chipActive: {
-    borderColor: TEAL,
+    borderColor: BTN.primary,
     backgroundColor: "#e4f4f5",
   },
   chipText: {
@@ -318,7 +319,7 @@ const styles = StyleSheet.create({
     color: "#5b6b7f",
   },
   chipTextActive: {
-    color: TEAL,
+    color: BTN.primary,
   },
   earlierList: {
     maxHeight: 160,
@@ -346,7 +347,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   earlierItemTextActive: {
-    color: TEAL,
+    color: BTN.primary,
     fontWeight: "700",
   },
   buttonContainer: {
@@ -356,9 +357,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: TEAL,
+    backgroundColor: BTN.primary,
     padding: 16,
-    borderRadius: 15,
+    borderRadius: BTN.radius,
     gap: 8,
   },
   confirmButtonDisabled: {
@@ -373,11 +374,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 14,
-    borderRadius: 15,
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.quiet,
   },
   cancelButtonText: {
     fontSize: 15,
-    color: "#666",
+    color: BTN.quietText,
     fontWeight: "600",
   },
 });

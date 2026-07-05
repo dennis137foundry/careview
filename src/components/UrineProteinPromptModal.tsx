@@ -7,6 +7,7 @@ import {
   Modal,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { BTN } from "../constants/buttons";
 
 const PURPLE = "#9C27B0";
 
@@ -107,9 +108,9 @@ const styles = StyleSheet.create({
   },
   enterButton: {
     width: "100%",
-    backgroundColor: PURPLE,
+    backgroundColor: BTN.primary,
     paddingVertical: 14,
-    borderRadius: 14,
+    borderRadius: BTN.radius,
     alignItems: "center",
   },
   enterButtonText: {
@@ -120,12 +121,13 @@ const styles = StyleSheet.create({
   skipButton: {
     width: "100%",
     paddingVertical: 12,
-    borderRadius: 14,
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.quiet,
     alignItems: "center",
     marginTop: 4,
   },
   skipButtonText: {
-    color: "#888",
+    color: BTN.quietText,
     fontSize: 15,
     fontWeight: "600",
   },

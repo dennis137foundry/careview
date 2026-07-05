@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+﻿import React, { useState } from "react";
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   DailyHealthCheckData,
 } from "../services/sqliteService";
 import { syncPendingScreening } from "../services/vitalsSyncService";
+import { BTN } from "../constants/buttons";
 
 interface DailyHealthCheckModalProps {
   visible: boolean;
@@ -150,7 +151,7 @@ export default function DailyHealthCheckModal({
                   label="Yes"
                   selected={hasHeadaches === true}
                   onPress={() => setHasHeadaches(true)}
-                  color="#E53935"
+                  color="#c62828"
                 />
               </View>
             </View>
@@ -175,7 +176,7 @@ export default function DailyHealthCheckModal({
                   label="Yes"
                   selected={hasVisualDisturbances === true}
                   onPress={() => setHasVisualDisturbances(true)}
-                  color="#E53935"
+                  color="#c62828"
                 />
               </View>
             </View>
@@ -309,7 +310,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: 14,
-    borderRadius: 12,
+    borderRadius: BTN.radius,
     borderWidth: 2,
     borderColor: "#e0e0e0",
     backgroundColor: "#fafafa",
@@ -373,9 +374,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#00509f",
+    backgroundColor: BTN.primary,
     padding: 16,
-    borderRadius: 30,
+    borderRadius: BTN.radius,
     gap: 8,
   },
   submitButtonDisabled: {

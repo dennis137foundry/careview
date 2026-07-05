@@ -17,6 +17,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { authedFetch } from "../services/authToken";
 import { isDemoAccount } from "../services/seedDemoData";
 import { getUser } from "../services/sqliteService";
+import { BTN } from "../constants/buttons";
 
 interface SendMessageModalProps {
   visible: boolean;
@@ -403,11 +404,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0066CC",
-    borderRadius: 30,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     paddingVertical: 16,
     gap: 10,
-    shadowColor: "#0066CC",
+    shadowColor: BTN.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -459,8 +460,8 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   doneButton: {
-    backgroundColor: "#0066CC",
-    borderRadius: 30,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     paddingVertical: 14,
     paddingHorizontal: 48,
   },

@@ -12,6 +12,7 @@ import {
   Alert,
 } from "react-native";
 import authService from "../../services/authService";
+import { BTN } from "../../constants/buttons";
 
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../navigation/AppNavigator";
@@ -135,8 +136,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.1)",
   },
   button: {
-    backgroundColor: "#0066CC",
-    borderRadius: 30,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     width: "100%",
     paddingVertical: 14,
     alignItems: "center",

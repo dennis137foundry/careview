@@ -30,6 +30,7 @@ import { hasDailyHealthCheckToday } from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
+import { BTN } from "../../constants/buttons";
 
 // Below this last-known battery %, warn the user to charge before a reading.
 const LOW_BATTERY_THRESHOLD = 20;
@@ -1859,7 +1860,7 @@ const styles = StyleSheet.create({
   primaryButton: {
     width: SCREEN_WIDTH - 48,
     height: 56,
-    borderRadius: 28,
+    borderRadius: BTN.radius,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1874,7 +1875,7 @@ const styles = StyleSheet.create({
   secondaryButton: {
     width: SCREEN_WIDTH - 48,
     height: 56,
-    borderRadius: 28,
+    borderRadius: BTN.radius,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.1)",
@@ -1924,7 +1925,7 @@ const styles = StyleSheet.create({
   glucoseTimingOption: {
     width: "48%",
     minHeight: 48,
-    borderRadius: 8,
+    borderRadius: BTN.radius,
     backgroundColor: "rgba(67,160,71,0.18)",
     borderWidth: 1,
     borderColor: "rgba(165,214,167,0.35)",

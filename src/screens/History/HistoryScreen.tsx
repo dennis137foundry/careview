@@ -21,6 +21,7 @@ import { loadReadings } from "../../redux/readingSlice";
 import { isBPHigh } from "../../redux/userSlice";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { BTN } from "../../constants/buttons";
 import RNFS from "react-native-fs";
 import Share from "react-native-share";
 import { LineChart } from "react-native-gifted-charts";
@@ -142,11 +143,11 @@ const segmentStyles = StyleSheet.create({
     paddingHorizontal: 14,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 18,
+    borderRadius: BTN.radius,
     minWidth: 112,
   },
   segmentSelected: {
-    backgroundColor: "#002040",
+    backgroundColor: BTN.primary,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
@@ -1371,7 +1372,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#ff9800",
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 20,
+    borderRadius: BTN.radius,
     gap: 6,
   },
   syncBannerButtonDisabled: {
@@ -1402,10 +1403,10 @@ const styles = StyleSheet.create({
   exportButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#002040",
+    backgroundColor: BTN.primary,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 24,
+    borderRadius: BTN.radius,
     gap: 6,
   },
   exportText: {
@@ -1535,7 +1536,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: BTN.radius,
     backgroundColor: "rgba(255, 255, 255, 0.9)",
     gap: 4,
     shadowColor: "#000",

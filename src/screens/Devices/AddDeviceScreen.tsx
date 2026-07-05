@@ -17,6 +17,7 @@ import {
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigation } from "@react-navigation/native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { BTN } from "../../constants/buttons";
 import {
   Camera,
   useCameraDevice,
@@ -790,14 +791,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#00509f",
+    backgroundColor: BTN.primary,
     paddingVertical: 14,
     paddingHorizontal: 32,
-    borderRadius: 30,
+    borderRadius: BTN.radius,
     gap: 8,
   },
   scanButtonActive: {
-    backgroundColor: "#c62828",
+    backgroundColor: BTN.destructive,
   },
   scanButtonText: {
     color: "#fff",
@@ -819,7 +820,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#fff",
     padding: 16,
-    borderRadius: 12,
+    borderRadius: BTN.radius,
     marginBottom: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
@@ -1031,20 +1032,20 @@ const styles = StyleSheet.create({
   nameModalCancel: {
     flex: 1,
     padding: 14,
-    borderRadius: 30,
-    backgroundColor: "#f0f0f0",
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.quiet,
     alignItems: "center",
   },
   nameModalCancelText: {
     fontSize: 16,
     fontWeight: "500",
-    color: "#666",
+    color: BTN.quietText,
   },
   nameModalConfirm: {
     flex: 1,
     padding: 14,
-    borderRadius: 30,
-    backgroundColor: "#00509f",
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.primary,
     alignItems: "center",
   },
   nameModalConfirmText: {
@@ -1056,7 +1057,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: 14,
-    borderRadius: 12,
+    borderRadius: BTN.radius,
     borderWidth: 1,
     borderColor: "#e0e0e0",
     backgroundColor: "#fafafa",

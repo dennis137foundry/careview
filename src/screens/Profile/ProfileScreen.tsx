@@ -22,6 +22,7 @@ import { launchImageLibrary, launchCamera } from "react-native-image-picker";
 import { logout } from "../../redux/userSlice";
 import SendMessageModal from "../../components/SendMessageModal";
 import type { RootState, AppDispatch } from "../../redux/store";
+import { BTN } from "../../constants/buttons";
 
 const PHOTO_KEY = "careview_profile_photo";
 const APP_VERSION = "1.0.0";
@@ -186,7 +187,7 @@ export default function ProfileScreen({ navigation }: any) {
                 {user.firstName || "Unknown"} {user.lastName || ""}
               </Text>
               <View style={styles.patientIdRow}>
-                <MaterialIcons name="badge" size={14} color="#0066CC" />
+                <MaterialIcons name="badge" size={14} color={BTN.link} />
                 <Text style={styles.patientIdText}>
                   ID: {user.patientId || "N/A"}
                 </Text>
@@ -233,7 +234,7 @@ export default function ProfileScreen({ navigation }: any) {
         {/* Action Buttons */}
         <View style={styles.actionsContainer}>
           <TouchableOpacity style={styles.actionButton} onPress={handleAbout}>
-            <MaterialIcons name="info-outline" size={20} color="#0066CC" />
+            <MaterialIcons name="info-outline" size={20} color={BTN.link} />
             <Text style={styles.actionButtonText}>About</Text>
             <MaterialIcons name="chevron-right" size={20} color="#ccc" />
           </TouchableOpacity>
@@ -242,7 +243,7 @@ export default function ProfileScreen({ navigation }: any) {
             style={styles.actionButton}
             onPress={handleLogout}
           >
-            <MaterialIcons name="logout" size={20} color="#e53935" />
+            <MaterialIcons name="logout" size={20} color={BTN.destructive} />
             <Text style={[styles.actionButtonText, styles.logoutText]}>
               Sign Out
             </Text>
@@ -253,7 +254,7 @@ export default function ProfileScreen({ navigation }: any) {
             style={[styles.actionButton, styles.actionButtonLast]}
             onPress={() => navigation.navigate("WipeData")}
           >
-            <MaterialIcons name="delete-forever" size={20} color="#e53935" />
+            <MaterialIcons name="delete-forever" size={20} color={BTN.destructive} />
             <Text style={[styles.actionButtonText, styles.logoutText]}>
               Sign Out & Wipe Data
             </Text>
@@ -314,7 +315,7 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: "#0066CC",
+    backgroundColor: BTN.primary,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 14,
@@ -360,7 +361,7 @@ const styles = StyleSheet.create({
   patientIdText: {
     fontSize: 13,
     fontWeight: "500",
-    color: "#0066CC",
+    color: BTN.link,
   },
 
   /* ---- Message Button ---- */
@@ -368,12 +369,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#0066CC",
-    borderRadius: 12,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     paddingVertical: 14,
     marginBottom: 12,
     gap: 10,
-    shadowColor: "#0066CC",
+    shadowColor: BTN.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
     shadowRadius: 8,
@@ -406,7 +407,7 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 10,
-    backgroundColor: "#0066CC",
+    backgroundColor: BTN.primary,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
@@ -461,7 +462,7 @@ const styles = StyleSheet.create({
     color: "#1a2a3a",
   },
   logoutText: {
-    color: "#e53935",
+    color: BTN.destructive,
   },
 
   /* ---- Version ---- */

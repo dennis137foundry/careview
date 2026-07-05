@@ -30,6 +30,7 @@ import UrineProteinModal from "../../components/UrineProteinModal";
 import UrineProteinPromptModal from "../../components/UrineProteinPromptModal";
 import HospitalReportModal from "../../components/HospitalReportModal";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
+import { BTN } from "../../constants/buttons";
 
 // Map device types to images
 const deviceImages: Record<string, any> = {
@@ -435,7 +436,7 @@ export default function DashboardScreen() {
             activeOpacity={0.85}
             onPress={() => setShowHospitalModal(true)}
           >
-            <MaterialIcons name="local-hospital" size={20} color={TEAL} />
+            <MaterialIcons name="local-hospital" size={20} color="#fff" />
             <Text style={styles.hospitalButtonText}>
               I Went To The Hospital
             </Text>
@@ -788,16 +789,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 9,
-    borderWidth: 1.5,
-    borderColor: TEAL,
-    backgroundColor: "#e4f4f5",
-    borderRadius: 14,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     paddingVertical: 13,
   },
   hospitalButtonText: {
     fontSize: 15,
     fontWeight: "700",
-    color: TEAL,
+    color: "#fff",
   },
   // Devices
   devsRow: {
@@ -893,7 +892,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 16,
-    backgroundColor: TEAL,
+    backgroundColor: BTN.primary,
     shadowColor: "#002040",
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.16,

@@ -14,6 +14,7 @@ import {
   Modal,
   FlatList,
 } from "react-native";
+import { BTN } from "../constants/buttons";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -195,7 +196,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.10)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.35)",
-    borderRadius: 10,
+    borderRadius: BTN.radius,
     paddingVertical: 12,
     alignItems: "center",
   },
@@ -217,8 +218,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   saveBtn: {
-    backgroundColor: "#ffffff",
-    borderRadius: 10,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     paddingVertical: 12,
     alignItems: "center",
   },
@@ -228,7 +229,7 @@ const styles = StyleSheet.create({
   saveBtnText: {
     fontSize: 15,
     fontWeight: "700",
-    color: "#002040",
+    color: "#fff",
   },
   backdrop: {
     flex: 1,
@@ -255,7 +256,7 @@ const styles = StyleSheet.create({
   option: {
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderRadius: 8,
+    borderRadius: BTN.radius,
   },
   optionText: {
     fontSize: 16,

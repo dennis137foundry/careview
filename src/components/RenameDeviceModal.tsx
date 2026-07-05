@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+﻿import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   Platform,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { BTN } from "../constants/buttons";
 
 interface RenameDeviceModalProps {
   visible: boolean;
@@ -63,7 +64,7 @@ export default function RenameDeviceModal({
   const getDeviceColor = (): string => {
     switch (deviceType) {
       case "BP":
-        return "#e53935";
+        return "#c62828";
       case "SCALE":
         return "#00acc1";
       case "BG":
@@ -218,20 +219,20 @@ const styles = StyleSheet.create({
   cancelButton: {
     flex: 1,
     paddingVertical: 14,
-    borderRadius: 30,
-    backgroundColor: "#f0f0f0",
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.quiet,
     alignItems: "center",
   },
   cancelButtonText: {
     fontSize: 16,
     fontWeight: "500",
-    color: "#666",
+    color: BTN.quietText,
   },
   saveButton: {
     flex: 1,
     paddingVertical: 14,
-    borderRadius: 30,
-    backgroundColor: "#00509f",
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.primary,
     alignItems: "center",
   },
   saveButtonDisabled: {

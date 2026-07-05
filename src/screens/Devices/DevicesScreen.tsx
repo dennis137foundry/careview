@@ -19,6 +19,7 @@ import { useToast } from "../../components/Toast";
 import RenameDeviceModal from "../../components/RenameDeviceModal";
 import type { RootState, AppDispatch } from "../../redux/store";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { BTN } from "../../constants/buttons";
 
 const deviceImages: Record<string, any> = {
   BP: require("../../assets/bp3l.png"),
@@ -431,10 +432,10 @@ const styles = StyleSheet.create({
   addButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#00509f",
+    backgroundColor: BTN.primary,
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 24,
+    borderRadius: BTN.radius,
     shadowColor: "#00509f",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
@@ -461,10 +462,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   deleteButton: {
-    backgroundColor: "#e53935",
+    backgroundColor: BTN.destructive,
     width: 70,
     height: "90%",
-    borderRadius: 12,
+    borderRadius: BTN.radius,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -573,10 +574,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1a1a2e",
+    backgroundColor: BTN.primary,
     paddingVertical: 10,
     paddingHorizontal: 18,
-    borderRadius: 24,
+    borderRadius: BTN.radius,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
@@ -621,10 +622,10 @@ const styles = StyleSheet.create({
   emptyAddButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#00509f",
+    backgroundColor: BTN.primary,
     paddingVertical: 14,
     paddingHorizontal: 24,
-    borderRadius: 30,
+    borderRadius: BTN.radius,
     shadowColor: "#00509f",
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.3,

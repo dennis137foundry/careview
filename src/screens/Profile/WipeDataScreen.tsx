@@ -1,4 +1,4 @@
-// src/screens/Profile/WipeDataScreen.tsx
+﻿// src/screens/Profile/WipeDataScreen.tsx
 import React, { useState } from "react";
 import {
   View,
@@ -17,6 +17,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logout } from "../../redux/userSlice";
 import { wipeAllPatientData } from "../../services/sqliteService";
 import type { AppDispatch } from "../../redux/store";
+import { BTN } from "../../constants/buttons";
 
 export default function WipeDataScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
@@ -85,7 +86,7 @@ export default function WipeDataScreen({ navigation }: any) {
       >
         {/* Warning icon */}
         <View style={styles.warningIconContainer}>
-          <MaterialIcons name="warning" size={48} color="#e53935" />
+          <MaterialIcons name="warning" size={48} color={BTN.destructive} />
         </View>
 
         {/* Explanation card */}
@@ -93,7 +94,7 @@ export default function WipeDataScreen({ navigation }: any) {
           <Text style={styles.cardTitle}>Before You Continue</Text>
 
           <View style={styles.bulletRow}>
-            <MaterialIcons name="cloud-done" size={20} color="#0066CC" />
+            <MaterialIcons name="cloud-done" size={20} color={BTN.link} />
             <Text style={styles.bulletText}>
               Measurements and readings collected by this app are synced to
               Trinity CareView EMR for retention and reporting.
@@ -101,7 +102,7 @@ export default function WipeDataScreen({ navigation }: any) {
           </View>
 
           <View style={styles.bulletRow}>
-            <MaterialIcons name="phone-android" size={20} color="#0066CC" />
+            <MaterialIcons name="phone-android" size={20} color={BTN.link} />
             <Text style={styles.bulletText}>
               This feature will only clear measurements and readings collected on
               the local device — not the EMR.
@@ -109,14 +110,14 @@ export default function WipeDataScreen({ navigation }: any) {
           </View>
 
           <View style={styles.bulletRow}>
-            <MaterialIcons name="sync-problem" size={20} color="#e53935" />
+            <MaterialIcons name="sync-problem" size={20} color={BTN.destructive} />
             <Text style={[styles.bulletText, styles.warningText]}>
               Any unsynced readings will be lost.
             </Text>
           </View>
 
           <View style={styles.bulletRow}>
-            <MaterialIcons name="delete-forever" size={20} color="#e53935" />
+            <MaterialIcons name="delete-forever" size={20} color={BTN.destructive} />
             <Text style={[styles.bulletText, styles.warningText]}>
               Wiped data cannot be retrieved.
             </Text>
@@ -125,7 +126,7 @@ export default function WipeDataScreen({ navigation }: any) {
           <View style={styles.divider} />
 
           <View style={styles.bulletRow}>
-            <MaterialIcons name="support-agent" size={20} color="#0066CC" />
+            <MaterialIcons name="support-agent" size={20} color={BTN.link} />
             <Text style={styles.bulletText}>
               For more information, contact Trinity Home Health Services for
               additional guidance.
@@ -276,8 +277,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   checkboxChecked: {
-    backgroundColor: "#e53935",
-    borderColor: "#e53935",
+    backgroundColor: BTN.destructive,
+    borderColor: BTN.destructive,
   },
   checkboxLabel: {
     flex: 1,
@@ -289,11 +290,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#e53935",
-    borderRadius: 12,
+    backgroundColor: BTN.destructive,
+    borderRadius: BTN.radius,
     paddingVertical: 16,
     gap: 10,
-    shadowColor: "#e53935",
+    shadowColor: BTN.destructive,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,

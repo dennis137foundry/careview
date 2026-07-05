@@ -15,6 +15,7 @@ import { useDispatch } from "react-redux";
 import authService from "../../services/authService";
 import { login } from "../../redux/userSlice";
 import { useToast } from "../../components/Toast";
+import { BTN } from "../../constants/buttons";
 
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RouteProp } from "@react-navigation/native";
@@ -288,8 +289,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#eef3ff",
   },
   button: {
-    backgroundColor: "#002040",
-    borderRadius: 30,
+    backgroundColor: BTN.primary,
+    borderRadius: BTN.radius,
     paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",

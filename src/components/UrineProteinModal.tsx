@@ -14,6 +14,7 @@ import {
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { saveScreeningResponse } from "../services/sqliteService";
 import { syncPendingScreening } from "../services/vitalsSyncService";
+import { BTN } from "../constants/buttons";
 
 // Urine protein test result options
 const PROTEIN_OPTIONS = [
@@ -198,7 +199,7 @@ export default function UrineProteinModal({
               onPress={handleDefer}
               activeOpacity={0.7}
             >
-              <MaterialIcons name="schedule" size={18} color="#666" />
+              <MaterialIcons name="schedule" size={18} color={BTN.quietText} />
               <Text style={styles.deferButtonText}>Answer Later</Text>
             </TouchableOpacity>
           </View>
@@ -282,7 +283,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     width: "48%",
     padding: 12,
-    borderRadius: 12,
+    borderRadius: BTN.radius,
     borderWidth: 2,
     borderColor: "#e0e0e0",
     backgroundColor: "#fafafa",
@@ -321,9 +322,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#9C27B0",
+    backgroundColor: BTN.primary,
     padding: 16,
-    borderRadius: 30,
+    borderRadius: BTN.radius,
     gap: 8,
   },
   submitButtonDisabled: {
@@ -339,13 +340,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 14,
-    borderRadius: 30,
-    backgroundColor: "#f5f5f5",
+    borderRadius: BTN.radius,
+    backgroundColor: BTN.quiet,
     gap: 6,
   },
   deferButtonText: {
     fontSize: 15,
-    color: "#666",
+    color: BTN.quietText,
     fontWeight: "500",
   },
   reminderNote: {
