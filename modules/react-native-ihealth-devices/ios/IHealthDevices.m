@@ -1269,115 +1269,78 @@ RCT_EXPORT_MODULE();
 #pragma mark - BP Handlers
 
 - (void)handleBP3LConnected:(BP3L *)bp mac:(NSString *)mac {
-    [self sendDebugLog:@"🩺 BP3L: Reading battery, then starting measurement..."];
+    [self sendDebugLog:@"🩺 BP3L: Starting measurement..."];
 
-    // SERIALIZED on purpose. The SDK/device handles one command at a time —
-    // firing commandEnergy and commandStartMeasure back-to-back made the
-    // round-trips collide: the BP3L connected, choked, and dropped the link
-    // before measuring (and the battery reply was lost too). Battery first,
-    // measurement from its callback, 2s failsafe so measurement always runs.
-    __block BOOL measureStarted = NO;
-    void (^startMeasure)(void) = ^{
-        if (measureStarted) return;
-        measureStarted = YES;
-        [self sendDebugLog:@"🩺 BP3L: Starting measurement..."];
-        [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
-            [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP3L RESULT: %@", r]];
-            [self sendEventSafe:@"onBloodPressureReading" body:@{
-                @"mac": mac, @"type": @"BP3L",
-                @"systolic": r[@"sys"] ?: @0, @"diastolic": r[@"dia"] ?: @0,
-                @"pulse": r[@"heartRate"] ?: @0, @"irregular": r[@"irregular"] ?: @NO,
-                @"source": @"iHealthSDK", @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
-            }];
-        } errorBlock:^(BPDeviceError e) {
-            [self sendDebugLog:[NSString stringWithFormat:@"❌ BP3L error: %d", (int)e]];
-            [self sendEventSafe:@"onError" body:@{@"mac": mac, @"type": @"BP3L", @"error": @(e)}];
+    // Measurement FIRST — the original, proven behavior. Per the SDK docs,
+    // commandStartMeasure is what "establishes the measurement connection";
+    // sending commandEnergy before or alongside it makes the BP3L drop the
+    // link ~1s after connecting (light on, then dead — observed in the
+    // field). Battery is queried best-effort AFTER the result is delivered,
+    // while the link is still up; if the device disconnects first we simply
+    // don't get a level this cycle.
+    [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
+        [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP3L RESULT: %@", r]];
+        [self sendEventSafe:@"onBloodPressureReading" body:@{
+            @"mac": mac, @"type": @"BP3L",
+            @"systolic": r[@"sys"] ?: @0, @"diastolic": r[@"dia"] ?: @0,
+            @"pulse": r[@"heartRate"] ?: @0, @"irregular": r[@"irregular"] ?: @NO,
+            @"source": @"iHealthSDK", @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
         }];
-    };
-
-    [bp commandEnergy:^(NSNumber *energyValue) {
-        [self emitBatteryForMac:mac type:@"BP3L" level:energyValue];
-        startMeasure();
+        // Reading is safely delivered — battery is a bonus from here.
+        [bp commandEnergy:^(NSNumber *energyValue) {
+            [self emitBatteryForMac:mac type:@"BP3L" level:energyValue];
+        } errorBlock:^(BPDeviceError e) {
+            [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP3L battery query error: %d", (int)e]];
+        }];
     } errorBlock:^(BPDeviceError e) {
-        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP3L battery query error: %d", (int)e]];
-        startMeasure();
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ BP3L error: %d", (int)e]];
+        [self sendEventSafe:@"onError" body:@{@"mac": mac, @"type": @"BP3L", @"error": @(e)}];
     }];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        startMeasure();
-    });
 }
 
 - (void)handleBP5Connected:(BP5 *)bp mac:(NSString *)mac {
-    [self sendDebugLog:@"🩺 BP5: Reading battery, then starting measurement..."];
+    [self sendDebugLog:@"🩺 BP5: Starting measurement..."];
 
-    // Serialized like BP3L — see handleBP3LConnected for why.
-    __block BOOL measureStarted = NO;
-    void (^startMeasure)(void) = ^{
-        if (measureStarted) return;
-        measureStarted = YES;
-        [self sendDebugLog:@"🩺 BP5: Starting measurement..."];
-        [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
-            [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP5 RESULT: %@", r]];
-            [self sendEventSafe:@"onBloodPressureReading" body:@{
-                @"mac": mac, @"type": @"BP5",
-                @"systolic": r[@"sys"] ?: @0, @"diastolic": r[@"dia"] ?: @0,
-                @"pulse": r[@"heartRate"] ?: @0, @"irregular": r[@"irregular"] ?: @NO,
-                @"source": @"iHealthSDK", @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
-            }];
-        } errorBlock:^(BPDeviceError e) {
-            [self sendEventSafe:@"onError" body:@{@"mac": mac, @"type": @"BP5", @"error": @(e)}];
+    // Measurement first, battery after the result — see handleBP3LConnected.
+    [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
+        [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP5 RESULT: %@", r]];
+        [self sendEventSafe:@"onBloodPressureReading" body:@{
+            @"mac": mac, @"type": @"BP5",
+            @"systolic": r[@"sys"] ?: @0, @"diastolic": r[@"dia"] ?: @0,
+            @"pulse": r[@"heartRate"] ?: @0, @"irregular": r[@"irregular"] ?: @NO,
+            @"source": @"iHealthSDK", @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
         }];
-    };
-
-    // commandEnergy is inherited from BP7. Best-effort.
-    [bp commandEnergy:^(NSNumber *energyValue) {
-        [self emitBatteryForMac:mac type:@"BP5" level:energyValue];
-        startMeasure();
+        [bp commandEnergy:^(NSNumber *energyValue) {
+            [self emitBatteryForMac:mac type:@"BP5" level:energyValue];
+        } errorBlock:^(BPDeviceError e) {
+            [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP5 battery query error: %d", (int)e]];
+        }];
     } errorBlock:^(BPDeviceError e) {
-        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP5 battery query error: %d", (int)e]];
-        startMeasure();
+        [self sendEventSafe:@"onError" body:@{@"mac": mac, @"type": @"BP5", @"error": @(e)}];
     }];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        startMeasure();
-    });
 }
 
 - (void)handleBP5SConnected:(BP5S *)bp mac:(NSString *)mac {
-    [self sendDebugLog:@"🩺 BP5S: Reading battery, then starting measurement..."];
+    [self sendDebugLog:@"🩺 BP5S: Starting measurement..."];
 
-    // Serialized like BP3L — see handleBP3LConnected for why.
-    __block BOOL measureStarted = NO;
-    void (^startMeasure)(void) = ^{
-        if (measureStarted) return;
-        measureStarted = YES;
-        [self sendDebugLog:@"🩺 BP5S: Starting measurement..."];
-        [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
-            [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP5S RESULT: %@", r]];
-            [self sendEventSafe:@"onBloodPressureReading" body:@{
-                @"mac": mac, @"type": @"BP5S",
-                @"systolic": r[@"sys"] ?: @0, @"diastolic": r[@"dia"] ?: @0,
-                @"pulse": r[@"heartRate"] ?: @0, @"irregular": r[@"irregular"] ?: @NO,
-                @"source": @"iHealthSDK", @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
-            }];
-        } errorBlock:^(BPDeviceError e) {
-            [self sendEventSafe:@"onError" body:@{@"mac": mac, @"type": @"BP5S", @"error": @(e)}];
+    // Measurement first, battery after the result — see handleBP3LConnected.
+    [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
+        [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP5S RESULT: %@", r]];
+        [self sendEventSafe:@"onBloodPressureReading" body:@{
+            @"mac": mac, @"type": @"BP5S",
+            @"systolic": r[@"sys"] ?: @0, @"diastolic": r[@"dia"] ?: @0,
+            @"pulse": r[@"heartRate"] ?: @0, @"irregular": r[@"irregular"] ?: @NO,
+            @"source": @"iHealthSDK", @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
         }];
-    };
-
-    // BP5S battery command carries an extra charging-state block. Best-effort.
-    [bp commandEnergy:^(NSNumber *energyValue) {
-        [self emitBatteryForMac:mac type:@"BP5S" level:energyValue];
-        startMeasure();
-    } energyState:^(NSNumber *energyState){} errorBlock:^(BPDeviceError e) {
-        [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP5S battery query error: %d", (int)e]];
-        startMeasure();
+        // BP5S battery command carries an extra charging-state block.
+        [bp commandEnergy:^(NSNumber *energyValue) {
+            [self emitBatteryForMac:mac type:@"BP5S" level:energyValue];
+        } energyState:^(NSNumber *energyState){} errorBlock:^(BPDeviceError e) {
+            [self sendDebugLog:[NSString stringWithFormat:@"⚠️ BP5S battery query error: %d", (int)e]];
+        }];
+    } errorBlock:^(BPDeviceError e) {
+        [self sendEventSafe:@"onError" body:@{@"mac": mac, @"type": @"BP5S", @"error": @(e)}];
     }];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        startMeasure();
-    });
 }
 
 #pragma mark - Scale Handlers
