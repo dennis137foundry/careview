@@ -84,7 +84,17 @@ function seedDemoDevices(): void {
     source: "iHealthSDK",
   });
 
-  console.log("[Demo] Devices seeded (BP5S, HS2S)");
+  saveDevice({
+    id: "demo_bg5s",
+    name: "iHealth BG5S",
+    type: "BG",
+    mac: "AA:BB:CC:DD:EE:03",
+    model: "BG5S",
+    friendlyName: "Glucose Meter",
+    source: "iHealthSDK",
+  });
+
+  console.log("[Demo] Devices seeded (BP5S, HS2S, BG5S)");
 }
 
 // ============================================================================
@@ -184,6 +194,73 @@ function seedWeight(): number {
       synced: true,
     });
     count++;
+  }
+
+  return count;
+}
+
+// ============================================================================
+// Blood Glucose Seeder
+// ============================================================================
+// Pattern: gestational-diabetes monitoring. Fasting ~88 creeping to ~98,
+// post-meal ~120 creeping to ~140 over 60 days (insulin resistance rises
+// through the third trimester). Fasting reading most days plus 1–2
+// post-meal checks, ~10% missed days.
+
+function seedGlucose(): number {
+  let count = 0;
+
+  const postMealTimings: Array<{ label: string; hour: [number, number] }> = [
+    { label: "After breakfast", hour: [8, 10] },
+    { label: "After lunch", hour: [13, 14] },
+    { label: "After dinner", hour: [19, 21] },
+  ];
+
+  for (let day = DAYS; day >= 0; day--) {
+    // ~10% chance of skipping a day
+    if (chance(0.1)) continue;
+
+    // Fasting reading (morning, before breakfast)
+    const baseFasting = lerp(88, 98, DAYS - day);
+    const fasting = Math.round(baseFasting + randFloat(-6, 6));
+
+    saveReading({
+      id: `demo_bg_${day}_fast`,
+      deviceId: "demo_bg5s",
+      deviceName: "iHealth BG5S",
+      type: "BG",
+      value: fasting,
+      unit: "mg/dL",
+      ts: makeTimestamp(day, randInt(6, 7)),
+      synced: true,
+      measurementCondition: "Before breakfast",
+    });
+    count++;
+
+    // 1–2 post-meal readings on ~85% of logged days
+    if (chance(0.85)) {
+      const basePostMeal = lerp(120, 140, DAYS - day);
+      const picks = chance(0.4) ? 2 : 1;
+      const shuffled = [...postMealTimings].sort(() => Math.random() - 0.5);
+
+      for (let i = 0; i < picks; i++) {
+        const timing = shuffled[i];
+        const value = Math.round(basePostMeal + randFloat(-12, 12));
+
+        saveReading({
+          id: `demo_bg_${day}_meal${i}`,
+          deviceId: "demo_bg5s",
+          deviceName: "iHealth BG5S",
+          type: "BG",
+          value,
+          unit: "mg/dL",
+          ts: makeTimestamp(day, randInt(timing.hour[0], timing.hour[1])),
+          synced: true,
+          measurementCondition: timing.label,
+        });
+        count++;
+      }
+    }
   }
 
   return count;
@@ -364,6 +441,7 @@ export function seedDemoData(): void {
 
   const bpCount = seedBloodPressure();
   const weightCount = seedWeight();
+  const glucoseCount = seedGlucose();
   const checkCount = seedDailyHealthChecks();
   const urineCount = seedUrineProtein();
 
@@ -385,6 +463,7 @@ export function seedDemoData(): void {
   console.log("============================================");
   console.log(`  BP readings:          ${bpCount}`);
   console.log(`  Weight readings:      ${weightCount}`);
+  console.log(`  Glucose readings:     ${glucoseCount}`);
   console.log(`  Daily health checks:  ${checkCount}`);
   console.log(`  Urine protein:        ${urineCount}`);
   console.log("============================================");

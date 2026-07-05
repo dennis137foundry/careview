@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  TextInput,
   Linking,
   Platform,
   StatusBar,
@@ -89,10 +88,10 @@ export default function AddDeviceScreen() {
   const [showCuffModal, setShowCuffModal] = useState(false);
   const [pendingCuffSize, setPendingCuffSize] = useState<CuffSize | null>(null);
 
-  // Friendly name modal
-  const [showNameModal, setShowNameModal] = useState(false);
+  // Device selected from the scan list, awaiting cuff-size choice (BP only).
+  // Devices are added with their default name — RenameDeviceModal on the
+  // Devices screen handles customization later, so pairing stays quick.
   const [pendingDevice, setPendingDevice] = useState<DiscoveredDevice | null>(null);
-  const [friendlyName, setFriendlyName] = useState("");
 
   const subscriptionsRef = useRef<any[]>([]);
   const cameraDevice = useCameraDevice("back");
@@ -215,7 +214,7 @@ export default function AddDeviceScreen() {
   };
 
   // Handle device selection — BP devices get a cuff-size picker first,
-  // scales skip straight to the friendly-name modal.
+  // everything else is added immediately with its default name.
   const handleSelectDevice = (device: DiscoveredDevice) => {
     const category = device.category || deviceService.getCategory(device.type);
 
@@ -230,7 +229,6 @@ export default function AddDeviceScreen() {
     }
 
     setPendingDevice(device);
-    setFriendlyName(device.name || deviceService.getFriendlyTypeName(device.type));
 
     if (category === "BP") {
       // Ask the nurse which cuff is on this monitor. The BLE hardware
@@ -238,17 +236,18 @@ export default function AddDeviceScreen() {
       setPendingCuffSize(null);
       setShowCuffModal(true);
     } else {
-      // No cuff size, go straight to naming.
-      setPendingCuffSize(null);
-      setShowNameModal(true);
+      // No cuff size to pick — add right away. Rename later if desired.
+      confirmAddDevice(device, null);
     }
   };
 
-  // Nurse picks a cuff size → dismiss cuff modal, open name modal.
+  // Nurse picks a cuff size → add immediately with the default name.
   const handleCuffSizeSelected = (size: CuffSize) => {
     setPendingCuffSize(size);
     setShowCuffModal(false);
-    setShowNameModal(true);
+    if (pendingDevice) {
+      confirmAddDevice(pendingDevice, size);
+    }
   };
 
   // Confirm device addition: save locally, then register with the EMR
@@ -257,26 +256,27 @@ export default function AddDeviceScreen() {
   //   5xx / network   → keep paired locally, background sweep retries
   //   401 / 422       → keep paired locally but log; won't succeed
   //   200             → store unit IDs, continue
-  const confirmAddDevice = async () => {
-    if (!pendingDevice) return;
+  const confirmAddDevice = async (
+    device: DiscoveredDevice,
+    cuffSize: CuffSize | null
+  ) => {
+    setConnecting(device.mac);
 
-    setShowNameModal(false);
-    setConnecting(pendingDevice.mac);
-
-    const category = pendingDevice.category || deviceService.getCategory(pendingDevice.type);
-    const normalizedMac = normalizeMac(pendingDevice.mac);
+    const category = device.category || deviceService.getCategory(device.type);
+    const normalizedMac = normalizeMac(device.mac);
     const localId = `device_${normalizedMac}`;
-    const finalFriendlyName = friendlyName.trim() || pendingDevice.name || pendingDevice.type;
+    const finalFriendlyName =
+      device.name || deviceService.getFriendlyTypeName(device.type) || device.type;
 
     const deviceRecord: DeviceRecord = {
       id: localId,
-      name: pendingDevice.name || pendingDevice.type,
+      name: device.name || device.type,
       type: category,
-      mac: pendingDevice.mac,
-      model: pendingDevice.type,
+      mac: device.mac,
+      model: device.type,
       friendlyName: finalFriendlyName,
-      source: pendingDevice.source,
-      cuffSize: category === "BP" ? (pendingCuffSize ?? "STANDARD") : null,
+      source: device.source,
+      cuffSize: category === "BP" ? (cuffSize ?? "STANDARD") : null,
       emrUnitId: null,
       emrAccessoryUnitId: null,
     };
@@ -302,11 +302,11 @@ export default function AddDeviceScreen() {
           mac: normalizedMac,
           category,
           cuff_size:
-            category === "BP" ? (pendingCuffSize ?? "STANDARD") : undefined,
-          model: pendingDevice.type,
+            category === "BP" ? (cuffSize ?? "STANDARD") : undefined,
+          model: device.type,
           name: deviceRecord.name,
           friendly_name: finalFriendlyName,
-          source: pendingDevice.source ?? "iHealthSDK",
+          source: device.source ?? "iHealthSDK",
         });
 
         if (result.kind === "success") {
@@ -355,7 +355,6 @@ export default function AddDeviceScreen() {
       setConnecting(null);
       setPendingDevice(null);
       setPendingCuffSize(null);
-      setFriendlyName("");
     }
   };
 
@@ -408,10 +407,15 @@ export default function AddDeviceScreen() {
       source: "iHealthSDK",
     };
 
-    // Show name modal for QR-scanned device
+    // Same flow as scan-list selection: cuff picker for BP, otherwise
+    // add immediately with the default name.
     setPendingDevice(device);
-    setFriendlyName(device.name);
-    setShowNameModal(true);
+    if (category === "BP") {
+      setPendingCuffSize(null);
+      setShowCuffModal(true);
+    } else {
+      confirmAddDevice(device, null);
+    }
   };
 
   // Get icon for device type
@@ -685,69 +689,6 @@ export default function AddDeviceScreen() {
         </View>
       </Modal>
 
-      {/* Friendly Name Modal */}
-      <Modal visible={showNameModal} transparent animationType="fade">
-        <View style={styles.nameModalOverlay}>
-          <View style={styles.nameModalContainer}>
-            <Text style={styles.nameModalTitle}>Name Your Device</Text>
-            <Text style={styles.nameModalSubtitle}>
-              Give this device a friendly name to help identify it
-            </Text>
-
-            <TextInput
-              style={styles.nameInput}
-              value={friendlyName}
-              onChangeText={setFriendlyName}
-              placeholder="e.g., Living Room Scale"
-              placeholderTextColor="#999"
-              maxLength={30}
-              autoFocus
-            />
-
-            {pendingDevice && (
-              <View style={styles.devicePreview}>
-                <View style={[styles.previewIcon, { backgroundColor: `${getDeviceColor(pendingDevice.type)}20` }]}>
-                  <MaterialIcons
-                    name={getDeviceIcon(pendingDevice.type)}
-                    size={20}
-                    color={getDeviceColor(pendingDevice.type)}
-                  />
-                </View>
-                <View style={styles.previewInfo}>
-                  <Text style={styles.previewType}>
-                    {deviceService.getFriendlyTypeName(pendingDevice.type)}
-                  </Text>
-                  <Text style={styles.previewMac}>Serial: {pendingDevice.mac}</Text>
-                </View>
-                {pendingDevice.source === "BLE_GATT" && (
-                  <View style={styles.sourceBadge}>
-                    <Text style={styles.sourceBadgeText}>BLE</Text>
-                  </View>
-                )}
-              </View>
-            )}
-
-            <View style={styles.nameModalButtons}>
-              <TouchableOpacity
-                style={styles.nameModalCancel}
-                onPress={() => {
-                  setShowNameModal(false);
-                  setPendingDevice(null);
-                  setFriendlyName("");
-                }}
-              >
-                <Text style={styles.nameModalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.nameModalConfirm}
-                onPress={confirmAddDevice}
-              >
-                <Text style={styles.nameModalConfirmText}>Add Device</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
