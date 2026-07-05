@@ -1,4 +1,4 @@
-# Trinity CareView - Project Documentation
+﻿# Trinity CareView - Project Documentation
 
 ## Overview
 
@@ -58,9 +58,9 @@ src/
     HistoryNavigator.tsx    - History stack
     ProfileNavigator.tsx    - Profile stack (profile + wipe data)
   constants/
-    pregnancyTips.ts   - 280 daily pregnancy wellness tips
+    pregnancyFacts.ts  - EDD-aligned daily facts (294 day-keyed + 42 postpartum)
   utils/
-    getDailyTip.ts     - Rotating daily tip selector
+    getDailyFact.ts    - Pregnancy-day-aligned fact selector (EDD-based)
 modules/
   react-native-ihealth-devices/   - Custom native BLE module
     src/                          - TypeScript bridge (manager, hooks, types)
@@ -260,3 +260,4 @@ npx react-native run-ios
 - iHealth SDK included as static library: `libiHealthSDK2.14.0.a`
 - Frameworks: CoreBluetooth, ExternalAccessory
 - License file: `com_trinitycareview_app_ios.pem`
+

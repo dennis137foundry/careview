@@ -1,5 +1,11 @@
 import { createSlice, PayloadAction, createAsyncThunk } from "@reduxjs/toolkit";
-import { getUser, clearUser, LocalUser } from "../services/sqliteService";
+import {
+  getUser,
+  clearUser,
+  updateUserEdd,
+  LocalUser,
+  EddSource,
+} from "../services/sqliteService";
 
 // ----------------------------------
 // State type definition
@@ -21,6 +27,11 @@ interface UserState {
   providerFirstName?: string;
   providerLastName?: string;
   providerPracticeName?: string;
+
+  // Estimated due date "YYYY-MM-DD" — aligns the dashboard daily facts to
+  // the pregnancy. 'emr' source wins over 'patient'.
+  edd?: string | null;
+  eddSource?: EddSource | null;
 
   // BP Thresholds from physician
   bpThresholds: BPThresholds;
@@ -70,6 +81,8 @@ const userSlice = createSlice({
       state.providerFirstName = u.providerFirstName;
       state.providerLastName = u.providerLastName;
       state.providerPracticeName = u.providerPracticeName;
+      state.edd = u.edd ?? null;
+      state.eddSource = u.eddSource ?? null;
       state.loading = false;
 
       // Set BP thresholds from login response
@@ -91,6 +104,8 @@ const userSlice = createSlice({
       state.providerFirstName = u.providerFirstName;
       state.providerLastName = u.providerLastName;
       state.providerPracticeName = u.providerPracticeName;
+      state.edd = u.edd ?? null;
+      state.eddSource = u.eddSource ?? null;
       state.loading = false;
 
       // Set BP thresholds
@@ -103,6 +118,27 @@ const userSlice = createSlice({
     // --- Update BP thresholds separately (e.g., from a refresh) ---
     setBPThresholds: (state, action: PayloadAction<BPThresholds>) => {
       state.bpThresholds = action.payload;
+    },
+
+    // --- Set/replace the due date (persists to SQLite too).
+    // 'emr' (login or daily profile refresh) always overwrites; 'patient'
+    // (typed into the dashboard card) never overwrites an 'emr' value.
+    setEdd: (
+      state,
+      action: PayloadAction<{ edd: string; source: EddSource }>
+    ) => {
+      const { edd, source } = action.payload;
+      if (source === "patient" && state.eddSource === "emr") {
+        return; // EMR wins — ignore a patient value over a clinician one
+      }
+      try {
+        updateUserEdd(edd, source);
+      } catch (e) {
+        console.error("[User] Failed to persist EDD:", e);
+        return; // Don't let Redux and SQLite disagree
+      }
+      state.edd = edd;
+      state.eddSource = source;
     },
 
     // --- Logout clears state + SQLite ---
@@ -121,6 +157,8 @@ const userSlice = createSlice({
       state.providerFirstName = undefined;
       state.providerLastName = undefined;
       state.providerPracticeName = undefined;
+      state.edd = null;
+      state.eddSource = null;
       state.loading = false;
       state.bpThresholds = {
         systolicHigh: 140,
@@ -143,6 +181,8 @@ const userSlice = createSlice({
         state.providerFirstName = u.providerFirstName;
         state.providerLastName = u.providerLastName;
         state.providerPracticeName = u.providerPracticeName;
+        state.edd = u.edd ?? null;
+        state.eddSource = u.eddSource ?? null;
 
         // Restore BP thresholds from SQLite
         state.bpThresholds = {
@@ -186,5 +226,5 @@ export const getBPColor = (
 // ----------------------------------
 // Exports
 // ----------------------------------
-export const { login, logout, setUser, setBPThresholds } = userSlice.actions;
+export const { login, logout, setUser, setBPThresholds, setEdd } = userSlice.actions;
 export default userSlice.reducer;

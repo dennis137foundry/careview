@@ -20,7 +20,7 @@
 // All seeded readings are marked synced = true so they don't trigger uploads.
 // ============================================================================
 
-import { saveReading, saveDevice } from "./sqliteService";
+import { saveReading, saveDevice, updateUserEdd } from "./sqliteService";
 import type { DailyHealthCheckData, UrineProteinData } from "./sqliteService";
 
 const DEMO_PHONE = "5550001234";
@@ -366,6 +366,19 @@ export function seedDemoData(): void {
   const weightCount = seedWeight();
   const checkCount = seedDailyHealthChecks();
   const urineCount = seedUrineProtein();
+
+  // Demo EDD: ~week 32 (day 224), i.e. 56 days from now, so the dashboard
+  // shows third-trimester facts. 'patient' source — a real EMR EDD would
+  // still win if the demo patient ever gets one.
+  try {
+    const eddDate = new Date(Date.now() + 56 * 24 * 60 * 60 * 1000);
+    const mm = String(eddDate.getMonth() + 1).padStart(2, "0");
+    const dd = String(eddDate.getDate()).padStart(2, "0");
+    updateUserEdd(`${eddDate.getFullYear()}-${mm}-${dd}`, "patient");
+    console.log("[Demo] Seeded EDD (~week 32)");
+  } catch (e) {
+    console.warn("[Demo] Failed to seed EDD:", e);
+  }
 
   console.log("============================================");
   console.log("  Demo Data Seeded");

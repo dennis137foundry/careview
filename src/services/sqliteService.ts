@@ -21,7 +21,9 @@ export function initDB() {
       systolicHigh INTEGER DEFAULT 140,
       diastolicHigh INTEGER DEFAULT 90,
       authToken TEXT,
-      refreshToken TEXT
+      refreshToken TEXT,
+      edd TEXT DEFAULT NULL,
+      eddSource TEXT DEFAULT NULL
     );
   `);
 
@@ -48,6 +50,21 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE user ADD COLUMN refreshToken TEXT;");
     console.log("[DB] Added 'refreshToken' column to user");
+  } catch (e) {
+    // Column already exists
+  }
+  // Migration: estimated due date ("YYYY-MM-DD") + where it came from
+  // ('emr' from login/profile refresh, 'patient' typed into the dashboard
+  // card). Drives the pregnancy-aligned daily facts.
+  try {
+    db.execute("ALTER TABLE user ADD COLUMN edd TEXT DEFAULT NULL;");
+    console.log("[DB] Added 'edd' column to user");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE user ADD COLUMN eddSource TEXT DEFAULT NULL;");
+    console.log("[DB] Added 'eddSource' column to user");
   } catch (e) {
     // Column already exists
   }
@@ -213,7 +230,13 @@ export interface LocalUser {
   diastolicHigh?: number;
   authToken?: string | null;
   refreshToken?: string | null;
+  // Estimated due date "YYYY-MM-DD". 'emr' wins over 'patient' — a
+  // clinician-verified EDD always overwrites a patient-entered one.
+  edd?: string | null;
+  eddSource?: EddSource | null;
 }
+
+export type EddSource = "emr" | "patient";
 
 export function saveUser(u: LocalUser) {
   // Writes throw on failure. Callers (authService.verifyCode) must catch and
@@ -222,8 +245,8 @@ export function saveUser(u: LocalUser) {
   db.execute("DELETE FROM user;");
   db.execute(
     `INSERT INTO user
-     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken, edd, eddSource)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
     [
       u.patientId,
       u.firstName,
@@ -236,6 +259,8 @@ export function saveUser(u: LocalUser) {
       u.diastolicHigh ?? 90,
       u.authToken ?? null,
       u.refreshToken ?? null,
+      u.edd ?? null,
+      u.eddSource ?? null,
     ]
   );
   // Patient ID — dev only.
@@ -256,6 +281,17 @@ export function updateAuthTokens(authToken: string | null, refreshToken: string 
   ]);
 }
 
+/**
+ * Update only the due date on the existing user row. Targeted UPDATE so
+ * tokens/thresholds are untouched. Throws on failure — callers surface it.
+ */
+export function updateUserEdd(edd: string | null, source: EddSource | null) {
+  db.execute("UPDATE user SET edd = ?, eddSource = ?;", [edd, source]);
+  if (__DEV__) {
+    console.log(`[DB] EDD updated: ${edd} (${source})`);
+  }
+}
+
 export function clearUser() {
   try {
     db.execute("DELETE FROM user;");
@@ -268,7 +304,7 @@ export function clearUser() {
 export async function getUser(): Promise<LocalUser | null> {
   try {
     const res = db.execute(
-      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken FROM user LIMIT 1;"
+      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken, edd, eddSource FROM user LIMIT 1;"
     );
     if (!res.rows || res.rows.length === 0) return null;
 

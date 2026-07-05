@@ -5,10 +5,11 @@ import type { AppDispatch } from "./src/redux/store";
 import { NavigationContainer, DefaultTheme } from "@react-navigation/native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import RNBootSplash from "react-native-bootsplash";
-import { StatusBar } from "react-native";
+import { AppState, StatusBar } from "react-native";
 import { store } from "./src/redux/store";
 import { initDB } from "./src/services/sqliteService";
-import { loadUser, logout } from "./src/redux/userSlice";
+import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
+import { checkDailyProfileRefresh } from "./src/services/profileRefreshService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
 import {
   loadAuthTokensFromStorage,
@@ -21,6 +22,22 @@ const MyTheme = {
   ...DefaultTheme,
   colors: { ...DefaultTheme.colors, background: "#ffffff" },
 };
+
+// Once-a-day EMR profile check (EDD + BP thresholds). Internally
+// self-throttled to one call per 24h; safe to invoke on every launch
+// and foreground. EMR-sourced EDD always overwrites a patient-entered one.
+async function runProfileRefresh() {
+  const { user } = store.getState();
+  if (!user.isAuthenticated) return;
+
+  const result = await checkDailyProfileRefresh(user.phone);
+  if (!result) return;
+
+  if (result.edd) {
+    store.dispatch(setEdd({ edd: result.edd, source: "emr" }));
+  }
+  store.dispatch(setBPThresholds(result.bpThresholds));
+}
 
 function RootApp() {
   const dispatch = useDispatch<AppDispatch>();
@@ -51,11 +68,23 @@ function RootApp() {
       cleanupSync = initializeVitalsSync();
 
       RNBootSplash.hide({ fade: true });
+
+      // After splash — never blocks startup. Fire-and-forget.
+      runProfileRefresh();
     };
     init();
 
+    // Re-check when the app returns to the foreground (self-throttled
+    // to once per 24h inside the service).
+    const appStateSub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        runProfileRefresh();
+      }
+    });
+
     // Cleanup on unmount
     return () => {
+      appStateSub.remove();
       if (cleanupSync) {
         cleanupSync();
       }

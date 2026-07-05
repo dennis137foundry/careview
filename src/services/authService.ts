@@ -202,6 +202,8 @@ const authService = {
         diastolicHigh,
         authToken: data.token ?? null,
         refreshToken: data.refreshToken ?? null,
+        edd: data.patient?.edd ?? null,
+        eddSource: data.patient?.edd ? "emr" : null,
       };
 
       // ---------------------------------------------------------------
@@ -226,6 +228,12 @@ const authService = {
           // Clear cached in-memory tokens too so no stale Bearer header
           // fires between the wipe and the new saveUser below.
           clearAuthTokens();
+        } else if (previousUser && !user.edd && previousUser.edd) {
+          // Same patient re-logging in and the EMR has no EDD: keep the
+          // due date she typed into the dashboard card. saveUser is
+          // DELETE+INSERT, so without this the local EDD would be lost.
+          user.edd = previousUser.edd;
+          user.eddSource = previousUser.eddSource ?? "patient";
         }
         saveUser(user);
         // Hydrate the in-memory token cache from the just-issued pair.

@@ -11,13 +11,14 @@ import {
 import LinearGradient from "react-native-linear-gradient";
 import { useSelector, useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { getDailyTip } from "../../utils/getDailyTip";
+import { getDailyFact } from "../../utils/getDailyFact";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { loadReadings } from "../../redux/readingSlice";
 import { loadDevices } from "../../redux/deviceSlice";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { AppDispatch, RootState } from "../../redux/store";
-import { isBPHigh } from "../../redux/userSlice";
+import { isBPHigh, setEdd } from "../../redux/userSlice";
+import DueDateForm from "../../components/DueDateForm";
 import {
   needsUrineProteinResponse,
   hasUrineProteinDeferredToday,
@@ -94,8 +95,16 @@ export default function DashboardScreen() {
   const user = useSelector((state: RootState) => state.user);
   const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
 
-  const [todayTip, setTodayTip] = useState<string>("");
   const [, setIsFirstLaunch] = useState<boolean>(false);
+
+  // Daily fact aligned to the pregnancy. Recomputed on focus so the fact
+  // rolls over at midnight without an app restart. Null → no usable EDD →
+  // the hero card shows the due-date form instead.
+  const dailyFact = React.useMemo(
+    () => (user.edd ? getDailyFact(user.edd) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [user.edd, isFocused]
+  );
 
   // Urine Protein Modal State
   const [showUrineIntro, setShowUrineIntro] = useState(false);
@@ -106,8 +115,6 @@ export default function DashboardScreen() {
   const [showHospitalModal, setShowHospitalModal] = useState(false);
 
   useEffect(() => {
-    getDailyTip().then(setTodayTip);
-
     // Check first launch status
     const firstLaunch = getIsFirstLaunch();
     setIsFirstLaunch(firstLaunch);
@@ -287,15 +294,36 @@ export default function DashboardScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Maternal Wellness Daily Tip — navy hero */}
+        {/* Maternal Wellness Daily Fact — navy hero. Aligned to the
+            pregnancy via EDD; asks for the due date when none is known. */}
         <LinearGradient
           colors={["#00325f", NAVY]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.hero}
         >
-          <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
-          <Text style={styles.heroTip}>{todayTip}</Text>
+          {dailyFact ? (
+            <>
+              <View style={styles.heroTagRow}>
+                <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
+                <View style={styles.heroWeekBadge}>
+                  <Text style={styles.heroWeekBadgeText}>
+                    {dailyFact.isPostpartum
+                      ? "After Delivery"
+                      : `Week ${dailyFact.week} • Day ${dailyFact.dayOfWeek}`}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.heroTip}>{dailyFact.fact}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
+              <DueDateForm
+                onSave={(edd) => dispatch(setEdd({ edd, source: "patient" }))}
+              />
+            </>
+          )}
         </LinearGradient>
 
         {/* Latest Readings */}
@@ -603,6 +631,23 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     color: "#9dc2ec",
     marginBottom: 8,
+  },
+  heroTagRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  heroWeekBadge: {
+    backgroundColor: "rgba(255,255,255,0.14)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    marginBottom: 8,
+  },
+  heroWeekBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#cfe3f7",
   },
   heroTip: {
     fontSize: 15,
