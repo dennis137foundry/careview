@@ -10,7 +10,6 @@ import {
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import { useSelector, useDispatch } from "react-redux";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { getDailyFact } from "../../utils/getDailyFact";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { loadReadings } from "../../redux/readingSlice";
@@ -85,10 +84,10 @@ export default function DashboardScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
-  const insets = useSafeAreaInsets();
 
-  // Light background at the top → dark (black) status-bar glyphs are readable.
-  useStatusBarStyle("dark-content");
+  // The navy CareView header (AppNavigator) sits behind the status bar on
+  // this screen — white glyphs, or the clock/signal disappear into it.
+  useStatusBarStyle("light-content");
 
   const readings = useSelector((state: RootState) => state.readings.items);
   const devices = useSelector((state: RootState) => state.devices.devices);
@@ -251,10 +250,9 @@ export default function DashboardScreen() {
   return (
     <View style={styles.root}>
       <ScrollView
-        contentContainerStyle={[
-          styles.scrollContainer,
-          { paddingTop: insets.top + 12 },
-        ]}
+        // The native stack header already consumes the safe-area top —
+        // adding insets.top again doubled the gap above the greeting.
+        contentContainerStyle={[styles.scrollContainer, { paddingTop: 16 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
@@ -305,16 +303,28 @@ export default function DashboardScreen() {
           {dailyFact ? (
             <>
               <View style={styles.heroTagRow}>
-                <Text style={styles.heroTag}>Maternal Wellness Daily</Text>
+                <Text
+                  style={[styles.heroTag, styles.heroTagInRow]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.15}
+                >
+                  Maternal Wellness Daily
+                </Text>
                 <View style={styles.heroWeekBadge}>
-                  <Text style={styles.heroWeekBadgeText}>
+                  <Text
+                    style={styles.heroWeekBadgeText}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.15}
+                  >
                     {dailyFact.isPostpartum
                       ? "After Delivery"
                       : `Week ${dailyFact.week} • Day ${dailyFact.dayOfWeek}`}
                   </Text>
                 </View>
               </View>
-              <Text style={styles.heroTip}>{dailyFact.fact}</Text>
+              <Text style={styles.heroTip} maxFontSizeMultiplier={1.3}>
+                {dailyFact.fact}
+              </Text>
             </>
           ) : (
             <>
@@ -506,7 +516,7 @@ export default function DashboardScreen() {
         <View style={{ height: 92 }} />
       </ScrollView>
 
-      {/* Docked, edge-to-edge New Reading button */}
+      {/* Docked New Reading button — floats above the tab bar */}
       <View style={styles.dock}>
         <TouchableOpacity
           activeOpacity={0.85}
@@ -521,7 +531,9 @@ export default function DashboardScreen() {
             style={styles.newReadingButton}
           >
             <MaterialIcons name="add-circle-outline" size={22} color="#fff" />
-            <Text style={styles.newReadingText}>New Reading</Text>
+            <Text style={styles.newReadingText} maxFontSizeMultiplier={1.2}>
+              New Reading
+            </Text>
           </LinearGradient>
         </TouchableOpacity>
       </View>
@@ -632,17 +644,25 @@ const styles = StyleSheet.create({
     color: "#9dc2ec",
     marginBottom: 8,
   },
+  // Row variant: flex+shrink so the uppercase tag gives way to the week
+  // badge instead of pushing it off the card at larger font sizes.
+  heroTagInRow: {
+    flex: 1,
+    flexShrink: 1,
+    marginBottom: 0,
+    marginRight: 8,
+  },
   heroTagRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    marginBottom: 10,
   },
   heroWeekBadge: {
+    flexShrink: 0,
     backgroundColor: "rgba(255,255,255,0.14)",
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 3,
-    marginBottom: 8,
   },
   heroWeekBadgeText: {
     fontSize: 11,
@@ -650,8 +670,9 @@ const styles = StyleSheet.create({
     color: "#cfe3f7",
   },
   heroTip: {
+    // No fixed lineHeight — iOS clips scaled Dynamic Type text against a
+    // hard lineHeight, which was cutting facts off mid-sentence.
     fontSize: 15,
-    lineHeight: 22,
     color: "#eaf2fb",
     fontWeight: "500",
   },
@@ -863,21 +884,24 @@ const styles = StyleSheet.create({
     color: BLUE,
     fontWeight: "600",
   },
-  // Docked button (edge-to-edge)
+  // Docked button — rounded pill floating just above the tab bar. The old
+  // edge-to-edge strip at bottom:0 read as a glitch band and its content
+  // clipped against the tab bar at larger font sizes.
   dock: {
     position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    left: 18,
+    right: 18,
+    bottom: 14,
   },
   newReadingButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 16,
+    paddingVertical: 15,
+    borderRadius: 18,
     shadowColor: "#002040",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.16,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.28,
     shadowRadius: 10,
     elevation: 12,
   },

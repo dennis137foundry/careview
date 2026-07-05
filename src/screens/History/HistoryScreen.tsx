@@ -15,7 +15,6 @@ import {
   ImageBackground,
   ScrollView,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { useDispatch, useSelector } from "react-redux";
 import { loadReadings } from "../../redux/readingSlice";
@@ -166,7 +165,6 @@ const segmentStyles = StyleSheet.create({
 
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
-  const insets = useSafeAreaInsets();
 
   // Navy header → white status-bar glyphs.
   useStatusBarStyle("light-content");
@@ -464,7 +462,8 @@ export default function HistoryScreen() {
       style={styles.backgroundImage}
       resizeMode="cover"
     >
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Native stack header already consumes the safe-area top. */}
+      <View style={[styles.container, { paddingTop: 8 }]}>
         {/* Sync Banner */}
         {pendingCount > 0 && (
         <View

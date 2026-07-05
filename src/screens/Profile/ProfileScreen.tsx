@@ -12,7 +12,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Alert,
-  StatusBar,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useDispatch, useSelector } from "react-redux";
@@ -62,7 +61,8 @@ export default function ProfileScreen({ navigation }: any) {
   const insets = useSafeAreaInsets();
 
   // Light background → dark (black) status-bar glyphs, re-applied on focus.
-  useStatusBarStyle("dark-content");
+  // Navy CareView header behind the status bar → white glyphs.
+  useStatusBarStyle("light-content");
 
   const [showMessageModal, setShowMessageModal] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -149,12 +149,11 @@ export default function ProfileScreen({ navigation }: any) {
       style={styles.image}
       resizeMode="cover"
     >
-      <StatusBar barStyle="dark-content" />
-
       <View
         style={[
           styles.container,
-          { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 20 },
+          // Native stack header already consumes the safe-area top.
+          { paddingTop: 16, paddingBottom: insets.bottom + 20 },
         ]}
       >
         {/* Header */}

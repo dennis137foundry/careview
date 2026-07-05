@@ -13,7 +13,6 @@ import {
   ScrollView,
 } from "react-native";
 import { useSelector, useDispatch } from "react-redux";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { loadDevices, removeDevice, renameDevice } from "../../redux/deviceSlice";
 import { useToast } from "../../components/Toast";
@@ -239,7 +238,6 @@ function SwipeableDeviceCard({
 
 export default function DevicesScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
-  const insets = useSafeAreaInsets();
   const { showToast } = useToast();
 
   // Dark blue header → white status-bar glyphs.
@@ -307,10 +305,8 @@ export default function DevicesScreen({ navigation }: any) {
       resizeMode="cover"
     >
       <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: insets.top + 16 },
-        ]}
+        // Native stack header already consumes the safe-area top.
+        contentContainerStyle={[styles.scrollContent, { paddingTop: 16 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Header Row */}
