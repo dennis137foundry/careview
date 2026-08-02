@@ -19,8 +19,12 @@
   <!-- Storage (iHealth SDK uses for debug logs) -->
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
-  <!-- Camera (QR code scanning to add devices) -->
+  <!-- Camera (QR code scanning to add devices). Optional: without it Play would
+       treat the CAMERA permission as requiring camera+autofocus hardware and
+       filter out camera-less devices. Devices can still be added via BLE scan. -->
   <uses-permission android:name="android.permission.CAMERA" />
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+  <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
   <application
     android:name=".MainApplication"

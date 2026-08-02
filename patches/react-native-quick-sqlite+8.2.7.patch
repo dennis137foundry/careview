@@ -1,0 +1,16 @@
+diff --git a/node_modules/react-native-quick-sqlite/android/CMakeLists.txt b/node_modules/react-native-quick-sqlite/android/CMakeLists.txt
+index 756979a..2c1bbe1 100644
+--- a/node_modules/react-native-quick-sqlite/android/CMakeLists.txt
++++ b/node_modules/react-native-quick-sqlite/android/CMakeLists.txt
+@@ -67,3 +67,11 @@ target_compile_options(
+   -Wall
+   -DONANDROID
+ )
++
++# 16 KB page size support (required by Google Play for Android 15+ targets).
++# NDK 27 does not align to 16384 by default; without this the .so is 4 KB-aligned.
++target_link_options(
++  ${CMAKE_PROJECT_NAME}
++  PRIVATE
++  -Wl,-z,max-page-size=16384
++)

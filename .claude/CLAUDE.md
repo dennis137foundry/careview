@@ -261,5 +261,5 @@ npx react-native run-ios
 ### iOS
 - iHealth SDK included as static library: `libiHealthSDK2.14.0.a`
 - Frameworks: CoreBluetooth, ExternalAccessory
-- License file: `com_trinitycareview_app_ios.pem`
+- License file: `ios/cvdemo/license.pem` (permanent; source copy `com_trinitycareview_app_ios.pem` kept in `.licenses/`). Android equivalent: `android/app/src/main/assets/license.pem`
 
