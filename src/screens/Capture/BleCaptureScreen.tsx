@@ -369,7 +369,11 @@ export default function BleCaptureScreen({ route, navigation }: any) {
             ts: measuredAt,
             type: "BP",
             deviceId: deviceDbId || "",
-            deviceName: device?.name || "BP Monitor",
+            // Prefer the patient's label over the raw advertised name
+            // ("A&D_UA-651BLE_A89A0C"). History resolves this live from the
+            // device record anyway, so this value only surfaces if the device is
+            // later deleted — but it should still be the friendly one.
+            deviceName: device?.friendlyName || device?.name || "BP Monitor",
             value: systolic,
             value2: diastolic,
             heartRate: Number(data?.pulse) || 0,

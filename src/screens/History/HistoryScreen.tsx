@@ -171,8 +171,38 @@ export default function HistoryScreen() {
   useStatusBarStyle("light-content");
 
   const { items } = useSelector((state: RootState) => state.readings);
+  const devices = useSelector((state: RootState) => state.devices.devices);
   const bpThresholds = useSelector(
     (state: RootState) => state.user.bpThresholds
+  );
+
+  /**
+   * Resolve a reading's device label at render time rather than trusting the
+   * copy stored on the reading row.
+   *
+   * readings.deviceName is written once, at capture. Renaming a device updates
+   * the devices table but cannot reach rows already written, so History kept
+   * showing the original name forever — for a generic BLE monitor that means the
+   * raw advertised name ("A&D_UA-651BLE_A89A0C") rather than the label the
+   * patient chose. Looking the name up by deviceId means a rename is reflected
+   * everywhere immediately, with no data migration.
+   *
+   * Falls back to the stored name for readings whose device has since been
+   * removed — those rows are the only reason the column still earns its place.
+   */
+  const resolveDeviceLabel = useCallback(
+    (reading: { deviceId?: string; deviceName?: string }): string => {
+      const device = reading.deviceId
+        ? devices.find((d) => d.id === reading.deviceId)
+        : undefined;
+      return (
+        device?.friendlyName ||
+        device?.name ||
+        reading.deviceName ||
+        ""
+      );
+    },
+    [devices]
   );
   const [index, setIndex] = useState(0);
   const [routes, setRoutes] = useState<TabRoute[]>([]);
@@ -247,7 +277,10 @@ export default function HistoryScreen() {
       if (grouped[type] && grouped[type].length > 0) {
         const readings = grouped[type];
         const sortedByTime = [...readings].sort((a, b) => b.ts - a.ts);
-        const deviceName = sortedByTime[0]?.deviceName;
+        // Resolved live, so renaming the device retitles the tab immediately.
+        const deviceName = sortedByTime[0]
+          ? resolveDeviceLabel(sortedByTime[0])
+          : "";
 
         let title = deviceName;
         if (!title || title.trim() === "") {
@@ -287,7 +320,15 @@ export default function HistoryScreen() {
     if (index >= Math.max(newRoutes.length, 1)) {
       setIndex(0);
     }
-  }, [dailyHealthChecks.length, grouped, index, urineProteinResponses.length]);
+    // resolveDeviceLabel is a dependency on purpose: it changes identity when the
+    // devices list does, which is what re-titles the tab right after a rename.
+  }, [
+    dailyHealthChecks.length,
+    grouped,
+    index,
+    resolveDeviceLabel,
+    urineProteinResponses.length,
+  ]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -350,7 +391,7 @@ export default function HistoryScreen() {
       const readingRows: ExportRow[] = readings.map((r: SavedReading) => ({
         ts: r.ts,
         cols: [
-          r.deviceName || "",
+          resolveDeviceLabel(r),
           r.deviceId || "",
           r.type || "",
           r.value ?? "",
