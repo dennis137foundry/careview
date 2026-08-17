@@ -586,7 +586,10 @@ export default function CaptureScreen({ route, navigation }: any) {
           addReadingAndPersist({
             type: "BP",
             deviceId: device?.id || "",
-            deviceName: device?.name || "BP Monitor",
+            // Prefer the patient's label. History resolves this live from the
+            // device record, so this stored copy only surfaces once the device
+            // has been deleted — it should still read sensibly then.
+            deviceName: device?.friendlyName || device?.name || "BP Monitor",
             value: data.systolic,
             value2: data.diastolic,
             heartRate: data.pulse,
@@ -649,7 +652,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           addReadingAndPersist({
             type: "SCALE",
             deviceId: device?.id || "",
-            deviceName: device?.name || "Scale",
+            deviceName: device?.friendlyName || device?.name || "Scale",
             value: lbs,
             unit: "lbs",
           })
@@ -755,7 +758,7 @@ export default function CaptureScreen({ route, navigation }: any) {
             ts,
             type: "BG",
             deviceId: deviceIdForReading,
-            deviceName: device?.name || "Glucose Meter",
+            deviceName: device?.friendlyName || device?.name || "Glucose Meter",
             value,
             unit,
             measurementCondition: timing,
