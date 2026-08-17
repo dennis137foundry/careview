@@ -1,7 +1,9 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import DashboardScreen from "../screens/Dashboard/DashboardScreen";
-import CaptureScreen from "../screens/Capture/CaptureScreen";
+// Routes iHealth devices to CaptureScreen and generic BLE devices to
+// BleCaptureScreen. See CaptureRouter for why the flows are kept separate.
+import CaptureScreen from "../screens/Capture/CaptureRouter";
 
 export type DashboardStackParamList = {
   DashboardMain: undefined;

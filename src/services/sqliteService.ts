@@ -85,7 +85,8 @@ export function initDB() {
       emrAccessoryUnitId INTEGER DEFAULT NULL,
       cuffSize TEXT DEFAULT NULL,
       lastBattery INTEGER DEFAULT NULL,
-      lastBatteryAt INTEGER DEFAULT NULL
+      lastBatteryAt INTEGER DEFAULT NULL,
+      hardwareMac TEXT DEFAULT NULL
     );
   `);
 
@@ -130,6 +131,12 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE devices ADD COLUMN source TEXT DEFAULT 'iHealthSDK';");
     console.log("[DB] Added 'source' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN hardwareMac TEXT DEFAULT NULL;");
+    console.log("[DB] Added 'hardwareMac' column to devices");
   } catch (e) {
     // Column already exists
   }
@@ -410,7 +417,24 @@ export type DeviceRecord = {
   // null = never read (e.g. HS4S has no battery API, or not yet connected).
   lastBattery?: number | null;
   lastBatteryAt?: number | null; // epoch ms of the last battery read
+
+  // Real 48-bit hardware address, read from GATT System ID (0x2A23) during
+  // BLE bonding. Needed because `mac` above is NOT a MAC on iOS for generic
+  // BLE devices — CoreBluetooth only exposes a per-install UUID, so the same
+  // physical cuff would otherwise register as a different EMR inventory unit
+  // on iPhone than on Android. `mac` stays as-is because it is what iOS needs
+  // to reconnect; this field is what the EMR is keyed on.
+  // null for iHealth devices, where `mac` is already the real address.
+  hardwareMac?: string | null;
 };
+
+/**
+ * The identifier the EMR should key inventory on: the true hardware address
+ * when we have one, otherwise whatever `mac` holds.
+ */
+export function getEmrDeviceMac(device: DeviceRecord): string {
+  return device.hardwareMac || device.mac;
+}
 
 export function saveDevice(device: DeviceRecord) {
   try {
@@ -422,8 +446,8 @@ export function saveDevice(device: DeviceRecord) {
     // Upsert instead of INSERT OR REPLACE so columns not written here
     // (lastBattery / lastBatteryAt) survive a re-pair of an existing device.
     db.execute(
-      `INSERT INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO devices (id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, hardwareMac)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          type = excluded.type,
@@ -434,7 +458,10 @@ export function saveDevice(device: DeviceRecord) {
          source = excluded.source,
          emrUnitId = excluded.emrUnitId,
          emrAccessoryUnitId = excluded.emrAccessoryUnitId,
-         cuffSize = excluded.cuffSize;`,
+         cuffSize = excluded.cuffSize,
+         -- Keep a previously learned hardware address if this save doesn't
+         -- carry one (e.g. a rename), rather than blanking it.
+         hardwareMac = COALESCE(excluded.hardwareMac, devices.hardwareMac);`,
       [
         device.id,
         device.name,
@@ -447,6 +474,7 @@ export function saveDevice(device: DeviceRecord) {
         device.emrUnitId ?? null,
         device.emrAccessoryUnitId ?? null,
         device.cuffSize ?? null,
+        device.hardwareMac ?? null,
       ]
     );
     if (__DEV__) {
@@ -506,7 +534,7 @@ export function updateDeviceEmrUnits(
 export function getDevicesWithoutEmrUnitId(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -565,7 +593,7 @@ export function updateDeviceName(deviceId: string, newName: string) {
 export function getDevices(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices ORDER BY name;"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices ORDER BY name;"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -584,7 +612,7 @@ export function getDevices(): DeviceRecord[] {
 export function getDevice(id: string): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices WHERE id = ?;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices WHERE id = ?;",
       [id]
     );
     if (res.rows && res.rows.length > 0) {
@@ -600,7 +628,7 @@ export function getDevice(id: string): DeviceRecord | null {
 export function getDeviceByType(type: "BP" | "SCALE" | "BG"): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt FROM devices WHERE type = ? LIMIT 1;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices WHERE type = ? LIMIT 1;",
       [type]
     );
     if (res.rows && res.rows.length > 0) {

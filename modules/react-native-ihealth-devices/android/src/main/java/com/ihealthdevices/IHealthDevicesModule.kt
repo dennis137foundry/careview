@@ -50,7 +50,31 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
 
     private val scanNextRunnable = Runnable { advanceToNextType() }
 
+    // Generic BLE (A&D UA-651BLE and other standard GATT BP/scale profiles).
+    // Entirely separate from the iHealth SDK: this module only routes into it
+    // for device types prefixed "GATT_", and it never calls iHealthDevicesManager.
+    // Created lazily so nothing BLE-related runs for iHealth-only sessions.
+    private var genericBle: GenericBleController? = null
+
+    private fun ensureGenericBle(): GenericBleController {
+        return genericBle ?: GenericBleController(
+            reactApplicationContext,
+            object : GenericBleController.Events {
+                override fun emit(eventName: String, params: WritableMap) = sendEvent(eventName, params)
+                override fun debug(message: String) = sendDebugLog(message)
+                override fun error(code: String, message: String) = sendError(code, message)
+            }
+        ).also { genericBle = it }
+    }
+
     override fun getName(): String = NAME
+
+    override fun invalidate() {
+        super.invalidate()
+        // Releases the scanner, any open GATT link, and the bond-state receiver.
+        genericBle?.teardown()
+        genericBle = null
+    }
 
     // =========================================================================
     // Event Helpers
@@ -228,6 +252,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
 
         // Stop previous discovery before starting next
         try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
+        // A generic-BLE window may have been the previous phase. Close its
+        // scanner too, so only one scanner is ever live at a time and the
+        // iHealth SDK keeps exclusive use of the radio during its own windows.
+        genericBle?.stopScan()
 
         if (currentScanIndex >= scanTypesList.size) {
             // The iHealth Android SDK can only discover one device type at a time, so we
@@ -248,6 +276,18 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
 
         val type = scanTypesList[currentScanIndex]
         currentScanIndex++
+
+        // "GATT" is a pseudo-type meaning "scan for standard-profile BLE devices
+        // this window". It is never in the capture-screen scan list — only Add
+        // Device asks for it, and only after every iHealth type, so iHealth
+        // discovery is unaffected in both timing and behaviour.
+        if (type.equals("GATT", ignoreCase = true)) {
+            sendDebugLog("Scanning for generic BLE devices (${scanTypesList.size - currentScanIndex} types after this)")
+            ensureGenericBle().startScan()
+            scanHandler.postDelayed(scanNextRunnable, SCAN_WINDOW_MS)
+            return
+        }
+
         val discoveryType = getDiscoveryType(type)
 
         if (discoveryType != null) {
@@ -818,6 +858,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         try {
             isScanningActive = false
             scanHandler.removeCallbacks(scanNextRunnable)
+            genericBle?.stopScan()
             iHealthDevicesManager.getInstance().stopDiscovery()
             val params = Arguments.createMap().apply {
                 putBoolean("scanning", false)
@@ -838,6 +879,15 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun connectDevice(mac: String, deviceType: String, promise: Promise) {
         try {
+            // Generic BLE devices have their own connect path. Handing one to the
+            // iHealth SDK would pass an unknown type name straight through to
+            // connectDevice() and confuse it, so intercept before that can happen.
+            if (deviceType.startsWith("GATT_", ignoreCase = true)) {
+                sendDebugLog("Generic BLE connect requested for $mac — arming instead")
+                promise.resolve(ensureGenericBle().arm(mac))
+                return
+            }
+
             sendDebugLog("Connecting to $deviceType at $mac")
             targetMAC = mac
             targetType = deviceType
@@ -1041,6 +1091,83 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun getBatteryLevel(mac: String, promise: Promise) {
         promise.resolve(-1)
+    }
+
+    // =========================================================================
+    // Generic BLE (A&D and other standard GATT BP/scale profiles)
+    //
+    // Mirrors the iOS bleBondDevice / bleArm / bleDisarm surface. Deliberately
+    // separate entry points: nothing here goes near the iHealth SDK, and the
+    // iHealth methods never route in here.
+    // =========================================================================
+
+    /**
+     * bleBondDevice(address, promise) — Add Device flow.
+     *
+     * Must run while the monitor is advertising in pairing mode (UA-651BLE: hold
+     * START ~3s until "Pr" shows with a flashing Bluetooth icon). Connecting is
+     * what triggers Android's bonding prompt; without a bond the device never
+     * advertises again and capture can never reach it.
+     *
+     * Also sets the device clock and reads identity + battery, delivered as
+     * onBleDeviceInfo. Resolving true means the connect was started, not that
+     * bonding succeeded — the user can still decline the prompt.
+     */
+    @ReactMethod
+    fun bleBondDevice(address: String, promise: Promise) {
+        try {
+            // The rotation must not restart iHealth discovery mid-bond.
+            isScanningActive = false
+            scanHandler.removeCallbacks(scanNextRunnable)
+            try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
+
+            val started = ensureGenericBle().bondDevice(address)
+            if (started) {
+                promise.resolve(true)
+            } else {
+                promise.reject(
+                    "BLE_NO_PERIPHERAL",
+                    "Device not found. Put the monitor in pairing mode and scan again."
+                )
+            }
+        } catch (e: Exception) {
+            promise.reject("BLE_BOND_ERROR", e.message, e)
+        }
+    }
+
+    /**
+     * bleArm(address, promise) — capture flow.
+     *
+     * Leaves a standing autoConnect request open. Android does not contact the
+     * monitor until it advertises, so the cuff stays asleep and its own idle
+     * power-off timer never starts early. The patient measures whenever they
+     * like and the phone collects the moment the monitor broadcasts.
+     */
+    @ReactMethod
+    fun bleArm(address: String, promise: Promise) {
+        try {
+            isScanningActive = false
+            scanHandler.removeCallbacks(scanNextRunnable)
+            try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
+
+            promise.resolve(ensureGenericBle().arm(address))
+        } catch (e: Exception) {
+            promise.reject("BLE_ARM_ERROR", e.message, e)
+        }
+    }
+
+    /**
+     * bleDisarm(address, promise) — cancels the standing request and any live
+     * link. Safe to call when nothing is armed.
+     */
+    @ReactMethod
+    fun bleDisarm(address: String, promise: Promise) {
+        try {
+            genericBle?.disarm(address)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("BLE_DISARM_ERROR", e.message, e)
+        }
     }
 
     // =========================================================================

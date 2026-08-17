@@ -83,6 +83,22 @@ export interface DebugLogEvent {
   timestamp: number;
 }
 
+/**
+ * Identity + battery read from a generic BLE device after connecting.
+ *
+ * `identifier` is what the platform uses to reconnect (a CoreBluetooth UUID on
+ * iOS, the MAC on Android). `mac` is the true hardware address decoded from
+ * GATT System ID (0x2A23) and is the same on both platforms — that is the one
+ * the EMR keys inventory on.
+ */
+export interface BleDeviceInfo {
+  identifier: string;
+  mac?: string;
+  serialNumber?: string;
+  modelNumber?: string;
+  battery?: number;
+}
+
 export interface BluetoothStatus {
   available: boolean;
   authorized: boolean;
@@ -364,6 +380,127 @@ const deviceService = {
   },
 
   // ============================================================
+  // Generic BLE (A&D UA-651BLE and other standard GATT BP/scale profiles)
+  //
+  // Separate entry points on purpose. The iHealth capture flow must never
+  // route through these, and these must never route through iHealth's
+  // connect/startMeasurement pair — a generic BP monitor has no concept of
+  // being told to start measuring.
+  // ============================================================
+
+  /**
+   * Bond with a generic BLE device during the Add Device flow.
+   *
+   * Must run while the monitor is advertising in pairing mode (on the
+   * UA-651BLE: hold START ~3s until "Pr" and a flashing Bluetooth icon).
+   * Connecting is what triggers the iOS pairing prompt; without it the
+   * device never completes a bond and will not be reachable afterwards.
+   *
+   * Also writes the device clock and reads System ID / serial / battery.
+   * Those arrive via onBleDeviceInfo, not this promise.
+   */
+  bleBondDevice: async (identifier: string): Promise<boolean> => {
+    try {
+      if (typeof IHealthDevices?.bleBondDevice !== "function") {
+        return false; // Older native binary
+      }
+      return await IHealthDevices.bleBondDevice(identifier);
+    } catch (error) {
+      console.warn("[deviceService] BLE bond error:", error);
+      throw error;
+    }
+  },
+
+  /**
+   * Bond, then wait for the device to report who it is.
+   *
+   * Returns null if the identity never arrives — that is NOT fatal. The bond
+   * may still have succeeded, and pairing can be retried later; we just fall
+   * back to the CoreBluetooth identifier for EMR registration in that case.
+   */
+  bleBondAndProvision: async (
+    identifier: string,
+    timeoutMs: number = 15000
+  ): Promise<BleDeviceInfo | null> => {
+    return new Promise<BleDeviceInfo | null>((resolve) => {
+      let settled = false;
+      const finish = (info: BleDeviceInfo | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        subscription.remove();
+        resolve(info);
+      };
+
+      const subscription = eventEmitter.addListener(
+        "onBleDeviceInfo",
+        (info: BleDeviceInfo) => {
+          if (info?.identifier === identifier) {
+            finish(info);
+          }
+        }
+      );
+
+      const timer = setTimeout(() => {
+        console.warn("[deviceService] BLE provision timed out for", identifier);
+        finish(null);
+      }, timeoutMs);
+
+      deviceService.bleBondDevice(identifier).catch((error) => {
+        console.warn("[deviceService] BLE bond failed:", error);
+        finish(null);
+      });
+    });
+  },
+
+  /**
+   * Arm a bonded BLE device: leave a pending connect open and wait.
+   *
+   * The device stays asleep until the patient finishes a reading; the phone
+   * then connects on its own. Resolves false when the peripheral could not be
+   * resolved and the native side fell back to scanning — still workable, just
+   * less reliable.
+   */
+  bleArm: async (identifier: string): Promise<boolean> => {
+    try {
+      if (typeof IHealthDevices?.bleArm !== "function") {
+        return false;
+      }
+      return await IHealthDevices.bleArm(identifier);
+    } catch (error) {
+      console.warn("[deviceService] BLE arm error:", error);
+      return false;
+    }
+  },
+
+  /** Cancel a pending connect and drop any live link. Safe to call twice. */
+  bleDisarm: async (identifier: string): Promise<void> => {
+    try {
+      await IHealthDevices?.bleDisarm?.(identifier);
+    } catch (error) {
+      console.warn("[deviceService] BLE disarm error:", error);
+    }
+  },
+
+  /**
+   * Device identity + battery read after a generic BLE connection.
+   * `mac` is derived from System ID (0x2A23) and is the real hardware address —
+   * the same value Android reports — so the EMR sees one inventory unit per
+   * physical device instead of one per platform.
+   */
+  onBleDeviceInfo: (
+    callback: (info: {
+      identifier: string;
+      mac?: string;
+      serialNumber?: string;
+      modelNumber?: string;
+      battery?: number;
+    }) => void
+  ): EmitterSubscription => {
+    return eventEmitter.addListener("onBleDeviceInfo", callback);
+  },
+
+  // ============================================================
   // Event Listeners
   // ============================================================
 
@@ -466,6 +603,22 @@ const deviceService = {
   },
 
   /**
+   * Resolve a concrete model code from a generic BLE device's advertised name.
+   *
+   * Native can only report "GATT_BP" — the profile, not the product. Sending
+   * that to the EMR would make every generic monitor look identical in
+   * inventory. A&D advertises as "A&D_UA-651BLE_A89A0C", so the model is
+   * recoverable from the name. Falls back to the profile type when unknown.
+   */
+  getBleModelCode: (name: string, fallbackType: string): string => {
+    const normalized = (name || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (normalized.includes("UA651BLE")) return "UA651BLE";
+    if (normalized.includes("UA656BLE")) return "UA656BLE";
+    if (normalized.includes("UA767")) return "UA767BLE";
+    return fallbackType;
+  },
+
+  /**
    * Get friendly name for device type
    */
   getFriendlyTypeName: (type: string): string => {
@@ -475,6 +628,9 @@ const deviceService = {
       BP5S: "iHealth BP5S",
       BG5S: "iHealth BG5S Glucose Meter",
       GATT_BP: "BLE Blood Pressure Monitor",
+      UA651BLE: "A&D UA-651BLE",
+      UA656BLE: "A&D UA-656BLE",
+      UA767BLE: "A&D UA-767BLE",
       HS2: "iHealth HS2",
       HS2S: "iHealth HS2S",
       HS4S: "iHealth HS4S",

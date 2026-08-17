@@ -84,9 +84,12 @@ export default function AddDeviceScreen() {
 
   const patientId = useSelector((state: RootState) => state.user.patientId);
 
-  // Cuff-size picker modal (BP devices only — scales skip this step)
+  // Cuff-size picker modal. Shown for every BP device regardless of
+  // manufacturer; scales and the glucose meter skip this step.
+  // The chosen size is passed straight to confirmAddDevice as an argument
+  // rather than parked in state — the modal commits on tap, so there is no
+  // intermediate step that would need to hold it.
   const [showCuffModal, setShowCuffModal] = useState(false);
-  const [pendingCuffSize, setPendingCuffSize] = useState<CuffSize | null>(null);
 
   // Device selected from the scan list, awaiting cuff-size choice (BP only).
   // Devices are added with their default name — RenameDeviceModal on the
@@ -170,7 +173,11 @@ export default function AddDeviceScreen() {
       // iOS scans additively + runs the separate 5s BG5S phase below, so its list is
       // unchanged. Android can't scan multiple types at once, so BG5S is folded into the
       // (looped) Android list in priority order — the devices we actually deploy first.
-      const androidScanTypes = ["BP3L", "HS2S", "BG5S", "BP5", "BP5S", "HS2", "HS4S"];
+      // "GATT" is a pseudo-type: it gives generic BLE monitors (A&D and other
+      // standard-profile devices) their own window in the rotation, using a
+      // separate scanner. It goes LAST so every iHealth type is discovered first
+      // and iHealth timing is unchanged.
+      const androidScanTypes = ["BP3L", "HS2S", "BG5S", "BP5", "BP5S", "HS2", "HS4S", "GATT"];
       const iosScanTypes = ["BP3L", "BP5", "BP5S", "HS2", "HS2S", "HS4S"];
       await deviceService.startScan(
         Platform.OS === "android" ? androidScanTypes : iosScanTypes
@@ -233,7 +240,6 @@ export default function AddDeviceScreen() {
     if (category === "BP") {
       // Ask the nurse which cuff is on this monitor. The BLE hardware
       // can't self-report this — it's a physical accessory.
-      setPendingCuffSize(null);
       setShowCuffModal(true);
     } else {
       // No cuff size to pick — add right away. Rename later if desired.
@@ -243,7 +249,6 @@ export default function AddDeviceScreen() {
 
   // Nurse picks a cuff size → add immediately with the default name.
   const handleCuffSizeSelected = (size: CuffSize) => {
-    setPendingCuffSize(size);
     setShowCuffModal(false);
     if (pendingDevice) {
       confirmAddDevice(pendingDevice, size);
@@ -263,17 +268,51 @@ export default function AddDeviceScreen() {
     setConnecting(device.mac);
 
     const category = device.category || deviceService.getCategory(device.type);
+    const isBle = device.source === "BLE_GATT";
+
+    // Generic BLE devices must bond NOW, while the monitor is still advertising
+    // in pairing mode. Connecting is what raises the OS pairing prompt; skipping
+    // it (as this screen used to) left the device unbonded, after which it never
+    // advertises again and capture can never reach it. The connection also
+    // yields the real hardware MAC via System ID, which is the only identifier
+    // iOS and Android agree on for the same physical cuff.
+    let bleInfo = null;
+    if (isBle) {
+      await stopScan();
+      bleInfo = await deviceService.bleBondAndProvision(device.mac);
+      if (!bleInfo) {
+        console.warn("[AddDevice] BLE bond did not report device info");
+      }
+    }
+
+    // Prefer the true hardware address for EMR inventory; fall back to whatever
+    // the platform gave us so a failed identity read still registers something.
+    const hardwareMac = bleInfo?.mac ? normalizeMac(bleInfo.mac) : null;
+    const emrMac = hardwareMac || normalizeMac(device.mac);
+
+    // Local id stays keyed on the platform identifier, because that is what
+    // reconnecting needs. Renaming it to the hardware MAC would orphan devices
+    // that were paired before this build.
     const normalizedMac = normalizeMac(device.mac);
     const localId = `device_${normalizedMac}`;
+
+    // Native can only report the GATT profile ("GATT_BP"), not the product.
+    // Recover the model from the advertised name so inventory can tell an
+    // A&D UA-651BLE apart from any other generic monitor.
+    const model = isBle
+      ? deviceService.getBleModelCode(device.name, device.type)
+      : device.type;
+
     const finalFriendlyName =
-      device.name || deviceService.getFriendlyTypeName(device.type) || device.type;
+      device.name || deviceService.getFriendlyTypeName(model) || model;
 
     const deviceRecord: DeviceRecord = {
       id: localId,
-      name: device.name || device.type,
+      name: device.name || model,
       type: category,
       mac: device.mac,
-      model: device.type,
+      hardwareMac,
+      model,
       friendlyName: finalFriendlyName,
       source: device.source,
       cuffSize: category === "BP" ? (cuffSize ?? "STANDARD") : null,
@@ -292,7 +331,8 @@ export default function AddDeviceScreen() {
       // device is still awake right now (it was just advertising), so
       // this is the one moment pairing can also learn the battery. The
       // result lands via the app-level onBatteryLevel listener.
-      if (device.source !== "BLE_GATT") {
+      // BLE devices already reported battery during the bond above.
+      if (!isBle) {
         deviceService.connectForBattery(device.mac, device.type).catch(() => {});
       }
 
@@ -308,11 +348,11 @@ export default function AddDeviceScreen() {
       } else {
         const result = await registerDeviceWithEmr({
           patient_id: parseInt(patientId, 10),
-          mac: normalizedMac,
+          mac: emrMac,
           category,
           cuff_size:
             category === "BP" ? (cuffSize ?? "STANDARD") : undefined,
-          model: device.type,
+          model,
           name: deviceRecord.name,
           friendly_name: finalFriendlyName,
           source: device.source ?? "iHealthSDK",
@@ -363,7 +403,6 @@ export default function AddDeviceScreen() {
     } finally {
       setConnecting(null);
       setPendingDevice(null);
-      setPendingCuffSize(null);
     }
   };
 
@@ -420,7 +459,6 @@ export default function AddDeviceScreen() {
     // add immediately with the default name.
     setPendingDevice(device);
     if (category === "BP") {
-      setPendingCuffSize(null);
       setShowCuffModal(true);
     } else {
       confirmAddDevice(device, null);
@@ -569,6 +607,18 @@ export default function AddDeviceScreen() {
             ? "Keep your device nearby. The app will find supported iHealth devices automatically."
             : "Scan for nearby blood pressure monitors, scales, and glucose meters"}
         </Text>
+
+        {/* A&D monitors only advertise while in pairing mode, and there is no
+            way to discover them otherwise. Without this instruction the scan
+            silently finds nothing and the patient has no way to know why. */}
+        <View style={styles.pairingHint}>
+          <MaterialIcons name="info-outline" size={16} color="#5b6b7f" />
+          <Text style={styles.pairingHintText}>
+            Using an A&D monitor? Hold its START button for about 3 seconds first,
+            until the screen shows <Text style={styles.pairingHintBold}>Pr</Text> and
+            a flashing Bluetooth icon. Then scan.
+          </Text>
+        </View>
       </View>
 
       {/* Device List */}
@@ -689,7 +739,6 @@ export default function AddDeviceScreen() {
               onPress={() => {
                 setShowCuffModal(false);
                 setPendingDevice(null);
-                setPendingCuffSize(null);
               }}
             >
               <Text style={styles.nameModalCancelText}>Cancel</Text>
@@ -760,6 +809,25 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#888",
     textAlign: "center",
+  },
+  pairingHint: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 14,
+    padding: 12,
+    backgroundColor: "#eef2f6",
+    borderRadius: 6,
+  },
+  pairingHintText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#5b6b7f",
+  },
+  pairingHintBold: {
+    fontWeight: "700",
+    color: "#0f2430",
   },
   listContent: {
     padding: 16,

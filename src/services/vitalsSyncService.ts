@@ -27,6 +27,7 @@ import {
   markScreeningResponseSynced,
   getDevice,
   getDevicesWithoutEmrUnitId,
+  getEmrDeviceMac,
   updateDeviceEmrUnits,
   SavedReading,
   ScreeningResponse,
@@ -792,7 +793,10 @@ export async function syncPendingDeviceRegistrations(): Promise<void> {
     const category: "BP" | "SCALE" = device.type;
     const result = await registerDeviceWithEmr({
       patient_id: parseInt(user.patientId, 10),
-      mac: normalizeMac(device.mac),
+      // Hardware address when we learned one during BLE bonding, otherwise
+      // `mac`. Must match what AddDeviceScreen sent, or a retry would create a
+      // second inventory unit for the same physical device.
+      mac: normalizeMac(getEmrDeviceMac(device)),
       category,
       cuff_size:
         category === "BP"

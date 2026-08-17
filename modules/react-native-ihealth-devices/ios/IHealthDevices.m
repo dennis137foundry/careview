@@ -55,6 +55,29 @@ static NSString * const kBLEBPFeatureCharUUID = @"2A49";        // Blood Pressur
 static NSString * const kBLEWeightMeasurementCharUUID = @"2A9D"; // Weight Measurement
 static NSString * const kBLEWeightFeatureCharUUID = @"2A9E";     // Weight Scale Feature
 
+// Date Time lives INSIDE the Blood Pressure service on A&D monitors (not in a
+// separate Current Time Service). Writing it is what makes the device include a
+// timestamp in each measurement. A&D's own iOS sample never writes it, and its
+// parser has an explicit "if time has not been set" branch where the timestamp
+// bytes are absent and pulse shifts from byte 14 down to byte 7. Because CareView
+// collects readings after the fact (store-and-forward), an undated reading would
+// be stamped with collection time — wrong in the chart and bad for server dedup.
+// So we write it once at pairing.
+static NSString * const kBLEDateTimeCharUUID = @"2A08";
+
+// Device Information — System ID carries the real 48-bit MAC. iOS never exposes
+// a peripheral's MAC (only a per-install CoreBluetooth UUID), so this is the only
+// way an iPhone and an Android phone can agree on one identity for the same
+// physical cuff. Without it the same device registers as two EMR inventory units.
+static NSString * const kBLEDeviceInfoServiceUUID = @"180A";
+static NSString * const kBLESystemIDCharUUID = @"2A23";
+static NSString * const kBLESerialNumberCharUUID = @"2A25";
+static NSString * const kBLEModelNumberCharUUID = @"2A24";
+
+// Battery
+static NSString * const kBLEBatteryServiceUUID = @"180F";
+static NSString * const kBLEBatteryLevelCharUUID = @"2A19";
+
 @interface IHealthDevices () <CBCentralManagerDelegate, CBPeripheralDelegate, BG5SDelegate>
 @end
 
@@ -86,6 +109,25 @@ static NSString * const kBLEWeightFeatureCharUUID = @"2A9E";     // Weight Scale
     // GATT characteristics
     CBCharacteristic *_bpMeasurementChar;
     CBCharacteristic *_weightMeasurementChar;
+
+    // ---- Generic BLE (A&D UA-651BLE and other standard BP/scale profiles) ----
+    // All state below is used ONLY by the ble* methods. The iHealth SDK paths
+    // never read or write it.
+    //
+    // Peripherals we have an outstanding connectPeripheral: request for. iOS
+    // holds such a request indefinitely with no timeout and does not touch the
+    // device until it advertises, so the cuff's own 1-minute power-off timer
+    // never starts early. This is what lets the capture screen "arm and wait".
+    NSMutableDictionary<NSString *, CBPeripheral *> *_bleArmedPeripherals;
+
+    // Identifiers currently in the bond-and-provision flow (Add Device). These
+    // get the time write + device-info reads, then disconnect. Capture sessions
+    // are NOT in this set and are left connected to receive the full batch.
+    NSMutableSet<NSString *> *_bleBondingIdentifiers;
+
+    // Per-identifier scratch for device info gathered across several async reads,
+    // flushed to JS as one onBleDeviceInfo event once the reads settle.
+    NSMutableDictionary<NSString *, NSMutableDictionary *> *_bleDeviceInfo;
 }
 
 RCT_EXPORT_MODULE();
@@ -105,7 +147,10 @@ RCT_EXPORT_MODULE();
         _connectedGATTType = nil;
         _bpMeasurementChar = nil;
         _weightMeasurementChar = nil;
-        
+        _bleArmedPeripherals = [NSMutableDictionary new];
+        _bleBondingIdentifiers = [NSMutableSet new];
+        _bleDeviceInfo = [NSMutableDictionary new];
+
         [self registerNotifications];
         
         // Initialize CoreBluetooth for GATT devices
@@ -128,7 +173,7 @@ RCT_EXPORT_MODULE();
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
              @"onBloodPressureReading", @"onWeightReading", @"onBloodGlucoseReading",
              @"onGlucoseMeterEvent", @"onBluetoothStateChanged", @"onError", @"onDebugLog",
-             @"onBatteryLevel"];
+             @"onBatteryLevel", @"onBleDeviceInfo"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -451,18 +496,35 @@ RCT_EXPORT_MODULE();
 
 - (void)centralManager:(CBCentralManager *)central didConnectPeripheral:(CBPeripheral *)peripheral {
     [self sendDebugLog:[NSString stringWithFormat:@"🔗 GATT CONNECTED: %@", peripheral.name]];
-    
+
+    // An armed peripheral connects on its own schedule (the patient finished a
+    // reading and the cuff started advertising), so nothing set up the tracking
+    // fields the way connectGATTPeripheral: does. Fill them in from the
+    // peripheral itself before anything downstream reads them.
+    NSString *connectedIdentifier = peripheral.identifier.UUIDString;
+    if (_bleArmedPeripherals[connectedIdentifier] && ![_connectedGATTIdentifier isEqualToString:connectedIdentifier]) {
+        _connectedGATTIdentifier = connectedIdentifier;
+        _connectedGATTType = @"BP";
+        peripheral.delegate = self;
+        [self sendDebugLog:@"🎯 Armed peripheral woke up and connected"];
+    }
+
     _connectedGATTPeripheral = peripheral;
     [self stopGATTScan];
-    
-    // Discover services
+
+    // Discover services. Device Information and Battery are included on purpose:
+    // System ID (2A23) is the only source of the real MAC on iOS, and without
+    // 180F a generic device can never report battery the way iHealth ones do.
+    // The previous two-service filter is why both were invisible.
     [self sendDebugLog:@"🔍 Discovering GATT services..."];
     NSArray *services = @[
         [CBUUID UUIDWithString:kBLEBloodPressureServiceUUID],
-        [CBUUID UUIDWithString:kBLEWeightScaleServiceUUID]
+        [CBUUID UUIDWithString:kBLEWeightScaleServiceUUID],
+        [CBUUID UUIDWithString:kBLEDeviceInfoServiceUUID],
+        [CBUUID UUIDWithString:kBLEBatteryServiceUUID]
     ];
     [peripheral discoverServices:services];
-    
+
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *identifier = self->_connectedGATTIdentifier ?: peripheral.identifier.UUIDString;
         NSString *type = self->_connectedGATTType ?: @"BP";
@@ -510,7 +572,17 @@ RCT_EXPORT_MODULE();
     _connectedGATTType = nil;
     _bpMeasurementChar = nil;
     _weightMeasurementChar = nil;
-    
+
+    // Devices like the UA-651BLE hang up as soon as they have handed over their
+    // stored readings, and power off entirely about a minute later. If JS still
+    // wants this device, immediately re-issue the pending connect so the next
+    // reading is caught too. bleDisarm is what actually ends the session.
+    CBPeripheral *armed = _bleArmedPeripherals[peripheral.identifier.UUIDString];
+    if (armed) {
+        [self sendDebugLog:@"🔁 Still armed — re-issuing pending connect"];
+        [_centralManager connectPeripheral:armed options:nil];
+    }
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [self sendEventSafe:@"onConnectionStateChanged" body:@{
             @"mac": identifier,
@@ -567,7 +639,53 @@ RCT_EXPORT_MODULE();
                 [peripheral setNotifyValue:YES forCharacteristic:characteristic];
             }
         }
+
+        // Date Time — written during bonding only. Writing it on every capture
+        // would be pointless traffic inside the device's short awake window.
+        if ([charUUID containsString:@"2A08"]) {
+            NSString *identifier = peripheral.identifier.UUIDString;
+            if ([_bleBondingIdentifiers containsObject:identifier] &&
+                (characteristic.properties & CBCharacteristicPropertyWrite)) {
+                [self sendDebugLog:@"   🕐 Writing current time to Date Time (2A08)"];
+                [peripheral writeValue:[self bleDateTimePayload]
+                     forCharacteristic:characteristic
+                                  type:CBCharacteristicWriteWithResponse];
+            }
+        }
+
+        // Device Information + Battery. Read on every connection: cheap, and it
+        // keeps the battery indicator fresh the same way iHealth devices do.
+        if ([charUUID containsString:@"2A23"] ||   // System ID → real MAC
+            [charUUID containsString:@"2A25"] ||   // Serial Number
+            [charUUID containsString:@"2A24"] ||   // Model Number
+            [charUUID containsString:@"2A19"]) {   // Battery Level
+            if (characteristic.properties & CBCharacteristicPropertyRead) {
+                [peripheral readValueForCharacteristic:characteristic];
+            }
+        }
     }
+}
+
+/**
+ * GATT Date Time (2A08) payload: uint16 little-endian year, then month, day,
+ * hour, minute, second as single bytes. Seven bytes total.
+ */
+- (NSData *)bleDateTimePayload {
+    NSDateComponents *c = [[NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian]
+                           components:(NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay |
+                                       NSCalendarUnitHour | NSCalendarUnitMinute | NSCalendarUnitSecond)
+                             fromDate:[NSDate date]];
+
+    uint8_t bytes[7];
+    bytes[0] = (uint8_t)(c.year & 0xFF);
+    bytes[1] = (uint8_t)((c.year >> 8) & 0xFF);
+    bytes[2] = (uint8_t)c.month;
+    bytes[3] = (uint8_t)c.day;
+    bytes[4] = (uint8_t)c.hour;
+    bytes[5] = (uint8_t)c.minute;
+    bytes[6] = (uint8_t)c.second;
+
+    return [NSData dataWithBytes:bytes length:sizeof(bytes)];
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
@@ -606,6 +724,100 @@ RCT_EXPORT_MODULE();
     if ([charUUID isEqualToString:kBLEWeightMeasurementCharUUID] || [charUUID containsString:@"2A9D"]) {
         [self parseGATTWeight:data];
     }
+
+    // Device info + battery. Collected into a per-device bucket and flushed as a
+    // single event so JS gets one coherent record instead of four partial ones.
+    // Hopped to the main queue because _bleDeviceInfo is confined to it.
+    NSString *identifier = peripheral.identifier.UUIDString;
+    if ([charUUID containsString:@"2A23"]) {
+        NSString *mac = [self bleMacFromSystemID:data];
+        if (mac) {
+            [self sendDebugLog:[NSString stringWithFormat:@"   🆔 System ID → MAC %@", mac]];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self bleSetDeviceInfo:identifier key:@"mac" value:mac];
+            });
+        }
+    } else if ([charUUID containsString:@"2A25"]) {
+        NSString *serial = [self bleStringFromData:data];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self bleSetDeviceInfo:identifier key:@"serialNumber" value:serial];
+        });
+    } else if ([charUUID containsString:@"2A24"]) {
+        NSString *model = [self bleStringFromData:data];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self bleSetDeviceInfo:identifier key:@"modelNumber" value:model];
+        });
+    } else if ([charUUID containsString:@"2A19"]) {
+        uint8_t level = ((const uint8_t *)data.bytes)[0];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self bleSetDeviceInfo:identifier key:@"battery" value:@(level)];
+            [self sendEventSafe:@"onBatteryLevel" body:@{
+                @"mac": identifier,
+                @"type": @"GATT_BP",
+                @"level": @(level),
+                @"source": @"BLE_GATT",
+                @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+            }];
+        });
+    }
+}
+
+#pragma mark - Generic BLE Device Info
+
+/**
+ * Always call on the main queue. _bleDeviceInfo is confined to it so the
+ * CoreBluetooth queue and the React Native bridge never touch it concurrently,
+ * and so the debounce below has a queue that actually runs timers.
+ */
+- (void)bleSetDeviceInfo:(NSString *)identifier key:(NSString *)key value:(id)value {
+    if (!identifier || !value) return;
+    NSMutableDictionary *bucket = _bleDeviceInfo[identifier];
+    if (!bucket) {
+        bucket = [NSMutableDictionary new];
+        _bleDeviceInfo[identifier] = bucket;
+    }
+    bucket[key] = value;
+
+    // The four reads land within milliseconds of each other. Debounce so JS gets
+    // one settled record instead of four partial ones it would have to merge.
+    // A generation counter supersedes earlier timers; -performSelector:afterDelay:
+    // is not an option because the CB delegate queue has no run loop.
+    NSUInteger generation = [bucket[@"_generation"] unsignedIntegerValue] + 1;
+    bucket[@"_generation"] = @(generation);
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf bleFlushDeviceInfo:identifier generation:generation];
+    });
+}
+
+- (void)bleFlushDeviceInfo:(NSString *)identifier generation:(NSUInteger)generation {
+    NSMutableDictionary *bucket = _bleDeviceInfo[identifier];
+    if (!bucket) return;
+    if ([bucket[@"_generation"] unsignedIntegerValue] != generation) return; // a later read superseded us
+
+    NSMutableDictionary *body = [bucket mutableCopy];
+    [body removeObjectForKey:@"_generation"];
+    body[@"identifier"] = identifier;
+    [self sendEventSafe:@"onBleDeviceInfo" body:body];
+}
+
+/**
+ * System ID (2A23) is 8 bytes: a 40-bit manufacturer-defined identifier followed
+ * by a 24-bit OUI, both little-endian. The 48-bit MAC is the low 3 bytes of the
+ * first field plus the OUI — i.e. bytes 7,6,5,2,1,0 read back in that order.
+ */
+- (NSString *)bleMacFromSystemID:(NSData *)data {
+    if (data.length < 8) return nil;
+    const uint8_t *b = data.bytes;
+    return [[NSString stringWithFormat:@"%02X%02X%02X%02X%02X%02X",
+             b[7], b[6], b[5], b[2], b[1], b[0]] uppercaseString];
+}
+
+- (NSString *)bleStringFromData:(NSData *)data {
+    NSString *s = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
 }
 
 #pragma mark - GATT Data Parsing
@@ -629,16 +841,44 @@ RCT_EXPORT_MODULE();
         diastolic *= 7.50062;
     }
     
-    int pulseRate = 0;
+    // Bytes 5-6 are Mean Arterial Pressure, which CareView does not record.
     int offset = 7;
-    
-    if (flags & 0x02) offset += 7; // Skip timestamp
+
+    // Timestamp (present only if the device's clock was ever set — see the note
+    // on kBLEDateTimeCharUUID). measuredAt stays 0 when absent so JS can tell
+    // "the cuff told us when" apart from "we had to guess".
+    double measuredAtMs = 0;
+    if (flags & 0x02) {
+        if (data.length >= offset + 7) {
+            NSDateComponents *c = [NSDateComponents new];
+            c.year   = bytes[offset] | (bytes[offset + 1] << 8);
+            c.month  = bytes[offset + 2];
+            c.day    = bytes[offset + 3];
+            c.hour   = bytes[offset + 4];
+            c.minute = bytes[offset + 5];
+            c.second = bytes[offset + 6];
+
+            // Year 0 means "not known" per the GATT spec; treat as absent.
+            if (c.year > 0) {
+                NSCalendar *cal = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
+                NSDate *measuredAt = [cal dateFromComponents:c];
+                if (measuredAt) {
+                    measuredAtMs = [measuredAt timeIntervalSince1970] * 1000;
+                }
+            }
+        }
+        offset += 7;
+    }
+
+    int pulseRate = 0;
     if ((flags & 0x04) && data.length >= offset + 2) {
         pulseRate = (int)[self parseSFLOAT:&bytes[offset]];
     }
-    
-    [self sendDebugLog:[NSString stringWithFormat:@"🎉 GATT BP: %d/%d mmHg, pulse=%d", (int)systolic, (int)diastolic, pulseRate]];
-    
+
+    [self sendDebugLog:[NSString stringWithFormat:@"🎉 GATT BP: %d/%d mmHg, pulse=%d, deviceTime=%@",
+                        (int)systolic, (int)diastolic, pulseRate,
+                        measuredAtMs > 0 ? @"yes" : @"no"]];
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [self sendEventSafe:@"onBloodPressureReading" body:@{
             @"mac": self->_connectedGATTIdentifier ?: @"",
@@ -648,7 +888,10 @@ RCT_EXPORT_MODULE();
             @"pulse": @(pulseRate),
             @"irregular": @NO,
             @"source": @"BLE_GATT",
-            @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000)
+            // Arrival time — kept for backwards compatibility with existing listeners.
+            @"timestamp": @([[NSDate date] timeIntervalSince1970] * 1000),
+            // When the cuff says the reading was actually taken. 0 = unknown.
+            @"measuredAt": @(measuredAtMs)
         }];
     });
 }
@@ -1644,6 +1887,147 @@ RCT_EXPORT_METHOD(connectDevice:(NSString *)mac deviceType:(NSString *)deviceTyp
 
     int result = [[ConnectDeviceController commandGetInstance] commandContectDeviceWithDeviceType:[self deviceTypeFromString:deviceType] andSerialNub:mac];
     resolve(result == 1 ? @YES : @NO);
+}
+
+#pragma mark - Generic BLE (A&D and other standard BP/scale profiles)
+//
+// These methods exist so the generic-BLE capture flow never has to reuse the
+// iHealth entry points. Nothing below touches ScanDeviceController,
+// ConnectDeviceController, or any iHealth SDK state.
+
+/**
+ * bleBondDevice — Add Device flow, run while the cuff shows "Pr".
+ *
+ * Connects, which triggers iOS's pairing prompt when the encrypted measurement
+ * characteristic is accessed. Once bonded we write the clock and read System ID,
+ * serial, model and battery, then drop the link. Results arrive as
+ * onBleDeviceInfo. Resolving true means "connect was requested", not "bonded" —
+ * bonding is asynchronous and the user may still decline the prompt.
+ */
+RCT_EXPORT_METHOD(bleBondDevice:(NSString *)identifier
+                       resolver:(RCTPromiseResolveBlock)resolve
+                       rejecter:(RCTPromiseRejectBlock)reject) {
+    CBPeripheral *peripheral = [self bleResolvePeripheral:identifier];
+    if (!peripheral) {
+        [self sendDebugLog:[NSString stringWithFormat:@"❌ BLE bond: no peripheral for %@", identifier]];
+        reject(@"BLE_NO_PERIPHERAL",
+               @"Device not found. Put the monitor in pairing mode and scan again.", nil);
+        return;
+    }
+
+    [self sendDebugLog:[NSString stringWithFormat:@"🤝 BLE bond: connecting to %@", identifier]];
+    [_bleBondingIdentifiers addObject:identifier];
+    [_bleDeviceInfo removeObjectForKey:identifier];
+
+    _connectedGATTIdentifier = identifier;
+    _connectedGATTType = @"BP";
+    peripheral.delegate = self;
+    _gattPeripherals[identifier] = peripheral;
+    [_centralManager connectPeripheral:peripheral options:nil];
+
+    // Provisioning only needs a few seconds of the device's short awake window.
+    // Tear down afterwards so the cuff isn't held open needlessly.
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(12 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf bleFinishBonding:identifier];
+    });
+
+    resolve(@YES);
+}
+
+- (void)bleFinishBonding:(NSString *)identifier {
+    if (![_bleBondingIdentifiers containsObject:identifier]) return;
+    [_bleBondingIdentifiers removeObject:identifier];
+
+    // Never tear down a link the capture flow is relying on.
+    if (_bleArmedPeripherals[identifier]) return;
+
+    CBPeripheral *peripheral = _gattPeripherals[identifier];
+    if (peripheral && peripheral.state == CBPeripheralStateConnected) {
+        [self sendDebugLog:@"🤝 BLE bond: provisioning done, disconnecting"];
+        [_centralManager cancelPeripheralConnection:peripheral];
+    }
+}
+
+/**
+ * bleArm — capture flow. Leaves a pending connect request open.
+ *
+ * CoreBluetooth holds connectPeripheral: indefinitely and does not contact the
+ * device until it advertises, so the cuff stays asleep and its own power-off
+ * timer never starts early. The patient can take a reading whenever; the phone
+ * connects the instant the cuff broadcasts. A filtered scan runs alongside as
+ * redundancy in case the pending connect misses the advertisement.
+ */
+RCT_EXPORT_METHOD(bleArm:(NSString *)identifier
+                resolver:(RCTPromiseResolveBlock)resolve
+                rejecter:(RCTPromiseRejectBlock)reject) {
+    CBPeripheral *peripheral = [self bleResolvePeripheral:identifier];
+    if (!peripheral) {
+        // Not cached yet (fresh app launch, and iOS could not restore it).
+        // Fall back to scanning; connectDevice picks it up on discovery.
+        [self sendDebugLog:@"⚠️ BLE arm: peripheral unknown, falling back to scan"];
+        _targetMAC = identifier;
+        _scanningForGATT = YES;
+        [self startGATTScan];
+        resolve(@NO);
+        return;
+    }
+
+    [self sendDebugLog:[NSString stringWithFormat:@"🎯 BLE arm: pending connect for %@", identifier]];
+    peripheral.delegate = self;
+    _bleArmedPeripherals[identifier] = peripheral;
+    _gattPeripherals[identifier] = peripheral;
+    _targetMAC = identifier;
+    [_centralManager connectPeripheral:peripheral options:nil];
+
+    // Redundant discovery path — harmless if the pending connect wins.
+    [self startGATTScan];
+
+    resolve(@YES);
+}
+
+/**
+ * bleDisarm — cancels the pending connect and any live link. Called when the
+ * capture screen closes or a reading has been banked.
+ */
+RCT_EXPORT_METHOD(bleDisarm:(NSString *)identifier
+                   resolver:(RCTPromiseResolveBlock)resolve
+                   rejecter:(RCTPromiseRejectBlock)reject) {
+    CBPeripheral *peripheral = _bleArmedPeripherals[identifier];
+    [_bleArmedPeripherals removeObjectForKey:identifier];
+
+    if (peripheral) {
+        [self sendDebugLog:[NSString stringWithFormat:@"🛑 BLE disarm: %@", identifier]];
+        [_centralManager cancelPeripheralConnection:peripheral];
+    }
+    if ([_targetMAC isEqualToString:identifier]) {
+        _targetMAC = nil;
+    }
+    [self stopGATTScan];
+    resolve(nil);
+}
+
+/**
+ * Find a peripheral by CoreBluetooth identifier: from this session's scan cache
+ * first, then from iOS's own store. The latter is what makes capture work after
+ * an app restart, when nothing has been scanned yet.
+ */
+- (CBPeripheral *)bleResolvePeripheral:(NSString *)identifier {
+    if (identifier.length == 0) return nil;
+
+    CBPeripheral *cached = _gattPeripherals[identifier];
+    if (cached) return cached;
+
+    NSUUID *uuid = [[NSUUID alloc] initWithUUIDString:identifier];
+    if (!uuid) return nil;
+
+    NSArray<CBPeripheral *> *known = [_centralManager retrievePeripheralsWithIdentifiers:@[uuid]];
+    CBPeripheral *peripheral = known.firstObject;
+    if (peripheral) {
+        _gattPeripherals[identifier] = peripheral;
+    }
+    return peripheral;
 }
 
 RCT_EXPORT_METHOD(disconnectDevice:(NSString *)mac resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
