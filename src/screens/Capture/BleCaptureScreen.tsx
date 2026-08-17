@@ -35,7 +35,9 @@ import {
   Alert,
   Animated,
   Easing,
+  Image,
   ScrollView,
+  StatusBar,
   Linking,
   NativeModules,
   NativeEventEmitter,
@@ -55,13 +57,24 @@ import type { RootState, AppDispatch } from "../../redux/store";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
-import { BTN } from "../../constants/buttons";
+import {
+  captureStyles as styles,
+  CAPTURE_ACCENT,
+  CAPTURE_ACCENT_SOFT,
+  CAPTURE_GRADIENT,
+} from "./captureTheme";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
 
-const ACCENT = BTN.primary;
-const ACCENT_SOFT = "#7fd6de";
+// A generic BLE monitor is still a blood pressure cuff to the patient, so it
+// gets the same portrait as the iHealth ones. Nothing about this screen should
+// read as a second-class device.
+const deviceImages: Record<string, any> = {
+  BP: require("../../assets/bp3l.png"),
+  SCALE: require("../../assets/hs5s.png"),
+};
+
 const LOW_BATTERY_THRESHOLD = 20;
 
 // Generous on purpose. The patient has to fit the cuff, sit still, and let the
@@ -126,8 +139,59 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   const readingReceivedRef = useRef(false);
   const timeoutRef = useRef<any>(null);
 
+  // Same animation set as the iHealth capture screen, so the two look and move
+  // identically. Only the phases driving them differ.
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const ringRotate = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const successScale = useRef(new Animated.Value(0)).current;
+  const successRingScale = useRef(new Animated.Value(0.8)).current;
+  const successRingOpacity = useRef(new Animated.Value(0)).current;
+  const readingFade = useRef(new Animated.Value(0)).current;
+  const buttonSlide = useRef(new Animated.Value(40)).current;
+
+  const playSuccessAnimation = useCallback(() => {
+    successRingScale.setValue(0.8);
+    successRingOpacity.setValue(0.8);
+    readingFade.setValue(0);
+    buttonSlide.setValue(40);
+
+    Animated.sequence([
+      Animated.spring(successScale, {
+        toValue: 1,
+        friction: 5,
+        tension: 60,
+        useNativeDriver: true,
+      }),
+      Animated.parallel([
+        Animated.timing(successRingScale, {
+          toValue: 2.2,
+          duration: 700,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(successRingOpacity, {
+          toValue: 0,
+          duration: 700,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(readingFade, {
+          toValue: 1,
+          duration: 500,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.spring(buttonSlide, {
+          toValue: 0,
+          friction: 8,
+          tension: 50,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [successScale, successRingScale, successRingOpacity, readingFade, buttonSlide]);
 
   const log = useCallback((msg: string) => {
     if (__DEV__) {
@@ -325,13 +389,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       setLastReading({ systolic, diastolic, pulse: Number(data?.pulse) || 0, isHigh: high });
       setPhase("success");
       setStatusText(`${systolic}/${diastolic}`);
-
-      Animated.spring(successScale, {
-        toValue: 1,
-        friction: 5,
-        tension: 60,
-        useNativeDriver: true,
-      }).start();
+      playSuccessAnimation();
 
       // Stay armed briefly. These monitors hand over their whole stored batch in
       // one session, and disarming on the first reading would truncate it. The
@@ -349,8 +407,8 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       disarm,
       isBPHigh,
       log,
+      playSuccessAnimation,
       showToast,
-      successScale,
       syncToEMR,
     ]
   );
@@ -414,6 +472,25 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     return () => loop.stop();
   }, [phase, pulseAnim]);
 
+  // Orbiting ring while waiting — the same motion the iHealth screen uses during
+  // scan/connect/measure.
+  useEffect(() => {
+    if (phase === "armed" || phase === "receiving") {
+      const rotate = Animated.loop(
+        Animated.timing(ringRotate, {
+          toValue: 1,
+          duration: 2000,
+          easing: Easing.linear,
+          useNativeDriver: true,
+        })
+      );
+      rotate.start();
+      return () => rotate.stop();
+    }
+    ringRotate.setValue(0);
+    return undefined;
+  }, [phase, ringRotate]);
+
   // Reset on entry; always disarm on exit so a pending connect never outlives
   // the screen.
   useFocusEffect(
@@ -428,122 +505,343 @@ export default function BleCaptureScreen({ route, navigation }: any) {
         setHealthCheckCompleted(hasDailyHealthCheckToday());
       }
 
+      // Same entry animation as the iHealth screen.
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          friction: 8,
+          tension: 40,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
       return () => {
         disarm();
       };
-    }, [deviceType, disarm])
+    }, [deviceType, disarm, fadeAnim, scaleAnim])
   );
+
 
   // ==========================================================================
   // Render
+  //
+  // Structurally identical to CaptureScreen so a generic BLE monitor looks and
+  // moves exactly like an iHealth one. Only the copy and the phase names differ,
+  // because this flow waits on the patient rather than driving the device.
   // ==========================================================================
   if (!device) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.missingText}>Device not found.</Text>
+      <View style={[styles.container, styles.errorContainer]}>
+        <Text style={styles.errorText}>Device not found</Text>
+        <TouchableOpacity
+          style={styles.backButtonAlt}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>Go Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
+  const ringInterpolate = ringRotate.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
+  });
+
   const isWaiting = phase === "armed" || phase === "receiving";
-  const label = device.friendlyName || device.name || "Blood Pressure Monitor";
+  const isSuccess = phase === "success" && Boolean(lastReading);
+
+  const getPhaseMessage = () => {
+    switch (phase) {
+      case "armed":
+        return "Take your reading now";
+      case "receiving":
+        return "Getting your reading...";
+      case "success":
+        return "Reading saved!";
+      default:
+        return "Ready to measure";
+    }
+  };
+
+  const getSyncStatusText = () => {
+    switch (syncStatus) {
+      case "syncing":
+        return "Syncing to care team...";
+      case "synced":
+        return "✓ Sent to care team";
+      case "pending":
+        return "Will send when online";
+      default:
+        return "";
+    }
+  };
+
+  const bottomPadding = isSuccess
+    ? Math.max(insets.bottom + 12, 20)
+    : Math.max(insets.bottom + 24, 40);
+
+  const deviceTypeLabel = deviceService.getFriendlyTypeName(
+    device.model || "GATT_BP"
+  );
+
+  const renderReadingDisplay = () => {
+    if (!lastReading) return null;
+    return (
+      <Animated.View
+        style={[
+          styles.readingContainer,
+          isSuccess && styles.readingContainerSuccess,
+          { transform: [{ scale: successScale }] },
+        ]}
+      >
+        <View style={styles.bpReading}>
+          <Text
+            style={[
+              styles.bpValue,
+              isSuccess && styles.bpValueSuccess,
+              lastReading.isHigh && styles.bpValueHigh,
+            ]}
+          >
+            {lastReading.systolic}
+          </Text>
+          <Text style={[styles.bpSeparator, isSuccess && styles.bpSeparatorSuccess]}>/</Text>
+          <Text
+            style={[
+              styles.bpValue,
+              isSuccess && styles.bpValueSuccess,
+              lastReading.isHigh && styles.bpValueHigh,
+            ]}
+          >
+            {lastReading.diastolic}
+          </Text>
+        </View>
+        <Text style={[styles.readingUnit, isSuccess && styles.readingUnitSuccess]}>mmHg</Text>
+        {lastReading.isHigh && (
+          <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
+            <MaterialIcons name="warning" size={18} color="#FF5252" />
+            <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
+              Above threshold ({bpThresholds?.systolicHigh}/
+              {bpThresholds?.diastolicHigh})
+            </Text>
+          </View>
+        )}
+        {lastReading.pulse > 0 && (
+          <View style={[styles.pulseContainer, isSuccess && styles.pulseContainerSuccess]}>
+            <MaterialIcons
+              name="favorite"
+              size={isSuccess ? 16 : 18}
+              color={CAPTURE_ACCENT_SOFT}
+            />
+            <Text style={[styles.pulseText, isSuccess && styles.pulseTextSuccess]}>
+              {lastReading.pulse} bpm
+            </Text>
+          </View>
+        )}
+        {syncStatus !== "" && (
+          <Text
+            style={[
+              styles.syncStatusText,
+              isSuccess && styles.syncStatusTextSuccess,
+              syncStatus === "synced" && styles.syncStatusSynced,
+              syncStatus === "pending" && styles.syncStatusPending,
+            ]}
+          >
+            {getSyncStatusText()}
+          </Text>
+        )}
+      </Animated.View>
+    );
+  };
 
   return (
     <View style={styles.container}>
-      <LinearGradient
-        colors={[ACCENT, ACCENT_SOFT]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={[styles.header, { paddingTop: insets.top + 12 }]}
+      <StatusBar barStyle="light-content" />
+      <LinearGradient colors={CAPTURE_GRADIENT} style={StyleSheet.absoluteFill} />
+
+      {/* Header */}
+      <Animated.View
+        style={[
+          styles.header,
+          { opacity: fadeAnim, paddingTop: Math.max(insets.top + 6, 30) },
+        ]}
       >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.headerBtn}
+        >
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{label}</Text>
-        <Text style={styles.headerSub}>Blood Pressure</Text>
-      </LinearGradient>
+        <Text style={styles.headerTitle}>Capture Reading</Text>
+        <View style={styles.headerBtnSpacer} />
+      </Animated.View>
 
-      <ScrollView contentContainerStyle={styles.body}>
-        {phase === "success" && lastReading ? (
-          <Animated.View style={[styles.readingCard, { transform: [{ scale: successScale }] }]}>
-            <MaterialIcons name="check-circle" size={44} color={ACCENT} />
-            <Text style={styles.readingValue}>
-              {lastReading.systolic}/{lastReading.diastolic}
-              <Text style={styles.readingUnit}> mmHg</Text>
-            </Text>
-            {lastReading.pulse > 0 && (
-              <Text style={styles.readingPulse}>Pulse {lastReading.pulse} bpm</Text>
-            )}
-            {lastReading.isHigh && (
-              <View style={styles.highBanner}>
-                <MaterialIcons name="warning" size={18} color="#8a5300" />
-                <Text style={styles.highText}>
-                  This reading is above your target. Your care team will see it.
-                </Text>
-              </View>
-            )}
-            {syncStatus === "syncing" && <Text style={styles.syncText}>Syncing…</Text>}
-            {syncStatus === "synced" && <Text style={styles.syncText}>Sent to your care team</Text>}
-            {syncStatus === "pending" && (
-              <Text style={styles.syncText}>Saved. Will send when you're back online.</Text>
-            )}
-          </Animated.View>
-        ) : (
-          <>
-            <Animated.View style={[styles.iconWrap, { transform: [{ scale: pulseAnim }] }]}>
-              <MaterialIcons
-                name={isWaiting ? "bluetooth-searching" : "favorite"}
-                size={64}
-                color={ACCENT}
-              />
+      {/* Main Content */}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.scrollContent,
+          isSuccess && styles.scrollContentSuccess,
+          { paddingBottom: bottomPadding },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View
+          style={[
+            styles.content,
+            isSuccess && styles.contentSuccess,
+            { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
+          ]}
+        >
+          {/* Device Visual */}
+          <View style={[styles.deviceSection, isSuccess && styles.deviceSectionSuccess]}>
+            <Animated.View
+              style={[
+                styles.deviceRing,
+                isSuccess && styles.deviceRingSuccess,
+                {
+                  borderColor: CAPTURE_ACCENT,
+                  transform: [
+                    { scale: pulseAnim },
+                    { rotate: isWaiting ? ringInterpolate : "0deg" },
+                  ],
+                },
+              ]}
+            >
+              {isWaiting && (
+                <>
+                  <View
+                    style={[
+                      styles.ringDot,
+                      styles.ringDot1,
+                      { backgroundColor: CAPTURE_ACCENT },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.ringDot,
+                      styles.ringDot2,
+                      { backgroundColor: CAPTURE_ACCENT_SOFT },
+                    ]}
+                  />
+                </>
+              )}
             </Animated.View>
 
-            {isWaiting ? (
-              <>
-                <Text style={styles.stepTitle}>Take your reading now</Text>
-                <Text style={styles.stepBody}>
-                  Press the START button on your monitor and take your blood pressure as
-                  normal. CareView is listening and will pick up the reading automatically
-                  when the monitor finishes.
-                </Text>
-                <Text style={styles.statusLine}>{statusText}</Text>
-              </>
-            ) : (
-              <>
-                <Text style={styles.stepTitle}>Ready when you are</Text>
-                <Text style={styles.stepBody}>
-                  Tap below, then take your blood pressure. You don't need to press anything
-                  else on your phone — the reading arrives on its own.
-                </Text>
-              </>
+            <View style={[styles.deviceImageContainer, isSuccess && styles.deviceImageContainerSuccess]}>
+              <Image
+                source={deviceImages[device.type] || deviceImages.BP}
+                style={[styles.deviceImage, isSuccess && styles.deviceImageSuccess]}
+              />
+              {phase === "success" && (
+                <>
+                  {/* Expanding ring ripple */}
+                  <Animated.View
+                    style={[
+                      styles.successRing,
+                      isSuccess && styles.successRingSuccess,
+                      {
+                        borderColor: CAPTURE_ACCENT,
+                        transform: [{ scale: successRingScale }],
+                        opacity: successRingOpacity,
+                      },
+                    ]}
+                  />
+                  <Animated.View
+                    style={[
+                      styles.successBadge,
+                      isSuccess && styles.successBadgeSuccess,
+                      { backgroundColor: CAPTURE_ACCENT, transform: [{ scale: successScale }] },
+                    ]}
+                  >
+                    <MaterialIcons name="check" size={isSuccess ? 20 : 24} color="#fff" />
+                  </Animated.View>
+                </>
+              )}
+            </View>
+          </View>
+
+          {/* Device Info */}
+          <Text style={[styles.deviceName, isSuccess && styles.deviceNameSuccess]}>
+            {device.friendlyName || device.name}
+          </Text>
+          <Text style={[styles.deviceType, isSuccess && styles.deviceTypeSuccess]}>
+            {deviceTypeLabel}
+          </Text>
+
+          {/* Reading Display or Status */}
+          {isSuccess ? (
+            <Animated.View style={{ opacity: readingFade }}>
+              {renderReadingDisplay()}
+            </Animated.View>
+          ) : (
+            <View style={styles.statusSection}>
+              <Text
+                style={[
+                  styles.statusText,
+                  isWaiting ? { color: CAPTURE_ACCENT_SOFT } : styles.statusTextIdle,
+                ]}
+              >
+                {getPhaseMessage()}
+              </Text>
+              <Text style={styles.statusSubtext}>
+                {isWaiting
+                  ? "Press START on your monitor and take your blood pressure as normal. The reading arrives on its own."
+                  : "Tap below, then take your blood pressure. You do not need to touch your phone again."}
+              </Text>
+              {isWaiting && statusText !== "" && (
+                <Text style={styles.statusSubtext}>{statusText}</Text>
+              )}
+            </View>
+          )}
+
+          {/* Action Buttons */}
+          <View style={[styles.buttonContainer, isSuccess && styles.buttonContainerSuccess]}>
+            {phase === "idle" && (
+              <TouchableOpacity
+                onPress={start}
+                activeOpacity={0.8}
+                style={styles.primaryButton}
+              >
+                <Text style={styles.primaryButtonText}>Capture Reading</Text>
+              </TouchableOpacity>
             )}
-          </>
-        )}
+
+            {isWaiting && (
+              <TouchableOpacity
+                style={styles.cancelButton}
+                onPress={async () => {
+                  await disarm();
+                  setPhase("idle");
+                  setStatusText("");
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+            )}
+
+            {phase === "success" && (
+              <Animated.View style={{ transform: [{ translateY: buttonSlide }], opacity: readingFade }}>
+                <TouchableOpacity
+                  onPress={() => navigation.goBack()}
+                  activeOpacity={0.8}
+                  style={[styles.primaryButton, isSuccess && styles.primaryButtonSuccess]}
+                >
+                  <Text style={styles.primaryButtonText}>Done</Text>
+                </TouchableOpacity>
+              </Animated.View>
+            )}
+          </View>
+        </Animated.View>
       </ScrollView>
 
-      <View style={[styles.dock, { paddingBottom: insets.bottom + 12 }]}>
-        {phase === "success" ? (
-          <TouchableOpacity style={styles.primaryBtn} onPress={() => navigation.goBack()}>
-            <Text style={styles.primaryBtnText}>Done</Text>
-          </TouchableOpacity>
-        ) : isWaiting ? (
-          <TouchableOpacity
-            style={styles.quietBtn}
-            onPress={async () => {
-              await disarm();
-              setPhase("idle");
-              setStatusText("");
-            }}
-          >
-            <Text style={styles.quietBtnText}>Cancel</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity style={styles.primaryBtn} onPress={start}>
-            <Text style={styles.primaryBtnText}>Start Capture</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
+      {/* Daily Health Check Modal — same preeclampsia gate as the iHealth flow */}
       <DailyHealthCheckModal
         visible={showHealthCheckModal}
         onComplete={handleHealthCheckComplete}
@@ -551,65 +849,3 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f6f8fa" },
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  missingText: { fontSize: 15, color: "#5b6b7f" },
-
-  header: { paddingHorizontal: 20, paddingBottom: 22 },
-  backBtn: { marginBottom: 8, width: 32 },
-  headerTitle: { color: "#fff", fontSize: 20, fontWeight: "700" },
-  headerSub: { color: "rgba(255,255,255,0.85)", fontSize: 13, marginTop: 2 },
-
-  body: { padding: 24, alignItems: "center" },
-  iconWrap: { marginTop: 24, marginBottom: 20 },
-  stepTitle: { fontSize: 19, fontWeight: "700", color: "#0f2430", textAlign: "center" },
-  stepBody: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: "#5b6b7f",
-    textAlign: "center",
-    marginTop: 10,
-  },
-  statusLine: { marginTop: 18, fontSize: 14, color: ACCENT, fontWeight: "600" },
-
-  readingCard: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    padding: 24,
-    alignItems: "center",
-    width: "100%",
-    marginTop: 16,
-  },
-  readingValue: { fontSize: 40, fontWeight: "700", color: "#0f2430", marginTop: 10 },
-  readingUnit: { fontSize: 16, fontWeight: "600", color: "#5b6b7f" },
-  readingPulse: { fontSize: 15, color: "#5b6b7f", marginTop: 4 },
-  highBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fff4e0",
-    borderRadius: 8,
-    padding: 12,
-    marginTop: 16,
-    gap: 8,
-  },
-  highText: { flex: 1, fontSize: 13, color: "#8a5300", lineHeight: 18 },
-  syncText: { marginTop: 14, fontSize: 13, color: "#5b6b7f" },
-
-  dock: { padding: 16, backgroundColor: "#fff", borderTopWidth: 1, borderTopColor: "#e6ecf2" },
-  primaryBtn: {
-    backgroundColor: BTN.primary,
-    borderRadius: BTN.radius,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  primaryBtnText: { color: BTN.primaryText, fontSize: 16, fontWeight: "700" },
-  quietBtn: {
-    backgroundColor: BTN.quiet,
-    borderRadius: BTN.radius,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  quietBtnText: { color: BTN.quietText, fontSize: 16, fontWeight: "700" },
-});
