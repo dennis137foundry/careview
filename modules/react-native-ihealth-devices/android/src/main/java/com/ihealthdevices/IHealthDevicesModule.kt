@@ -47,6 +47,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     private var scanTypesList = listOf<String>()
     private var currentScanIndex = 0
     private var isScanningActive = false
+    // True while a generic-BLE scan runs in parallel with the iHealth rotation.
+    private var genericContinuousScan = false
 
     private val scanNextRunnable = Runnable { advanceToNextType() }
 
@@ -252,10 +254,12 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
 
         // Stop previous discovery before starting next
         try { iHealthDevicesManager.getInstance().stopDiscovery() } catch (_: Exception) {}
-        // A generic-BLE window may have been the previous phase. Close its
-        // scanner too, so only one scanner is ever live at a time and the
-        // iHealth SDK keeps exclusive use of the radio during its own windows.
-        genericBle?.stopScan()
+        // The generic scanner now runs for the whole session, so the rotation
+        // must not stop it between iHealth windows. Only tear it down here if
+        // it is NOT in continuous mode.
+        if (!genericContinuousScan) {
+            genericBle?.stopScan()
+        }
 
         if (currentScanIndex >= scanTypesList.size) {
             // The iHealth Android SDK can only discover one device type at a time, so we
@@ -277,14 +281,11 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         val type = scanTypesList[currentScanIndex]
         currentScanIndex++
 
-        // "GATT" is a pseudo-type meaning "scan for standard-profile BLE devices
-        // this window". It is never in the capture-screen scan list — only Add
-        // Device asks for it, and only after every iHealth type, so iHealth
-        // discovery is unaffected in both timing and behaviour.
+        // "GATT" never reaches the rotation any more — startScan strips it out
+        // and runs that scanner continuously instead. Guard anyway so a stale
+        // caller cannot burn an iHealth window on a no-op.
         if (type.equals("GATT", ignoreCase = true)) {
-            sendDebugLog("Scanning for generic BLE devices (${scanTypesList.size - currentScanIndex} types after this)")
-            ensureGenericBle().startScan()
-            scanHandler.postDelayed(scanNextRunnable, SCAN_WINDOW_MS)
+            advanceToNextType()
             return
         }
 
@@ -829,6 +830,26 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 deviceTypes.getString(i)?.let { types.add(it) }
             }
             sendDebugLog("Starting scan for: $types")
+
+            // "GATT" asks for generic BLE monitors. Rather than giving it a slot
+            // in the rotation, run its scanner CONTINUOUSLY alongside. The
+            // iHealth SDK can only discover one type at a time, so its types
+            // must take turns — our own scanner has no such limit.
+            //
+            // As a rotation slot it was 8th of 8, so a generic monitor was only
+            // discoverable for 3s out of every 24s and took up to a minute to
+            // appear. Continuous means it shows up almost immediately.
+            //
+            // This leaves the iHealth rotation completely untouched: same seven
+            // types, same 3s windows, same order — it no longer even gives up a
+            // slot. It also adds nothing to Android's 5-scans-per-30s throttle,
+            // since our scanner starts once per session instead of restarting
+            // every cycle.
+            genericContinuousScan = types.removeAll { it.equals("GATT", ignoreCase = true) }
+            if (genericContinuousScan) {
+                sendDebugLog("Generic BLE: continuous scan alongside iHealth rotation")
+                ensureGenericBle().startScan()
+            }
 
             scanTypesList = types.toList()
             currentScanIndex = 0

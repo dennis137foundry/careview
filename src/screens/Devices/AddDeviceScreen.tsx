@@ -42,13 +42,6 @@ import {
 // Component
 // ============================================================================
 
-const getCategoryLabel = (category: DeviceCategory | string): string => {
-  if (category === "BP") return "blood pressure monitor";
-  if (category === "SCALE") return "scale";
-  if (category === "BG") return "glucose meter";
-  return "device";
-};
-
 const BLUETOOTH_ERROR_CODES = new Set([
   "BLUETOOTH_OFF",
   "BLUETOOTH_UNAUTHORIZED",
@@ -215,9 +208,27 @@ export default function AddDeviceScreen() {
     setScanning(false);
   };
 
-  // Check if device type already exists
-  const hasDeviceOfType = (category: DeviceCategory): boolean => {
-    return existingDevices.some((d) => d.type === category);
+  /**
+   * Is THIS specific monitor already paired?
+   *
+   * Previously this asked "does the patient have any device of this category",
+   * which meant a second blood pressure monitor rendered as "Added" and could
+   * not be tapped — the badge reported the wrong reason, and a patient carrying
+   * an iHealth cuff could never add a backup A&D one.
+   *
+   * Patients may now hold more than one monitor of a category. The EMR already
+   * supports it: every reading carries the unit_id of the device that produced
+   * it, so attribution stays per-device however many are paired.
+   *
+   * Matched on normalised MAC rather than the local id, so a device paired
+   * before hardwareMac existed still matches itself.
+   */
+  const isAlreadyPaired = (device: DiscoveredDevice): boolean => {
+    const mac = normalizeMac(device.mac);
+    if (!mac) return false;
+    return existingDevices.some(
+      (d) => normalizeMac(d.mac || "") === mac || d.hardwareMac === mac
+    );
   };
 
   // Handle device selection — BP devices get a cuff-size picker first,
@@ -225,11 +236,12 @@ export default function AddDeviceScreen() {
   const handleSelectDevice = (device: DiscoveredDevice) => {
     const category = device.category || deviceService.getCategory(device.type);
 
-    // Check for existing device of same type
-    if (hasDeviceOfType(category)) {
+    // Only this exact monitor being paired twice is a problem. A second monitor
+    // of the same category is allowed — patients keep a backup.
+    if (isAlreadyPaired(device)) {
       Alert.alert(
-        "Device Type Exists",
-        `You already have a ${getCategoryLabel(category)} registered. Remove it first to add a new one.`,
+        "Already Paired",
+        "This monitor is already on your device list.",
         [{ text: "OK" }]
       );
       return;
@@ -437,15 +449,6 @@ export default function AddDeviceScreen() {
       return;
     }
 
-    // Check for existing device
-    if (hasDeviceOfType(category)) {
-      Alert.alert(
-        "Device Type Exists",
-        `You already have a ${getCategoryLabel(category)} registered.`
-      );
-      return;
-    }
-
     // Create device from QR code
     const device: DiscoveredDevice = {
       mac: mac.toUpperCase(),
@@ -454,6 +457,13 @@ export default function AddDeviceScreen() {
       category,
       source: "iHealthSDK",
     };
+
+    // Duplicate check happens on the built device so it compares MACs, not
+    // categories — a second monitor of the same kind is allowed.
+    if (isAlreadyPaired(device)) {
+      Alert.alert("Already Paired", "This monitor is already on your device list.");
+      return;
+    }
 
     // Same flow as scan-list selection: cuff picker for BP, otherwise
     // add immediately with the default name.
@@ -492,8 +502,9 @@ export default function AddDeviceScreen() {
   // Render device item
   const renderDevice = ({ item }: { item: DiscoveredDevice }) => {
     const isConnecting = connecting === item.mac;
-    const category = item.category || deviceService.getCategory(item.type);
-    const alreadyExists = hasDeviceOfType(category);
+    // "Added" now means THIS monitor is paired — not merely that some other
+    // device of the same category is.
+    const alreadyExists = isAlreadyPaired(item);
     const isGATT = item.source === "BLE_GATT";
 
     return (
