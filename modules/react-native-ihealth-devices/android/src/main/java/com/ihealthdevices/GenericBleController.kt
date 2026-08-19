@@ -256,6 +256,12 @@ class GenericBleController(
                 }
                 BluetoothDevice.BOND_NONE -> {
                     events.debug("BLE: bonding failed or was refused for ${device.address}")
+                    if (bondingAddress == device.address) {
+                        deviceInfo["ready"] = false
+                        deviceInfo["failureReason"] = "Pairing was not completed"
+                        flushDeviceInfo(device.address)
+                        bondingAddress = null
+                    }
                 }
             }
         }
@@ -430,6 +436,20 @@ class GenericBleController(
                     putString("source", SOURCE)
                 })
 
+                // flushDeviceInfo clears bondingAddress on success, so if it is
+                // still set the session ended without provisioning. Report the
+                // failure now rather than leaving Add Device to time out.
+                if (bondingAddress == address) {
+                    events.debug("BLE: provisioning ended without success")
+                    deviceInfo["ready"] = false
+                    if (deviceInfo["failureReason"] == null) {
+                        deviceInfo["failureReason"] =
+                            "Monitor disconnected before pairing completed"
+                    }
+                    flushDeviceInfo(address)
+                    bondingAddress = null
+                }
+
                 // These monitors hang up as soon as they have handed over their
                 // stored readings. If capture is still running, re-establish the
                 // standing request so the next reading is caught too.
@@ -465,7 +485,19 @@ class GenericBleController(
 
         @SuppressLint("MissingPermission")
         override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            events.debug("BLE: CCCD write ${if (status == BluetoothGatt.GATT_SUCCESS) "ok" else "failed ($status)"}")
+            val ok = status == BluetoothGatt.GATT_SUCCESS
+            events.debug("BLE: CCCD write ${if (ok) "ok" else "failed ($status)"}")
+
+            // THE signal that pairing is valid. 0x2A35 is encrypted, so the CCCD
+            // write only succeeds with working bond keys. Device Information
+            // reads unencrypted and therefore proves nothing about pairing.
+            if (descriptor.characteristic?.uuid == CHAR_BP_MEASUREMENT) {
+                deviceInfo["ready"] = ok
+                if (!ok) {
+                    deviceInfo["failureReason"] =
+                        "Could not subscribe to measurements (status $status)"
+                }
+            }
             finishOp()
         }
 
@@ -670,6 +702,10 @@ class GenericBleController(
             (deviceInfo["serialNumber"] as? String)?.let { putString("serialNumber", it) }
             (deviceInfo["modelNumber"] as? String)?.let { putString("modelNumber", it) }
             (deviceInfo["battery"] as? Int)?.let { putInt("battery", it) }
+            // Whether the encrypted measurement subscription actually took.
+            // Absent CCCD callback means it never got that far — treat as false.
+            putBoolean("ready", deviceInfo["ready"] as? Boolean ?: false)
+            (deviceInfo["failureReason"] as? String)?.let { putString("failureReason", it) }
         }
         events.emit("onBleDeviceInfo", params)
 

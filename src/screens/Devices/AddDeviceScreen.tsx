@@ -42,6 +42,36 @@ import {
 // Component
 // ============================================================================
 
+/**
+ * Shown when a generic BLE monitor connects but pairing does not take.
+ *
+ * The usual cause is a stale bond: the phone still holds pairing keys from an
+ * earlier setup while the monitor, in pairing mode, expects fresh ones. Neither
+ * side reports anything — the connection succeeds and the encrypted measurement
+ * characteristic simply never delivers.
+ *
+ * Neither platform lets an app clear this itself. iOS has no API for it at all;
+ * Android's removeBond() is hidden and unreliable across OEMs. So the honest
+ * thing is to name the fix and take the user straight to the one screen where
+ * they can apply it.
+ */
+function showPairingResetHelp(reason?: string) {
+  const where =
+    Platform.OS === "ios"
+      ? "Open Settings > Bluetooth, tap the (i) next to your monitor, and choose Forget This Device."
+      : "Open Settings > Connected devices, tap the gear next to your monitor, and choose Forget.";
+
+  Alert.alert(
+    "Pairing Needs Resetting",
+    `Your phone connected to the monitor but pairing did not complete, so it was not added.\n\n${where}\n\nThen put the monitor back into pairing mode (hold START for about 3 seconds until you see "Pr") and add it again.` +
+      (reason ? `\n\nDetails: ${reason}` : ""),
+    [
+      { text: "Not Now", style: "cancel" },
+      { text: "Open Settings", onPress: () => Linking.openSettings() },
+    ]
+  );
+}
+
 const BLUETOOTH_ERROR_CODES = new Set([
   "BLUETOOTH_OFF",
   "BLUETOOTH_UNAUTHORIZED",
@@ -292,8 +322,16 @@ export default function AddDeviceScreen() {
     if (isBle) {
       await stopScan();
       bleInfo = await deviceService.bleBondAndProvision(device.mac);
-      if (!bleInfo) {
-        console.warn("[AddDevice] BLE bond did not report device info");
+
+      // Refuse to add a monitor we could not actually pair with. It would sit in
+      // the list looking healthy and silently never produce a reading — the exact
+      // failure that wasted an afternoon: a spinner, then a dead device, and no
+      // indication anywhere of what went wrong or how to fix it.
+      if (!bleInfo?.ready) {
+        setConnecting(null);
+        setPendingDevice(null);
+        showPairingResetHelp(bleInfo?.failureReason);
+        return;
       }
     }
 

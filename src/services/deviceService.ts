@@ -97,6 +97,18 @@ export interface BleDeviceInfo {
   serialNumber?: string;
   modelNumber?: string;
   battery?: number;
+  /**
+   * Did subscribing to the encrypted measurement characteristic (0x2A35)
+   * actually succeed? This is the only trustworthy proof that pairing works.
+   *
+   * Device Information reads unencrypted, so getting a serial number back says
+   * nothing about whether the bond is valid. A monitor whose pairing has gone
+   * stale still answers those reads, connects happily, and then never delivers
+   * a measurement — which is precisely the silent failure this flag exists to
+   * catch before a device is added.
+   */
+  ready?: boolean;
+  failureReason?: string;
 }
 
 export interface BluetoothStatus {

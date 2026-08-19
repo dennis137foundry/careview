@@ -11,6 +11,8 @@ import {
   Animated,
   PanResponder,
   ScrollView,
+  Linking,
+  Platform,
 } from "react-native";
 import { useSelector, useDispatch } from "react-redux";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
@@ -113,6 +115,30 @@ function SwipeableDeviceCard({
   };
 
   const handleDelete = () => {
+    // Removing a generic BLE monitor here does NOT clear the phone's Bluetooth
+    // pairing — no app can do that on iOS, and Android's API for it is hidden
+    // and unreliable. Leaving the old pairing behind is what makes the monitor
+    // impossible to re-add later: it connects, reports nothing, and gives no
+    // clue why. So say it at the moment of removal, when it is still easy to act
+    // on, rather than letting it surface as a mystery days later.
+    const isBle = device.source === "BLE_GATT";
+
+    const promptToForgetPairing = () => {
+      const where =
+        Platform.OS === "ios"
+          ? "Settings > Bluetooth, tap the (i) next to it, then Forget This Device."
+          : "Settings > Connected devices, tap the gear next to it, then Forget.";
+
+      Alert.alert(
+        "One More Step",
+        `"${device.name}" was removed from CareView, but your phone still remembers its Bluetooth pairing.\n\nTo be able to pair it again later, also remove it in ${where}`,
+        [
+          { text: "Later", style: "cancel" },
+          { text: "Open Settings", onPress: () => Linking.openSettings() },
+        ]
+      );
+    };
+
     Alert.alert(
       "Delete Device",
       `Are you sure you want to remove "${device.name}"?\n\nThis will not delete any saved readings.`,
@@ -124,6 +150,10 @@ function SwipeableDeviceCard({
           onPress: () => {
             resetSwipe();
             onDelete();
+            if (isBle) {
+              // Let the row's exit animation finish before stacking a second alert.
+              setTimeout(promptToForgetPairing, 350);
+            }
           },
         },
       ]

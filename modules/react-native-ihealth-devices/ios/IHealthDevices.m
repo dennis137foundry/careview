@@ -546,6 +546,18 @@ RCT_EXPORT_MODULE();
 
 - (void)centralManager:(CBCentralManager *)central didFailToConnectPeripheral:(CBPeripheral *)peripheral error:(NSError *)error {
     [self sendDebugLog:[NSString stringWithFormat:@"❌ GATT connection FAILED: %@", error.localizedDescription]];
+
+    // Answer the Add Device flow immediately rather than making it wait out its
+    // timeout for an event that is never coming.
+    NSString *failedIdentifier = peripheral.identifier.UUIDString;
+    if ([_bleBondingIdentifiers containsObject:failedIdentifier]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self bleSetDeviceInfo:failedIdentifier key:@"ready" value:@NO];
+            [self bleSetDeviceInfo:failedIdentifier
+                               key:@"failureReason"
+                             value:error.localizedDescription ?: @"Could not connect"];
+        });
+    }
     
     dispatch_async(dispatch_get_main_queue(), ^{
         [self sendEventSafe:@"onError" body:@{
@@ -689,14 +701,39 @@ RCT_EXPORT_MODULE();
 }
 
 - (void)peripheral:(CBPeripheral *)peripheral didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic error:(NSError *)error {
+    NSString *identifier = peripheral.identifier.UUIDString;
+    BOOL isMeasurementChar = [[characteristic.UUID.UUIDString uppercaseString] containsString:@"2A35"];
+
     if (error) {
         [self sendDebugLog:[NSString stringWithFormat:@"❌ GATT notification error: %@", error.localizedDescription]];
+        // This is THE signal that a bond is missing or stale. 0x2A35 is
+        // encrypted, so subscribing to it only succeeds with valid pairing keys.
+        // Device Information reads unencrypted and therefore proves nothing.
+        if (isMeasurementChar) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self bleSetDeviceInfo:identifier key:@"ready" value:@NO];
+                [self bleSetDeviceInfo:identifier
+                                   key:@"failureReason"
+                                 value:error.localizedDescription ?: @"Could not subscribe to measurements"];
+            });
+        }
         return;
     }
-    
-    [self sendDebugLog:[NSString stringWithFormat:@"📡 GATT Notification %@ for %@", 
+
+    [self sendDebugLog:[NSString stringWithFormat:@"📡 GATT Notification %@ for %@",
                        characteristic.isNotifying ? @"ON" : @"OFF", characteristic.UUID]];
-    
+
+    if (isMeasurementChar) {
+        // Setting "ready" also drives the flush, so the Add Device flow always
+        // gets an answer instead of hanging until its timeout. Before this, a
+        // total failure emitted nothing at all and the user just watched a
+        // spinner for 15 seconds.
+        BOOL notifying = characteristic.isNotifying;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self bleSetDeviceInfo:identifier key:@"ready" value:@(notifying)];
+        });
+    }
+
     if (characteristic.isNotifying) {
         [self sendDebugLog:@"✅ GATT device READY - waiting for measurement..."];
     }
