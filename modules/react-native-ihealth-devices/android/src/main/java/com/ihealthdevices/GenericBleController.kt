@@ -738,6 +738,19 @@ class GenericBleController(
             pulse = sfloat(data, offset).toInt()
         }
 
+        // Drop anything that is not a believable blood pressure. Monitors ship
+        // with factory-test records in memory and hand them over on the first
+        // connection; those carried NaN fields and reached a patient chart as
+        // 2047/2047. Silence is the correct outcome — the capture screen simply
+        // keeps waiting for a real reading.
+        if (!isPlausibleBP(systolic, diastolic, pulse)) {
+            events.debug(
+                "BLE: discarded implausible BP $systolic/$diastolic pulse=$pulse " +
+                    "(flags=0x%02X, ${data.size} bytes)".format(flags)
+            )
+            return
+        }
+
         events.debug(
             "BLE: BP ${systolic.toInt()}/${diastolic.toInt()} pulse=$pulse " +
                 "deviceTime=${if (measuredAtMs > 0) "yes" else "no"}"
@@ -780,8 +793,20 @@ class GenericBleController(
      * IEEE 11073 16-bit SFLOAT: 12-bit signed mantissa, 4-bit signed exponent.
      */
     private fun sfloat(data: ByteArray, offset: Int): Float {
-        if (offset + 1 >= data.size) return 0f
+        if (offset + 1 >= data.size) return Float.NaN
         val raw = (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
+
+        // Reserved values are NOT numbers and must never be decoded
+        // arithmetically. NaN is 0x07FF, which naively evaluates to 2047 — the
+        // value that reached a patient chart as 2047/2047 mmHg from a new
+        // monitor's factory-test records.
+        when (raw and 0x0FFF) {
+            0x07FF -> return Float.NaN               // NaN
+            0x0800 -> return Float.NaN               // NRes — not at this resolution
+            0x07FE -> return Float.POSITIVE_INFINITY // +INFINITY
+            0x0802 -> return Float.NEGATIVE_INFINITY // -INFINITY
+            0x0801 -> return Float.NaN               // Reserved
+        }
 
         var mantissa = raw and 0x0FFF
         var exponent = (raw shr 12) and 0x0F
@@ -790,6 +815,22 @@ class GenericBleController(
         if (exponent and 0x08 != 0) exponent = exponent or 0xFFFFFFF0.toInt()   // sign-extend 4→32
 
         return (mantissa * Math.pow(10.0, exponent.toDouble())).toFloat()
+    }
+
+    /**
+     * Physiological sanity gate — the last line of defence before a number
+     * reaches a chart. Deliberately wide: the job is to reject impossible
+     * values, not to make clinical judgements about unusual ones.
+     *
+     * Must stay identical to isPlausibleBPSystolic:diastolic:pulse: on iOS.
+     */
+    private fun isPlausibleBP(systolic: Float, diastolic: Float, pulse: Int): Boolean {
+        if (!systolic.isFinite() || !diastolic.isFinite()) return false
+        if (systolic < 30f || systolic > 300f) return false
+        if (diastolic < 10f || diastolic > 250f) return false
+        if (systolic <= diastolic) return false
+        if (pulse != 0 && (pulse < 20 || pulse > 250)) return false
+        return true
     }
 
     /**

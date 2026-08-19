@@ -103,9 +103,43 @@ function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
  * is skipped — no duplicate row, no redundant EMR round-trip. Same approach the
  * BG5S path uses for its stored records.
  */
-function buildBleReadingId(deviceId: string, measuredAtMs: number): string {
-  const stamp = Math.floor(measuredAtMs / 1000); // second precision
-  return `ble_${deviceId || "device"}_${stamp}`;
+function buildBleReadingId(
+  deviceId: string,
+  measuredAtMs: number | null,
+  values: { systolic: number; diastolic: number; pulse: number }
+): string {
+  const device = deviceId || "device";
+
+  if (measuredAtMs) {
+    const stamp = Math.floor(measuredAtMs / 1000); // second precision
+    return `ble_${device}_${stamp}`;
+  }
+
+  // No device clock. Arrival time must NOT be used here: it differs on every
+  // delivery, so a monitor re-sending the same stored record would insert a new
+  // row each session — and did, four times, from one batch of factory records.
+  // Keying on the values instead makes a repeat collapse onto the id we already
+  // hold.
+  //
+  // Tradeoff accepted: two genuinely identical readings from an unclocked
+  // monitor collapse into one. Losing a duplicate-valued data point is a far
+  // smaller harm than accumulating phantom readings in a chart, and the case is
+  // rare — pairing writes the clock, so only records predating it land here.
+  return `ble_${device}_nots_${values.systolic}_${values.diastolic}_${values.pulse}`;
+}
+
+/**
+ * Physiological sanity gate. Mirrors the native check on both platforms; kept
+ * here as well so a JS update can protect a device still running older native
+ * code. Wide on purpose — it rejects the impossible, not the merely unusual.
+ */
+function isPlausibleBP(systolic: number, diastolic: number, pulse: number): boolean {
+  if (!Number.isFinite(systolic) || !Number.isFinite(diastolic)) return false;
+  if (systolic < 30 || systolic > 300) return false;
+  if (diastolic < 10 || diastolic > 250) return false;
+  if (systolic <= diastolic) return false;
+  if (pulse !== 0 && (pulse < 20 || pulse > 250)) return false;
+  return true;
 }
 
 export default function BleCaptureScreen({ route, navigation }: any) {
@@ -333,15 +367,33 @@ export default function BleCaptureScreen({ route, navigation }: any) {
 
   const saveReading = useCallback(
     async (data: any) => {
-      // measuredAt is the monitor's own clock, written during pairing. It is 0
-      // when the device never had its time set, in which case arrival time is
-      // the best available answer.
-      const measuredAt =
-        typeof data?.measuredAt === "number" && data.measuredAt > 0
-          ? data.measuredAt
-          : Date.now();
+      const systolic = Number(data?.systolic);
+      const diastolic = Number(data?.diastolic);
+      const pulse = Number(data?.pulse) || 0;
 
-      const readingId = buildBleReadingId(deviceDbId || "", measuredAt);
+      // Validated BEFORE anything is written or the timeout is cleared. Native
+      // rejects implausible values too; this repeats the check because a
+      // JS-only update can ship ahead of a native binary, and because a wrong
+      // number in a patient's chart is not recoverable by us.
+      if (!isPlausibleBP(systolic, diastolic, pulse)) {
+        log(
+          `Discarded implausible BP ${data?.systolic}/${data?.diastolic} pulse=${data?.pulse}`
+        );
+        return;
+      }
+
+      // measuredAt is the monitor's own clock, set during pairing. It is 0 on a
+      // monitor whose clock was never written — including factory-test records
+      // that predate pairing.
+      const hasDeviceTime =
+        typeof data?.measuredAt === "number" && data.measuredAt > 0;
+      const measuredAt = hasDeviceTime ? data.measuredAt : Date.now();
+
+      const readingId = buildBleReadingId(
+        deviceDbId || "",
+        hasDeviceTime ? data.measuredAt : null,
+        { systolic, diastolic, pulse }
+      );
       if (readingExists(readingId)) {
         log(`Already captured (${readingId}) — skipping duplicate`);
         return;
@@ -351,13 +403,6 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
-      }
-
-      const systolic = Number(data?.systolic);
-      const diastolic = Number(data?.diastolic);
-      if (!Number.isFinite(systolic) || !Number.isFinite(diastolic) || systolic <= 0) {
-        log("Discarding malformed BP payload");
-        return;
       }
 
       const high = isBPHigh(systolic, diastolic);
@@ -376,7 +421,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
             deviceName: device?.friendlyName || device?.name || "BP Monitor",
             value: systolic,
             value2: diastolic,
-            heartRate: Number(data?.pulse) || 0,
+            heartRate: pulse,
             unit: "mmHg",
           })
         ).unwrap();
@@ -390,7 +435,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
         return;
       }
 
-      setLastReading({ systolic, diastolic, pulse: Number(data?.pulse) || 0, isHigh: high });
+      setLastReading({ systolic, diastolic, pulse, isHigh: high });
       setPhase("success");
       setStatusText(`${systolic}/${diastolic}`);
       playSuccessAnimation();

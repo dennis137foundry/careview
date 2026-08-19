@@ -875,6 +875,18 @@ RCT_EXPORT_MODULE();
         pulseRate = (int)[self parseSFLOAT:&bytes[offset]];
     }
 
+    // Drop anything that is not a believable blood pressure. Monitors ship with
+    // factory-test records in memory and hand them over on the first
+    // connection; those carried NaN fields and reached a patient chart as
+    // 2047/2047. Silence is the correct outcome — the capture screen simply
+    // keeps waiting for a real reading.
+    if (![self isPlausibleBPSystolic:systolic diastolic:diastolic pulse:pulseRate]) {
+        [self sendDebugLog:[NSString stringWithFormat:
+            @"⚠️ Discarded implausible BP: %.1f/%.1f pulse=%d (flags=0x%02X, %lu bytes)",
+            systolic, diastolic, pulseRate, flags, (unsigned long)data.length]];
+        return;
+    }
+
     [self sendDebugLog:[NSString stringWithFormat:@"🎉 GATT BP: %d/%d mmHg, pulse=%d, deviceTime=%@",
                         (int)systolic, (int)diastolic, pulseRate,
                         measuredAtMs > 0 ? @"yes" : @"no"]];
@@ -933,15 +945,53 @@ RCT_EXPORT_MODULE();
     });
 }
 
+/**
+ * IEEE 11073 16-bit SFLOAT: 12-bit signed mantissa, 4-bit signed exponent.
+ *
+ * The five reserved mantissa values below are NOT numbers and must never be
+ * arithmetically decoded. NaN in particular is 0x07FF — exponent 0, mantissa
+ * 0x7FF — which naively evaluates to 2047. A brand-new monitor handed over
+ * factory-test records whose fields were NaN, and 2047/2047 mmHg was written
+ * into a patient's chart four times. Returning NAN here makes the caller's
+ * validity check reject them instead.
+ */
 - (float)parseSFLOAT:(const uint8_t *)bytes {
-    int16_t raw = bytes[0] | (bytes[1] << 8);
+    uint16_t raw = bytes[0] | (bytes[1] << 8);
+
+    switch (raw & 0x0FFF) {
+        case 0x07FF: return NAN;       // NaN
+        case 0x0800: return NAN;       // NRes — not at this resolution
+        case 0x07FE: return INFINITY;  // +INFINITY
+        case 0x0802: return -INFINITY; // -INFINITY
+        case 0x0801: return NAN;       // Reserved
+        default: break;
+    }
+
     int16_t mantissa = raw & 0x0FFF;
     int8_t exponent = (raw >> 12) & 0x0F;
-    
+
     if (mantissa & 0x0800) mantissa |= 0xF000;
     if (exponent & 0x08) exponent |= 0xF0;
-    
+
     return (float)mantissa * powf(10.0f, (float)exponent);
+}
+
+/**
+ * Physiological sanity gate — the last line of defence before a number reaches
+ * a chart. Deliberately wide: the job is to reject impossible values, not to
+ * make clinical judgements about unusual ones.
+ *
+ * Nothing outside this range is ever emitted. A reading the app cannot vouch
+ * for is worth losing; a wrong one in an EMR is not, least of all for a
+ * preeclampsia patient where a false 2047/2047 reads as a crisis.
+ */
+- (BOOL)isPlausibleBPSystolic:(float)systolic diastolic:(float)diastolic pulse:(int)pulse {
+    if (!isfinite(systolic) || !isfinite(diastolic)) return NO;
+    if (systolic < 30 || systolic > 300) return NO;
+    if (diastolic < 10 || diastolic > 250) return NO;
+    if (systolic <= diastolic) return NO;
+    if (pulse != 0 && (pulse < 20 || pulse > 250)) return NO;
+    return YES;
 }
 
 #pragma mark - Controller Initialization
