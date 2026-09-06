@@ -14,6 +14,8 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useDispatch } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { cancelUrineReminders } from "../../services/urineReminderService";
+import { clearLoginSession } from "../../services/urineProteinSession";
 import { logout } from "../../redux/userSlice";
 import { wipeAllPatientData } from "../../services/sqliteService";
 import type { AppDispatch } from "../../redux/store";
@@ -51,6 +53,8 @@ export default function WipeDataScreen({ navigation }: any) {
       await AsyncStorage.multiRemove(["careview_profile_photo"]);
 
       // Dispatch logout (clears user table + resets Redux → navigates to Auth)
+      cancelUrineReminders();
+      clearLoginSession();
       dispatch(logout());
     } catch (error) {
       console.error("[WipeData] Wipe failed:", error);

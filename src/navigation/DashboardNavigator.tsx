@@ -4,10 +4,12 @@ import DashboardScreen from "../screens/Dashboard/DashboardScreen";
 // Routes iHealth devices to CaptureScreen and generic BLE devices to
 // BleCaptureScreen. See CaptureRouter for why the flows are kept separate.
 import CaptureScreen from "../screens/Capture/CaptureRouter";
+import WellnessHistoryScreen from "../screens/Dashboard/WellnessHistoryScreen";
 
 export type DashboardStackParamList = {
   DashboardMain: undefined;
   Capture: undefined;
+  WellnessHistory: undefined;
 };
 
 const Stack = createNativeStackNavigator<DashboardStackParamList>();
@@ -24,6 +26,11 @@ export default function DashboardNavigator() {
         name="Capture"
         component={CaptureScreen}
         options={{ title: "Capture" }} // can override styles here if needed
+      />
+      <Stack.Screen
+        name="WellnessHistory"
+        component={WellnessHistoryScreen}
+        options={{ title: "Maternal Wellness" }}
       />
     </Stack.Navigator>
   );

@@ -821,8 +821,9 @@ export function getUnsyncedCount(): number {
 
 export type ScreeningType =
   | "daily_health_check" // Headaches/visual disturbances before BP
-  | "urine_protein_result" // 72-hour urine protein answer
-  | "urine_protein_deferred" // User pressed "Answer Later"
+  | "urine_protein_result" // Urine protein dipstick result (any time; 72h minimum)
+  | "urine_protein_unable" // "I can't test right now" + reason (synced to EMR)
+  | "urine_protein_deferred" // Legacy: pre-2.3 "Answer Later" rows; never written now
   | "hospital_visit_report"; // Patient tapped "I Went To The Hospital"
 
 export type ScreeningResponse = {
@@ -844,6 +845,12 @@ export type UrineProteinData = {
   deferred?: boolean;
 };
 
+export type UrineUnableData = {
+  // Reason code from UNABLE_REASONS in urineProteinLogic.ts
+  // (out_of_strips | no_kit | other). Validated again server-side.
+  reason: string;
+};
+
 export type HospitalVisitData = {
   // "When did you go" — local YYYY-MM-DD. The row timestamp captures when the
   // button was pressed; this captures the day of the actual visit.
@@ -858,7 +865,11 @@ export type HospitalVisitData = {
  */
 export function saveScreeningResponse(
   type: ScreeningType,
-  data: DailyHealthCheckData | UrineProteinData | HospitalVisitData
+  data:
+    | DailyHealthCheckData
+    | UrineProteinData
+    | UrineUnableData
+    | HospitalVisitData
 ): string {
   // Writes throw on failure. Callers (DailyHealthCheckModal, UrineProteinModal)
   // must catch and keep the modal open — otherwise the patient sees a
@@ -1063,51 +1074,9 @@ export function hasDailyHealthCheckToday(): boolean {
   return responses.length > 0;
 }
 
-/**
- * Check if urine protein response is needed (72+ hours since last answer)
- * Returns true if user needs to answer the urine protein question
- */
-export function needsUrineProteinResponse(): boolean {
-  const lastAnswer = getLastScreeningResponse("urine_protein_result");
-
-  if (!lastAnswer) {
-    // Never answered - needs response
-    return true;
-  }
-
-  const hoursSinceLastAnswer =
-    (Date.now() - lastAnswer.timestamp) / (1000 * 60 * 60);
-  return hoursSinceLastAnswer >= 72;
-}
-
-/**
- * Check if user has deferred urine protein today
- * This is used to show the alert bar
- */
-export function hasUrineProteinDeferredToday(): boolean {
-  const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
-
-  const deferrals = getScreeningResponsesInRange(
-    "urine_protein_deferred",
-    todayStart.getTime(),
-    Date.now()
-  );
-
-  // Check if there's a deferral today that hasn't been answered
-  if (deferrals.length === 0) return false;
-
-  const lastDeferral = deferrals[0];
-  const lastAnswer = getLastScreeningResponse("urine_protein_result");
-
-  // If there's an answer after the deferral, the deferral is resolved
-  if (lastAnswer && lastAnswer.timestamp > lastDeferral.timestamp) {
-    return false;
-  }
-
-  return true;
-}
+// Urine protein due / hold rules moved to urineProteinLogic.ts (pure, tested)
+// and urineProteinService.ts (reads these tables). Nothing here decides when
+// the patient is asked.
 
 
 export function wipeAllPatientData() {
@@ -1163,7 +1132,5 @@ export default {
   getUnsyncedScreeningResponses,
   markScreeningResponseSynced,
   hasDailyHealthCheckToday,
-  needsUrineProteinResponse,
-  hasUrineProteinDeferredToday,
   wipeAllPatientData
 };

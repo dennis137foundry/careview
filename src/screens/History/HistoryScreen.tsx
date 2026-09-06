@@ -36,6 +36,12 @@ import {
   type SavedReading,
   type ScreeningResponse,
 } from "../../services/sqliteService";
+import {
+  isProteinAlert,
+  highestResultSince,
+  unableReasonLabel,
+  HIGHEST_WINDOW_MS,
+} from "../../services/urineProteinLogic";
 
 // Default BP thresholds (standard hypertension definition)
 const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
@@ -228,8 +234,13 @@ export default function HistoryScreen() {
 
   const loadScreeningHistory = useCallback(() => {
     setDailyHealthChecks(getScreeningResponsesByType("daily_health_check"));
+    // Results and "can't test right now" reports share the Urine Protein
+    // tab so the patient sees the same trail the care team sees.
     setUrineProteinResponses(
-      getScreeningResponsesByType("urine_protein_result")
+      [
+        ...getScreeningResponsesByType("urine_protein_result"),
+        ...getScreeningResponsesByType("urine_protein_unable"),
+      ].sort((a, b) => b.timestamp - a.timestamp)
     );
   }, []);
 
@@ -413,6 +424,10 @@ export default function HistoryScreen() {
           if (s.type === "urine_protein_result") {
             typeLabel = "Urine Protein";
             value = String(d.result ?? "");
+          } else if (s.type === "urine_protein_unable") {
+            typeLabel = "Urine Protein";
+            value = "Couldn't test";
+            notes = unableReasonLabel(d.reason);
           } else if (s.type === "daily_health_check") {
             typeLabel = "Daily Health Check";
             value = `Headaches: ${yesNoLabel(
@@ -1050,10 +1065,6 @@ function yesNoLabel(value: unknown): string {
   return "Not answered";
 }
 
-function isProteinAlert(result: unknown): boolean {
-  return result === "+2" || result === "+3" || result === "+4";
-}
-
 function proteinTextColor(result: unknown): string {
   if (result === "Negative") return "#2e7d32";
   if (result === "Trace" || result === "+1") return "#ef6c00";
@@ -1084,17 +1095,26 @@ function ScreeningSummary({
       };
     }
 
-    const alertCount = data.filter((response) => {
-      const parsed = parseScreeningData(response);
-      return isProteinAlert(parsed.result);
-    }).length;
-    const latest = data[0] ? parseScreeningData(data[0]).result : "--";
+    // Only real results count here; can't-test reports are listed but never
+    // summarised as a value. "Highest" rather than "Latest" so a later
+    // Negative cannot hide an earlier alert-level result the same day.
+    const results = data.filter((r) => r.type === "urine_protein_result");
+    const alertCount = results.filter((response) =>
+      isProteinAlert(parseScreeningData(response).result)
+    ).length;
+    const highest = highestResultSince(
+      results.map((r) => ({
+        timestamp: r.timestamp,
+        result: parseScreeningData(r).result,
+      })),
+      Date.now() - HIGHEST_WINDOW_MS
+    );
 
     return {
-      firstLabel: "Total",
-      firstValue: String(data.length),
-      secondLabel: "Latest",
-      secondValue: typeof latest === "string" ? latest : "--",
+      firstLabel: "Results",
+      firstValue: String(results.length),
+      secondLabel: "Highest 24h",
+      secondValue: highest ?? "--",
       thirdLabel: "Alerts",
       thirdValue: String(alertCount),
     };
@@ -1178,14 +1198,18 @@ function ScreeningHistoryTab({
     ({ item }: { item: DisplayScreeningResponse }) => {
       const parsed = parseScreeningData(item);
       const isDailyHealth = type === "daily_health_check";
+      const isUnable = item.type === "urine_protein_unable";
       const headacheYes = parsed.hasHeadaches === true;
       const visionYes = parsed.hasVisualDisturbances === true;
       const result = parsed.result;
       const abnormal = isDailyHealth
         ? headacheYes || visionYes
-        : isProteinAlert(result);
-      const details =
-        typeof parsed.details === "string" ? parsed.details.trim() : "";
+        : !isUnable && isProteinAlert(result);
+      const details = isUnable
+        ? unableReasonLabel(parsed.reason)
+        : typeof parsed.details === "string"
+          ? parsed.details.trim()
+          : "";
 
       return (
         <View style={[styles.row, abnormal && styles.rowHigh]}>
@@ -1212,7 +1236,9 @@ function ScreeningHistoryTab({
                       ? abnormal
                         ? "Symptoms Reported"
                         : "No Symptoms"
-                      : `Urine Protein: ${typeof result === "string" ? result : "--"}`}
+                      : isUnable
+                        ? "Couldn't test"
+                        : `Urine Protein: ${typeof result === "string" ? result : "--"}`}
                   </Text>
                   {abnormal && (
                     <View style={styles.highBadge}>
@@ -1326,7 +1352,7 @@ function ScreeningHistoryTab({
               <View style={styles.countRow}>
                 <Text style={styles.countText}>
                   {numbered.length}{" "}
-                  {type === "daily_health_check" ? "check" : "result"}
+                  {type === "daily_health_check" ? "check" : "record"}
                   {numbered.length !== 1 ? "s" : ""}
                 </Text>
                 {unsyncedCount > 0 && (

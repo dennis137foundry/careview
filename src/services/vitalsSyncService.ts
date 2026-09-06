@@ -13,7 +13,8 @@
  * Updates:
  * - BP readings: heartRate sent as measurement_condition (e.g., "72 bpm")
  * - BG readings: sample window sent as measurement_condition
- * - Screening responses: daily health checks and urine protein results
+ * - Screening responses: daily health checks, urine protein results, and
+ *   urine protein "can't test right now" reports
  */
 
 import NetInfo, { NetInfoState } from "@react-native-community/netinfo";
@@ -134,6 +135,8 @@ interface ScreeningSyncResponse {
   results: {
     daily_health_check: Array<{ status: string; app_response_id?: string }>;
     urine_protein: Array<{ status: string; app_response_id?: string }>;
+    // Added with app 2.3 / EMR 2026-09 ("I can't test right now" reports).
+    urine_protein_unable?: Array<{ status: string; app_response_id?: string }>;
     errors: Array<{ app_response_id?: string; error: string }>;
   };
   sync_timestamp: string;
@@ -699,27 +702,18 @@ export async function syncPendingScreening(): Promise<{
 
     const result = await sendScreeningToApi(payload);
 
-    // Process daily_health_check results
-    if (result.results?.daily_health_check) {
-      for (const r of result.results.daily_health_check) {
-        if (
-          r.status === "inserted" ||
-          r.status === "duplicate" ||
-          r.status === "skipped"
-        ) {
-          if (r.app_response_id) {
-            markScreeningResponseSynced(r.app_response_id);
-            syncedCount++;
-          }
-        } else {
-          failedCount++;
-        }
-      }
-    }
-
-    // Process urine_protein results
-    if (result.results?.urine_protein) {
-      for (const r of result.results.urine_protein) {
+    // Each bucket carries one entry per response of that type. Anything the
+    // server accepted (or already had) is marked synced locally; anything
+    // else stays queued for the next sweep.
+    const buckets = [
+      "daily_health_check",
+      "urine_protein",
+      "urine_protein_unable",
+    ] as const;
+    for (const bucket of buckets) {
+      const entries = result.results?.[bucket];
+      if (!entries) continue;
+      for (const r of entries) {
         if (
           r.status === "inserted" ||
           r.status === "duplicate" ||

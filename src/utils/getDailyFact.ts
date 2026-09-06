@@ -41,30 +41,41 @@ function parseLocalDate(ymd: string): Date | null {
   return valid ? date : null;
 }
 
-/** Days from today (local midnight) until the given date. Negative when
- *  the date is in the past. */
-function daysUntil(target: Date): number {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((target.getTime() - today.getTime()) / MS_PER_DAY);
+/** Days from `from` (local midnight; defaults to today) until the given
+ *  date. Negative when the date is in the past. */
+function daysUntil(target: Date, from: Date = new Date()): number {
+  const day = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  return Math.round((target.getTime() - day.getTime()) / MS_PER_DAY);
 }
 
 /**
- * Day of pregnancy for a given EDD ("YYYY-MM-DD"), floored at 1.
- * Day 280 = the due date itself. Returns null for an unparseable EDD.
+ * Day of pregnancy for a given EDD ("YYYY-MM-DD") as of `asOf` (defaults to
+ * today), floored at 1. Day 280 = the due date itself. Returns null for an
+ * unparseable EDD.
  */
-export function getDayOfPregnancy(edd: string): number | null {
+export function getDayOfPregnancy(edd: string, asOf?: Date): number | null {
   const eddDate = parseLocalDate(edd);
   if (!eddDate) return null;
-  return Math.max(1, 280 - daysUntil(eddDate));
+  return Math.max(1, 280 - daysUntil(eddDate, asOf));
 }
 
 /**
- * The fact to show today for the given EDD. Returns null only when the
- * EDD string is unparseable — callers fall back to the due-date prompt.
+ * Unfloored day of pregnancy as of a date; < 1 means before the pregnancy
+ * started. Used by the wellness history to know where to stop paging back.
  */
-export function getDailyFact(edd: string): DailyFact | null {
-  const day = getDayOfPregnancy(edd);
+export function getRawDayOfPregnancy(edd: string, asOf: Date): number | null {
+  const eddDate = parseLocalDate(edd);
+  if (!eddDate) return null;
+  return 280 - daysUntil(eddDate, asOf);
+}
+
+/**
+ * The fact to show for the given EDD on `asOf` (defaults to today). Returns
+ * null only when the EDD string is unparseable — callers fall back to the
+ * due-date prompt.
+ */
+export function getDailyFact(edd: string, asOf?: Date): DailyFact | null {
+  const day = getDayOfPregnancy(edd, asOf);
   if (day === null) return null;
 
   if (day <= dayFacts.length) {

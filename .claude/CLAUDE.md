@@ -25,7 +25,7 @@ Trinity CareView is a React Native (0.81.4) mobile app for iOS and Android desig
 src/
   screens/
     Auth/         - Phone-based SMS login (AuthScreen, CodeVerifyScreen)
-    Dashboard/    - Main hub with tips, latest readings, device grid
+    Dashboard/    - Home: wellness fact (tap → WellnessHistoryScreen), urine protein + health events tiles, latest readings
     Capture/      - Device measurement flow (BLE connect → measure → save)
     Devices/      - Device management (list, add, scan QR, rename)
     History/      - Reading history with charts, export CSV, sync status
@@ -43,7 +43,7 @@ src/
     readingSlice.ts   - Vital sign readings
   components/
     DailyHealthCheckModal.tsx  - Preeclampsia symptom screening
-    UrineProteinModal.tsx      - Urine protein test results
+    UrineProteinModal.tsx      - Urine protein picker (voluntary sheet + inline 72h hold, "can't test" reasons)
     SendMessageModal.tsx       - Patient-to-care-team messaging
     SyncStatusBadge.tsx        - Cloud sync status indicator
     RenameDeviceModal.tsx      - Device rename dialog
@@ -122,7 +122,7 @@ All sync endpoints use the same API key: `dc9a8e0f685349ab93c0e06f417ff7f8c13fbb
   "responses": [
     {
       "id": "nanoid",
-      "type": "daily_health_check" | "urine_protein_result",
+      "type": "daily_health_check" | "urine_protein_result" | "urine_protein_unable",
       "timestamp": 1712345678000,
       "data": "{\"hasHeadaches\":false,\"hasVisualDisturbances\":false}"
     }
@@ -214,15 +214,19 @@ onDebugLog          → { message }
 - Optional symptom details text field
 - Warning banner if symptoms reported
 
-### Urine Protein Testing
-- Prompted every 72 hours on dashboard
-- 6-level scale: Negative, Trace, +1, +2, +3, +4
-- Can defer ("Answer Later")
-- Results synced to EMR
+### Urine Protein Testing (app 2.3+)
+- Home-screen tile ("Record result"): patients record a result any time, any number per day (two-minute duplicate confirm, never a block)
+- 72-hour minimum enforced by a HOLD: once 72h pass with no result, the picker renders inline over the home screen (tab bar still works) until a result is saved or the patient sends "I can't test right now" + reason. That report syncs as `urine_protein_unable`, shows on the EMR chart, gives 24h of grace, and does NOT reset the 72h clock
+- Never held during the app session in which the login happened (`urineProteinSession.ts`). The session ends on a cold start or after the app has been away 60s+; a brief background hop for a system permission dialog does not end it. Notification permission is never requested in that session either
+- Bell icon lights when a result is owed and opens the same picker; there is no alert bar
+- Local reminder notifications (Notifee): last result + 72h, then daily for a week, shifted out of 21:00–08:00; rescheduled on every save (`urineReminderService.ts`)
+- 6-level scale: Negative, Trace, +1, +2, +3, +4; +2 and above = alert. Summaries show the HIGHEST result in 24h, never the latest
+- Rules live in `urineProteinLogic.ts` (pure, tested in `__tests__/`); reads/writes go through `urineProteinService.ts`
 
 ### Pregnancy Wellness Tips
 - 280 rotating daily tips (one per day of pregnancy)
 - Covers nutrition, monitoring, symptoms, labor prep, postpartum
+- Tapping the hero opens WellnessHistoryScreen: today on top, one card per earlier day back to day 1, paged as you scroll (pure function of EDD + date, nothing stored)
 
 ---
 
@@ -232,7 +236,7 @@ onDebugLog          → { message }
 - `user` — patient profile, BP thresholds
 - `devices` — registered devices (type, MAC, model, friendly name, source)
 - `readings` — vital signs (type, values, timestamp, sync status)
-- `screening_responses` — health check + urine protein answers
+- `screening_responses` — health checks, urine protein results, "can't test" reports, hospital reports
 - `app_settings` — key-value pairs (e.g., first launch flag)
 
 ### Sync Architecture

@@ -7,7 +7,16 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import RNBootSplash from "react-native-bootsplash";
 import { AppState, StatusBar } from "react-native";
 import { store } from "./src/redux/store";
-import { initDB } from "./src/services/sqliteService";
+import { initDB, getLastScreeningResponse } from "./src/services/sqliteService";
+import {
+  clearLoginSession,
+  noteAppBackgrounded,
+  noteAppForegrounded,
+} from "./src/services/urineProteinSession";
+import {
+  cancelUrineReminders,
+  ensureUrineRemindersScheduled,
+} from "./src/services/urineReminderService";
 import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
 import { setDeviceBattery } from "./src/redux/deviceSlice";
 import { checkDailyProfileRefresh } from "./src/services/profileRefreshService";
@@ -56,6 +65,8 @@ function RootApp() {
         type: "info",
         duration: 4000,
       });
+      cancelUrineReminders();
+      clearLoginSession();
       store.dispatch(logout());
     });
 
@@ -65,6 +76,13 @@ function RootApp() {
       // Hydrate the in-memory JWT cache from SQLite so the first sync
       // attempt after launch already has a Bearer header available.
       await loadAuthTokensFromStorage();
+
+      // Rebuild the local urine-protein reminder series if the OS dropped
+      // it (no-op when reminders are already pending).
+      if (store.getState().user.isAuthenticated) {
+        const lastUrine = getLastScreeningResponse("urine_protein_result");
+        ensureUrineRemindersScheduled(lastUrine ? lastUrine.timestamp : null);
+      }
 
       // Initialize vitals sync service (monitors network, retries failed syncs)
       cleanupSync = initializeVitalsSync();
@@ -80,7 +98,13 @@ function RootApp() {
     // to once per 24h inside the service).
     const appStateSub = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
+        // The "no hold in the login session" exception ends once the app
+        // has been away for a minute or more (see urineProteinSession.ts);
+        // a brief hop for a system permission dialog does not count.
+        noteAppForegrounded();
         runProfileRefresh();
+      } else if (nextState === "background") {
+        noteAppBackgrounded();
       }
     });
 

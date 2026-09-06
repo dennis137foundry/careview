@@ -21,6 +21,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { launchImageLibrary, launchCamera } from "react-native-image-picker";
 import { logout } from "../../redux/userSlice";
 import SendMessageModal from "../../components/SendMessageModal";
+import { cancelUrineReminders } from "../../services/urineReminderService";
+import { clearLoginSession } from "../../services/urineProteinSession";
 import type { RootState, AppDispatch } from "../../redux/store";
 import { BTN } from "../../constants/buttons";
 
@@ -136,7 +138,11 @@ export default function ProfileScreen({ navigation }: any) {
       {
         text: "Log Out",
         style: "destructive",
-        onPress: () => dispatch(logout()),
+        onPress: () => {
+          cancelUrineReminders();
+          clearLoginSession();
+          dispatch(logout());
+        },
       },
     ]);
   };

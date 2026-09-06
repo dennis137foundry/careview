@@ -1,6 +1,14 @@
 // src/services/authService.ts
 import { Alert } from "react-native";
-import { saveUser, getUser, LocalUser, wipeAllPatientData } from "./sqliteService";
+import {
+  saveUser,
+  getUser,
+  LocalUser,
+  wipeAllPatientData,
+  getLastScreeningResponse,
+} from "./sqliteService";
+import { markLoginSession } from "./urineProteinSession";
+import { scheduleUrineReminders } from "./urineReminderService";
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
 import {
   setAuthTokens,
@@ -236,6 +244,13 @@ const authService = {
           user.eddSource = previousUser.eddSource ?? "patient";
         }
         saveUser(user);
+        // Urine protein: never hold the home screen in the session the
+        // login happened in, and (re)build the local reminder series. A
+        // same-patient re-login keeps its local rows, so anchor on the last
+        // result when there is one; otherwise on the login moment.
+        markLoginSession();
+        const lastUrine = getLastScreeningResponse("urine_protein_result");
+        scheduleUrineReminders(lastUrine ? lastUrine.timestamp : Date.now());
         // Hydrate the in-memory token cache from the just-issued pair.
         if (user.authToken && user.refreshToken) {
           setAuthTokens(user.authToken, user.refreshToken);

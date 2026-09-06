@@ -1,14 +1,16 @@
 /* eslint-disable react-native/no-inline-styles */
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
   FlatList,
   useWindowDimensions,
+  AppState,
+  Alert,
+  type LayoutChangeEvent,
 } from "react-native";
 import { useSelector, useDispatch } from "react-redux";
 import { getDailyFact } from "../../utils/getDailyFact";
@@ -20,47 +22,30 @@ import type { AppDispatch, RootState } from "../../redux/store";
 import { isBPHigh, setEdd } from "../../redux/userSlice";
 import DueDateForm from "../../components/DueDateForm";
 import {
-  needsUrineProteinResponse,
-  hasUrineProteinDeferredToday,
   getIsFirstLaunch,
   setFirstLaunchComplete,
-  saveScreeningResponse,
 } from "../../services/sqliteService";
-import { syncPendingScreening } from "../../services/vitalsSyncService";
 import UrineProteinModal from "../../components/UrineProteinModal";
-import UrineProteinPromptModal from "../../components/UrineProteinPromptModal";
+import {
+  getUrineProteinSnapshot,
+  type UrineSnapshot,
+} from "../../services/urineProteinService";
+import {
+  describeRelative,
+  isProteinAlert,
+  type ProteinResult,
+  type UnableReasonCode,
+} from "../../services/urineProteinLogic";
+import {
+  markNotificationPermissionAsked,
+  requestNotificationPermission,
+  wasNotificationPermissionAsked,
+} from "../../services/urineReminderService";
+import { isLoginSession } from "../../services/urineProteinSession";
 import HospitalReportModal from "../../components/HospitalReportModal";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { useToast } from "../../components/Toast";
 import { BTN } from "../../constants/buttons";
-
-// Map device types to images
-const deviceImages: Record<string, any> = {
-  BP: require("../../assets/bp3l.png"),
-  BP3L: require("../../assets/bp3l.png"),
-  BP5: require("../../assets/bp3l.png"),
-  BP5S: require("../../assets/bp3l.png"),
-  GATT_BP: require("../../assets/bp3l.png"),
-  SCALE: require("../../assets/hs5s.png"),
-  HS2: require("../../assets/hs5s.png"),
-  HS2S: require("../../assets/hs5s.png"),
-  HS4S: require("../../assets/hs5s.png"),
-  GATT_SCALE: require("../../assets/hs5s.png"),
-};
-
-// Friendly names for device types
-const deviceTypeNames: Record<string, string> = {
-  BP: "Blood Pressure",
-  BP3L: "Blood Pressure",
-  BP5: "Blood Pressure",
-  BP5S: "Blood Pressure",
-  GATT_BP: "Blood Pressure",
-  SCALE: "Smart Scale",
-  HS2: "Smart Scale",
-  HS2S: "Smart Scale",
-  HS4S: "Smart Scale",
-  GATT_SCALE: "Smart Scale",
-};
 
 const NAVY = "#002040";
 const BLUE = "#00509f";
@@ -94,7 +79,6 @@ export default function DashboardScreen() {
   useStatusBarStyle("light-content");
 
   const readings = useSelector((state: RootState) => state.readings.items);
-  const devices = useSelector((state: RootState) => state.devices.devices);
   const user = useSelector((state: RootState) => state.user);
   const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
 
@@ -109,10 +93,14 @@ export default function DashboardScreen() {
     [user.edd, isFocused]
   );
 
-  // Urine Protein Modal State
-  const [showUrineIntro, setShowUrineIntro] = useState(false);
-  const [showUrineProteinModal, setShowUrineProteinModal] = useState(false);
-  const [showUrineProteinAlert, setShowUrineProteinAlert] = useState(false);
+  // Urine protein: one snapshot drives the tile, the bell and the hold.
+  const [urine, setUrine] = useState<UrineSnapshot | null>(null);
+  const [showUrinePicker, setShowUrinePicker] = useState(false);
+  const permissionPromptShown = useRef(false);
+
+  // Measured height of the docked New Reading button, so the scroll content
+  // always clears it no matter the font scale or platform.
+  const [dockHeight, setDockHeight] = useState(68);
 
   // Hospital Report Modal State
   const [showHospitalModal, setShowHospitalModal] = useState(false);
@@ -126,40 +114,52 @@ export default function DashboardScreen() {
     }
   }, []);
 
-  // Decide what urine-protein UI (if any) is due. Only prompts once a device
-  // has been added.
-  const evaluateUrineProtein = useCallback((): "intro" | "alert" | "none" => {
-    if (devices.length === 0) return "none";
-    const needsResponse = needsUrineProteinResponse();
-    const hasDeferred = hasUrineProteinDeferredToday();
-    if (needsResponse && !hasDeferred) return "intro";
-    if (needsResponse && hasDeferred) return "alert";
-    return "none";
-  }, [devices.length]);
+  const refreshUrine = useCallback(() => {
+    setUrine(getUrineProteinSnapshot());
+  }, []);
 
   useEffect(() => {
     if (!isFocused) return;
     dispatch(loadReadings());
     dispatch(loadDevices());
+    refreshUrine();
 
-    const decision = evaluateUrineProtein();
-    if (decision === "intro") {
-      // Let the patient land on the dashboard first, then gently prompt with a
-      // centered reminder (Skip / Enter Result) instead of the full picker.
-      setShowUrineProteinAlert(false);
-      const t = setTimeout(() => setShowUrineIntro(true), 2000);
-      return () => clearTimeout(t); // cancel if they navigate away first
-    }
-    if (decision === "alert") {
-      setShowUrineIntro(false);
-      setShowUrineProteinModal(false);
-      setShowUrineProteinAlert(true);
-    } else {
-      setShowUrineIntro(false);
-      setShowUrineProteinModal(false);
-      setShowUrineProteinAlert(false);
-    }
-  }, [dispatch, isFocused, evaluateUrineProtein]);
+    // The 72-hour clock keeps running while the app is in the background;
+    // re-evaluate when it comes back to the foreground on this screen.
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active") refreshUrine();
+    });
+    return () => sub.remove();
+  }, [dispatch, isFocused, refreshUrine]);
+
+  // Ask for notification permission once, the first time the tile is seen
+  // with nothing being held. Our own one-line pre-prompt first, then the OS.
+  // Never in the login session: that session already carries the demo-seed
+  // prompt and the first device-pairing permission dialogs, and on Android
+  // two alerts at once means one of them is lost.
+  useEffect(() => {
+    if (!isFocused || !urine || urine.status.holdActive) return;
+    if (isLoginSession()) return;
+    if (permissionPromptShown.current || wasNotificationPermissionAsked()) return;
+    permissionPromptShown.current = true;
+    Alert.alert(
+      "Reminders",
+      "CareView can remind you when a urine protein result is due. Allow notifications?",
+      [
+        {
+          text: "Not now",
+          style: "cancel",
+          onPress: () => markNotificationPermissionAsked(),
+        },
+        {
+          text: "Allow",
+          onPress: () => {
+            requestNotificationPermission();
+          },
+        },
+      ]
+    );
+  }, [isFocused, urine]);
 
   // Latest-readings slider: every reading from the last 48 hours — BP,
   // weight, and glucose interleaved — newest first, one per slide.
@@ -194,54 +194,14 @@ export default function DashboardScreen() {
     setReadingSlide(0); // new data → snap back to the newest reading
   }, [recentReadings.length]);
 
-  const deviceList = devices || [];
-  const deviceCount = deviceList.length;
-
-  // Helper to get device type from device object
-  const getDeviceType = (device: any): string => {
-    if (device.model && deviceImages[device.model]) {
-      return device.model;
-    }
-    if (device.type && deviceImages[device.type]) {
-      return device.type;
-    }
-    const nameParts = device.name?.split(" ") || [];
-    if (nameParts[0] && deviceImages[nameParts[0]]) {
-      return nameParts[0];
-    }
-    if (device.type === "BP") return "BP3L";
-    if (device.type === "SCALE") return "HS2S";
-    return "BP3L";
-  };
-
-  const getDeviceImage = (device: any) => {
-    const deviceType = getDeviceType(device);
-    return deviceImages[deviceType] || deviceImages.BP;
-  };
-
-  const getDeviceFriendlyName = (device: any) => {
-    if (device.friendlyName) {
-      return device.friendlyName;
-    }
-    const deviceType = getDeviceType(device);
-    return deviceTypeNames[deviceType] || device.name || "Device";
-  };
-
-  const getSourceBadge = (device: any) => {
-    if (device.source === "BLE_GATT") {
-      return "BLE";
-    }
-    return null;
-  };
-
   const isBPReadingHigh = (reading: any) => {
     if (!reading?.value || !reading?.value2) return false;
     return isBPHigh(reading.value, reading.value2, bpThresholds);
   };
 
-  const handleUrineProteinComplete = (_result: string) => {
-    setShowUrineProteinModal(false);
-    setShowUrineProteinAlert(false);
+  const handleUrineComplete = (_result: ProteinResult) => {
+    setShowUrinePicker(false);
+    refreshUrine();
     showToast({
       message: "Urine protein result saved",
       type: "success",
@@ -249,33 +209,40 @@ export default function DashboardScreen() {
     });
   };
 
-  const handleUrineProteinDefer = () => {
-    setShowUrineProteinModal(false);
-    setShowUrineProteinAlert(true);
+  const handleUrineUnable = (_reason: UnableReasonCode) => {
+    setShowUrinePicker(false);
+    refreshUrine();
+    showToast({
+      message: "Sent to your care team. We'll check back tomorrow.",
+      type: "info",
+      duration: 3000,
+    });
   };
 
-  const handleAlertBarTap = () => {
-    setShowUrineProteinModal(true);
-  };
-
-  // Intro "Enter Result" → open the full result picker.
-  const handleUrineIntroEnter = () => {
-    setShowUrineIntro(false);
-    setShowUrineProteinModal(true);
-  };
-
-  // Intro "Skip" → defer for now (persist so we don't re-prompt today) and
-  // leave the tappable reminder bar so they can still enter it later.
-  const handleUrineIntroSkip = () => {
-    setShowUrineIntro(false);
-    try {
-      saveScreeningResponse("urine_protein_deferred", { deferred: true });
-    } catch (err) {
-      console.error("[UrineProtein] Failed to save deferral:", err);
+  // The bell is a status light, not a second entry point: when something is
+  // owed it opens the same picker the tile opens.
+  const handleBellTap = () => {
+    if (urine?.status.owed) {
+      setShowUrinePicker(true);
+    } else {
+      showToast({ message: "You're all caught up", type: "info", duration: 2000 });
     }
-    syncPendingScreening().catch(() => {});
-    setShowUrineProteinAlert(true);
   };
+
+  const now = Date.now();
+  const urineOwed = !!urine?.status.owed;
+  const urineAlertRecent = isProteinAlert(urine?.highestLast24h);
+  const urineStatusLine = (() => {
+    if (!urine) return "";
+    if (urine.lastResultAt === null) {
+      return urineOwed ? "Result needed" : "No result recorded yet";
+    }
+    const when = describeRelative(urine.lastResultAt, now);
+    return urineOwed
+      ? `Overdue · last result ${when}`
+      : `Last: ${urine.lastResult ?? "—"} · ${when}`;
+  })();
+  const isNarrow = windowWidth < 360;
 
   const firstName = user.firstName || "there";
 
@@ -340,31 +307,19 @@ export default function DashboardScreen() {
           <TouchableOpacity
             style={styles.bell}
             activeOpacity={0.7}
-            onPress={() => {
-              if (showUrineProteinAlert) handleAlertBarTap();
-            }}
+            onPress={handleBellTap}
+            accessibilityLabel={
+              urineOwed ? "Urine protein result due" : "Notifications"
+            }
           >
             <MaterialIcons
-              name="notifications-none"
+              name={urineOwed ? "notifications-active" : "notifications-none"}
               size={22}
               color={NAVY}
             />
-            {showUrineProteinAlert && <View style={styles.bellDot} />}
+            {urineOwed && <View style={styles.bellDot} />}
           </TouchableOpacity>
         </View>
-
-        {/* Urine Protein Alert Bar */}
-        {showUrineProteinAlert && (
-          <TouchableOpacity
-            style={styles.alertBar}
-            onPress={handleAlertBarTap}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="warning" size={20} color="#E65100" />
-            <Text style={styles.alertBarText}>Add Urine Protein Result</Text>
-            <MaterialIcons name="chevron-right" size={20} color="#E65100" />
-          </TouchableOpacity>
-        )}
 
         {/* Maternal Wellness Daily Fact — solid navy hero with a teal
             accent bar. Aligned to the pregnancy via EDD; asks for the due
@@ -378,7 +333,12 @@ export default function DashboardScreen() {
             geometry, nothing depends on parent measurement or Dynamic
             Type. The week pill sits on its own line so nothing competes
             for horizontal space. */}
-        <View style={styles.hero}>
+        <TouchableOpacity
+          style={styles.hero}
+          activeOpacity={0.9}
+          disabled={!dailyFact}
+          onPress={() => navigation.navigate("WellnessHistory")}
+        >
           <View style={{ width: heroInnerWidth }}>
             {dailyFact ? (
               <>
@@ -406,6 +366,13 @@ export default function DashboardScreen() {
                       : `Week ${dailyFact.week} • Day ${dailyFact.dayOfWeek}`}
                   </Text>
                 </View>
+                <Text
+                  style={[styles.heroLink, { width: heroInnerWidth }]}
+                  numberOfLines={1}
+                  allowFontScaling={false}
+                >
+                  Earlier facts ›
+                </Text>
               </>
             ) : (
               <>
@@ -428,6 +395,84 @@ export default function DashboardScreen() {
                 />
               </>
             )}
+          </View>
+        </TouchableOpacity>
+
+        {/* Check-ins: urine protein (record any time; 72h minimum enforced
+            by the hold) and health events. Two columns; stacked on very
+            narrow phones. */}
+        <View style={[styles.checkinRow, isNarrow && styles.checkinRowStacked]}>
+          <View style={[styles.checkinCard, urineOwed && styles.checkinCardDue]}>
+            <View>
+              <View style={styles.checkinHeader}>
+                <View style={styles.checkinIcon}>
+                  <MaterialIcons name="science" size={17} color={TEAL} />
+                </View>
+                <Text style={styles.checkinTitle} numberOfLines={1}>
+                  Urine protein
+                </Text>
+              </View>
+              <Text
+                style={[styles.checkinStatus, urineOwed && styles.checkinStatusDue]}
+                maxFontSizeMultiplier={1.2}
+              >
+                {urineStatusLine}
+              </Text>
+              {(urineAlertRecent || (urine?.countToday ?? 0) > 1) && (
+                <View style={styles.checkinChipRow}>
+                  {urineAlertRecent && (
+                    <View style={[styles.checkinChip, styles.checkinChipAlert]}>
+                      <Text style={[styles.checkinChipText, styles.checkinChipAlertText]}>
+                        ALERT {urine?.highestLast24h}
+                      </Text>
+                    </View>
+                  )}
+                  {(urine?.countToday ?? 0) > 1 && (
+                    <View style={styles.checkinChip}>
+                      <Text style={styles.checkinChipText}>
+                        {urine?.countToday} TODAY
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+            <TouchableOpacity
+              style={styles.checkinButton}
+              activeOpacity={0.85}
+              onPress={() => setShowUrinePicker(true)}
+            >
+              <MaterialIcons name="add" size={18} color="#fff" />
+              <Text style={styles.checkinButtonText} maxFontSizeMultiplier={1.2}>
+                Record result
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.checkinCard}>
+            <View>
+              <View style={styles.checkinHeader}>
+                <View style={styles.checkinIcon}>
+                  <MaterialIcons name="local-hospital" size={17} color={TEAL} />
+                </View>
+                <Text style={styles.checkinTitle} numberOfLines={1}>
+                  Health events
+                </Text>
+              </View>
+              <Text style={styles.checkinStatus} maxFontSizeMultiplier={1.2}>
+                Received care outside the home? Tell your care team right away.
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.checkinButton}
+              activeOpacity={0.85}
+              onPress={() => setShowHospitalModal(true)}
+            >
+              <MaterialIcons name="local-hospital" size={18} color="#fff" />
+              <Text style={styles.checkinButtonText} maxFontSizeMultiplier={1.2}>
+                I went to the hospital
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -484,107 +529,18 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {/* Health Events — hospital report */}
-        <View style={styles.eventsCard}>
-          <View style={styles.eventsHeader}>
-            <View style={styles.eventsIcon}>
-              <MaterialIcons name="local-hospital" size={18} color={TEAL} />
-            </View>
-            <Text style={styles.eventsTitle}>Health events</Text>
-          </View>
-          <Text style={styles.eventsSub}>
-            Let your care team know right away if you've received care outside
-            the home.
-          </Text>
-          <TouchableOpacity
-            style={styles.hospitalButton}
-            activeOpacity={0.85}
-            onPress={() => setShowHospitalModal(true)}
-          >
-            <MaterialIcons name="local-hospital" size={20} color="#fff" />
-            <Text style={styles.hospitalButtonText}>
-              I Went To The Hospital
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* My Devices */}
-        <View style={styles.sectionRow}>
-          <Text style={styles.sectionTitle}>My devices</Text>
-          {deviceCount > 0 && (
-            <TouchableOpacity
-              onPress={() =>
-                navigation.navigate("Devices", { screen: "DevicesMain" })
-              }
-            >
-              <Text style={styles.sectionLink}>Manage</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {deviceCount > 0 ? (
-          <>
-            <View style={styles.devsRow}>
-              {deviceList.slice(0, 3).map((device: any, index: number) => {
-                const imageSource = getDeviceImage(device);
-                const friendlyName = getDeviceFriendlyName(device);
-                const sourceBadge = getSourceBadge(device);
-                return (
-                  <TouchableOpacity
-                    key={device.id || index}
-                    style={styles.deviceCard}
-                    onPress={() =>
-                      navigation.navigate("Devices", {
-                        screen: "Capture",
-                        params: { deviceId: device.id },
-                      })
-                    }
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.deviceImageWrapper}>
-                      <Image source={imageSource} style={styles.deviceIcon} />
-                      {sourceBadge && (
-                        <View style={styles.sourceBadge}>
-                          <Text style={styles.sourceBadgeText}>
-                            {sourceBadge}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                    <Text style={styles.deviceName} numberOfLines={1}>
-                      {friendlyName}
-                    </Text>
-                    <Text style={styles.devicePaired}>Paired</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            {deviceCount > 3 && (
-              <Text style={styles.moreDevices}>+{deviceCount - 3} more</Text>
-            )}
-          </>
-        ) : (
-          <TouchableOpacity
-            style={styles.noDevicesCard}
-            onPress={() => navigation.navigate("Devices", { screen: "AddDevice" })}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="devices-other" size={40} color="#b7c2d0" />
-            <Text style={styles.noDevicesText}>No devices added yet</Text>
-            <View style={styles.addDevicePrompt}>
-              <MaterialIcons name="add-circle" size={18} color={BLUE} />
-              <Text style={styles.addDeviceText}>Tap to add your first device</Text>
-            </View>
-          </TouchableOpacity>
-        )}
-
-        {/* Spacer for docked button */}
-        <View style={{ height: 92 }} />
+        {/* Clear the docked New Reading button, whatever its measured height */}
+        <View style={{ height: dockHeight + 24 }} />
       </ScrollView>
 
       {/* Docked New Reading button — solid edge-to-edge block sitting
           flush on the bottom tab bar */}
-      <View style={styles.dock}>
+      <View
+        style={styles.dock}
+        onLayout={(e: LayoutChangeEvent) =>
+          setDockHeight(Math.ceil(e.nativeEvent.layout.height))
+        }
+      >
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={() =>
@@ -599,18 +555,23 @@ export default function DashboardScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Gentle centered reminder shown ~2s after landing */}
-      <UrineProteinPromptModal
-        visible={showUrineIntro}
-        onSkip={handleUrineIntroSkip}
-        onEnter={handleUrineIntroEnter}
+      {/* Urine protein picker, opened from the tile or the bell */}
+      <UrineProteinModal
+        visible={showUrinePicker && !urine?.status.holdActive}
+        mode="voluntary"
+        onComplete={handleUrineComplete}
+        onUnable={handleUrineUnable}
+        onCancel={() => setShowUrinePicker(false)}
       />
 
-      {/* Urine Protein Modal (full result picker) */}
+      {/* The 72-hour hold: the same picker, rendered inline over the home
+          screen (after the dock, so it covers it). Only a saved result or a
+          can't-test report clears it. */}
       <UrineProteinModal
-        visible={showUrineProteinModal}
-        onComplete={handleUrineProteinComplete}
-        onDefer={handleUrineProteinDefer}
+        visible={!!urine?.status.holdActive}
+        mode="hold"
+        onComplete={handleUrineComplete}
+        onUnable={handleUrineUnable}
       />
 
       {/* Hospital Report Modal */}
@@ -670,25 +631,6 @@ const styles = StyleSheet.create({
     backgroundColor: ALERT,
     borderWidth: 2,
     borderColor: "#fff",
-  },
-  // Alert bar
-  alertBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFF3E0",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    marginBottom: 14,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: "#FFE0B2",
-  },
-  alertBarText: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#E65100",
   },
   // Hero — solid navy with a teal accent bar (see construction notes in
   // the JSX; geometry is intentionally absolute).
@@ -846,21 +788,43 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   // Health events
-  eventsCard: {
+  // Tap hint at the bottom of the wellness hero
+  heroLink: {
+    marginTop: 12,
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#9fdce2",
+    letterSpacing: 0.3,
+  },
+  // Check-ins row: urine protein (left) + health events (right)
+  checkinRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 22,
+  },
+  checkinRowStacked: {
+    flexDirection: "column",
+  },
+  checkinCard: {
+    flex: 1,
     backgroundColor: "#fff",
     borderRadius: 18,
     borderWidth: 1,
     borderColor: "#e7ecf2",
-    padding: 15,
-    marginBottom: 22,
+    padding: 14,
+    justifyContent: "space-between",
   },
-  eventsHeader: {
+  checkinCardDue: {
+    borderColor: "#f4b183",
+    backgroundColor: "#fff8f1",
+  },
+  checkinHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
-    marginBottom: 6,
+    gap: 8,
+    marginBottom: 8,
   },
-  eventsIcon: {
+  checkinIcon: {
     width: 30,
     height: 30,
     borderRadius: 10,
@@ -868,110 +832,61 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  eventsTitle: {
-    fontSize: 15,
+  checkinTitle: {
+    flex: 1,
+    fontSize: 14,
     fontWeight: "700",
     color: "#0f1b2d",
   },
-  eventsSub: {
-    fontSize: 13,
+  checkinStatus: {
+    fontSize: 12.5,
+    lineHeight: 18,
     color: "#5b6b7f",
-    lineHeight: 19,
-    marginBottom: 14,
+    marginBottom: 12,
+    minHeight: 36,
   },
-  hospitalButton: {
+  checkinStatusDue: {
+    color: "#b3541e",
+    fontWeight: "600",
+  },
+  checkinChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 10,
+  },
+  checkinChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: "#eef2f6",
+  },
+  checkinChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#5b6b7f",
+    letterSpacing: 0.3,
+  },
+  checkinChipAlert: {
+    backgroundColor: "#fdecec",
+  },
+  checkinChipAlertText: {
+    color: ALERT,
+  },
+  checkinButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 9,
+    gap: 6,
     backgroundColor: BTN.primary,
     borderRadius: BTN.radius,
-    paddingVertical: 13,
+    paddingVertical: 11,
+    paddingHorizontal: 8,
   },
-  hospitalButtonText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  // Devices
-  devsRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  deviceCard: {
-    flex: 1,
-    backgroundColor: "#fff",
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#e7ecf2",
-    paddingVertical: 12,
-    paddingHorizontal: 6,
-    alignItems: "center",
-  },
-  deviceImageWrapper: {
-    position: "relative",
-  },
-  deviceIcon: {
-    width: 44,
-    height: 44,
-    resizeMode: "contain",
-    marginBottom: 6,
-  },
-  sourceBadge: {
-    position: "absolute",
-    bottom: 4,
-    right: -4,
-    backgroundColor: "#2196F3",
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  sourceBadgeText: {
-    fontSize: 8,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  deviceName: {
-    fontSize: 11,
-    color: "#5b6b7f",
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  devicePaired: {
-    fontSize: 10,
-    color: OK,
-    fontWeight: "700",
-    marginTop: 3,
-  },
-  moreDevices: {
-    color: "#8a97a6",
+  checkinButtonText: {
     fontSize: 13,
-    marginTop: 10,
-    textAlign: "center",
-  },
-  noDevicesCard: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#e7ecf2",
-    alignItems: "center",
-    paddingVertical: 22,
-  },
-  noDevicesText: {
-    fontSize: 15,
-    color: "#8a97a6",
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  addDevicePrompt: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  addDeviceText: {
-    fontSize: 14,
-    color: BLUE,
-    fontWeight: "600",
+    fontWeight: "700",
+    color: "#fff",
   },
   // Docked button — edge-to-edge solid block, flush against the tab bar.
   // Teal (the app's secondary accent) so it reads as its own control and
