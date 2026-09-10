@@ -31,7 +31,7 @@ android {
         applicationId "com.trinitycareview.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 24
+        versionCode 25
         versionName "2.3"
         multiDexEnabled true
 

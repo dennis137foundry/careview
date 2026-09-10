@@ -242,7 +242,6 @@ export default function DashboardScreen() {
       ? `Overdue · last result ${when}`
       : `Last: ${urine.lastResult ?? "—"} · ${when}`;
   })();
-  const isNarrow = windowWidth < 360;
 
   const firstName = user.firstName || "there";
 
@@ -399,11 +398,11 @@ export default function DashboardScreen() {
         </TouchableOpacity>
 
         {/* Check-ins: urine protein (record any time; 72h minimum enforced
-            by the hold) and health events. Two columns; stacked on very
-            narrow phones. */}
-        <View style={[styles.checkinRow, isNarrow && styles.checkinRowStacked]}>
+            by the hold) then health events. Full-width cards, stacked; text
+            on the left, the action on the right. */}
+        <View style={styles.checkinStack}>
           <View style={[styles.checkinCard, urineOwed && styles.checkinCardDue]}>
-            <View>
+            <View style={styles.checkinBody}>
               <View style={styles.checkinHeader}>
                 <View style={styles.checkinIcon}>
                   <MaterialIcons name="science" size={17} color={TEAL} />
@@ -450,7 +449,7 @@ export default function DashboardScreen() {
           </View>
 
           <View style={styles.checkinCard}>
-            <View>
+            <View style={styles.checkinBody}>
               <View style={styles.checkinHeader}>
                 <View style={styles.checkinIcon}>
                   <MaterialIcons name="local-hospital" size={17} color={TEAL} />
@@ -796,23 +795,24 @@ const styles = StyleSheet.create({
     color: "#9fdce2",
     letterSpacing: 0.3,
   },
-  // Check-ins row: urine protein (left) + health events (right)
-  checkinRow: {
-    flexDirection: "row",
+  // Check-in cards: full width, stacked (urine protein, then health
+  // events). Each card is a row: text on the left, the action on the right.
+  checkinStack: {
     gap: 12,
     marginBottom: 22,
   },
-  checkinRowStacked: {
-    flexDirection: "column",
-  },
   checkinCard: {
-    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     backgroundColor: "#fff",
     borderRadius: 18,
     borderWidth: 1,
     borderColor: "#e7ecf2",
     padding: 14,
-    justifyContent: "space-between",
+  },
+  checkinBody: {
+    flex: 1,
   },
   checkinCardDue: {
     borderColor: "#f4b183",
@@ -839,11 +839,9 @@ const styles = StyleSheet.create({
     color: "#0f1b2d",
   },
   checkinStatus: {
-    fontSize: 12.5,
+    fontSize: 13,
     lineHeight: 18,
     color: "#5b6b7f",
-    marginBottom: 12,
-    minHeight: 36,
   },
   checkinStatusDue: {
     color: "#b3541e",
@@ -853,7 +851,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 6,
-    marginBottom: 10,
+    marginTop: 8,
   },
   checkinChip: {
     paddingHorizontal: 8,
@@ -874,19 +872,22 @@ const styles = StyleSheet.create({
     color: ALERT,
   },
   checkinButton: {
+    width: 128,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
     backgroundColor: BTN.primary,
     borderRadius: BTN.radius,
-    paddingVertical: 11,
-    paddingHorizontal: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
   },
   checkinButtonText: {
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: "700",
     color: "#fff",
+    textAlign: "center",
   },
   // Docked button — edge-to-edge solid block, flush against the tab bar.
   // Teal (the app's secondary accent) so it reads as its own control and
