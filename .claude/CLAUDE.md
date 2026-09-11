@@ -34,6 +34,7 @@ src/
     authService.ts           - SMS auth via trinityemr.com API
     deviceService.ts         - Unified BLE device management layer
     vitalsSyncService.ts     - Syncs readings + screenings to EMR
+    batteryRefreshService.ts - At app start + foreground (10-min throttle): brief scan for registered iHealth models, battery-only connect to each that answers. Blocked/cancelled while a capture or add-device screen is in front (markDeviceScreenActive). The pre-capture low-battery warning only trusts a level under 30 min old; otherwise the live read on connect decides
     sqliteService.ts         - SQLite database layer (users, devices, readings, screenings)
     seedDemoData.ts          - 60-day demo data generator for testing
   redux/

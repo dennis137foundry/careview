@@ -57,7 +57,7 @@ import type { RootState, AppDispatch } from "../../redux/store";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
-import { cancelBatteryRefresh } from "../../services/batteryRefreshService";
+import { markDeviceScreenActive } from "../../services/batteryRefreshService";
 import {
   captureStyles as styles,
   CAPTURE_ACCENT,
@@ -305,9 +305,6 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   // Entry point — daily health check gate, then arm
   // ==========================================================================
   const start = useCallback(async () => {
-    // Never overlap a startup/foreground battery refresh (it drives the
-    // iHealth SDK scanner, which the generic-BLE path shares on Android).
-    cancelBatteryRefresh();
     // Preeclampsia screening must precede a BP reading. Same clinical rule the
     // iHealth flow enforces; it is not optional just because the transport differs.
     const proceed = () => {
@@ -543,6 +540,15 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     ringRotate.setValue(0);
     return undefined;
   }, [phase, ringRotate]);
+
+  // While this screen is in front, no startup / foreground battery refresh
+  // may use the iHealth scanner (shared with the generic-BLE path on Android).
+  useFocusEffect(
+    useCallback(() => {
+      markDeviceScreenActive(true);
+      return () => markDeviceScreenActive(false);
+    }, [])
+  );
 
   // Reset on entry; always disarm on exit so a pending connect never outlives
   // the screen.

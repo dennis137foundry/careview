@@ -30,7 +30,7 @@ import { hasDailyHealthCheckToday, readingExists } from "../../services/sqliteSe
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
-import { cancelBatteryRefresh } from "../../services/batteryRefreshService";
+import { markDeviceScreenActive } from "../../services/batteryRefreshService";
 import { BTN } from "../../constants/buttons";
 
 // Below this last-known battery %, warn the user to charge before a reading.
@@ -412,6 +412,16 @@ export default function CaptureScreen({ route, navigation }: any) {
       setHealthCheckCompleted(true);
     }
   }, [deviceType, addLog]);
+
+  // While this screen is in front the iHealth SDK is ours: no startup /
+  // foreground battery refresh may scan or connect (it would collide with
+  // the capture, or read a battery-only connect as an unexpected disconnect).
+  useFocusEffect(
+    useCallback(() => {
+      markDeviceScreenActive(true);
+      return () => markDeviceScreenActive(false);
+    }, [])
+  );
 
   // ============================================================================
   // Focus effect — reset JS state on entry, BLE cleanup on EXIT only
@@ -1215,9 +1225,6 @@ export default function CaptureScreen({ route, navigation }: any) {
       Alert.alert("Error", "Device not found");
       return;
     }
-    // The SDK is a singleton: a startup/foreground battery refresh must not
-    // be scanning or connecting while a capture runs.
-    cancelBatteryRefresh();
     if (!IHealthDevices || !emitter) {
       Alert.alert("Error", "Native module not available");
       return;

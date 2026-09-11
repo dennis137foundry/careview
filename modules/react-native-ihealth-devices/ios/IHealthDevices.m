@@ -2066,6 +2066,12 @@ RCT_EXPORT_METHOD(stopScan:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseR
 
 RCT_EXPORT_METHOD(connectDevice:(NSString *)mac deviceType:(NSString *)deviceType resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
     [self sendDebugLog:[NSString stringWithFormat:@"🔌 Connect: %@ (%@)", mac, deviceType]];
+    // A real connect supersedes any battery-only / setup intent still
+    // pending from a cancelled background battery refresh. Otherwise this
+    // connection would be read as battery-only: battery queried, link
+    // dropped, and the capture told the device disconnected unexpectedly.
+    _batteryOnlyMAC = nil;
+    _setupMAC = nil;
     _targetMAC = mac;
     _targetType = deviceType;
 

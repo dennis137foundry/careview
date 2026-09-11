@@ -24,7 +24,7 @@ import {
   useCodeScanner,
 } from "react-native-vision-camera";
 
-import { cancelBatteryRefresh } from "../../services/batteryRefreshService";
+import { markDeviceScreenActive } from "../../services/batteryRefreshService";
 import deviceService, {
   type BluetoothStatus,
   type DiscoveredDevice,
@@ -136,6 +136,14 @@ export default function AddDeviceScreen() {
     },
   });
 
+  // While this screen is mounted the iHealth scanner is ours: no startup /
+  // foreground battery refresh may run (it would collide with the scan and
+  // the battery-only connect that pairing performs).
+  useEffect(() => {
+    markDeviceScreenActive(true);
+    return () => markDeviceScreenActive(false);
+  }, []);
+
   useEffect(() => {
     // Setup event listeners
     const deviceFoundSub = deviceService.onDeviceFound((device) => {
@@ -179,9 +187,6 @@ export default function AddDeviceScreen() {
   }, []);
 
   const startScan = async () => {
-    // The SDK is a singleton: a startup/foreground battery refresh must not
-    // be scanning while the add-device scan runs.
-    cancelBatteryRefresh();
     try {
       await deviceService.ensureBluetoothReady();
     } catch (error: any) {
