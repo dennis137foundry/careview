@@ -25,6 +25,7 @@ import {
 } from "./src/redux/deviceSlice";
 import { checkProfileOnForeground } from "./src/services/profileRefreshService";
 import deviceService from "./src/services/deviceService";
+import { refreshDeviceBatteries } from "./src/services/batteryRefreshService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
 import {
   loadAuthTokensFromStorage,
@@ -107,6 +108,13 @@ function RootApp() {
 
       // After splash — never blocks startup. Fire-and-forget.
       runProfileRefresh();
+      // Refresh every registered device's battery so the Devices screen
+      // and the pre-capture warning reflect the device as it is now, not
+      // as it was at the last reading (a monitor charged overnight kept
+      // showing last night's 11%). Devices that are asleep are skipped.
+      if (store.getState().user.isAuthenticated) {
+        refreshDeviceBatteries();
+      }
     };
     init();
 
@@ -119,6 +127,9 @@ function RootApp() {
         // a brief hop for a system permission dialog does not count.
         noteAppForegrounded();
         runProfileRefresh();
+        if (store.getState().user.isAuthenticated) {
+          refreshDeviceBatteries();
+        }
       } else if (nextState === "background") {
         noteAppBackgrounded();
       }

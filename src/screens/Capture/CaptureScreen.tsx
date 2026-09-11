@@ -30,10 +30,13 @@ import { hasDailyHealthCheckToday, readingExists } from "../../services/sqliteSe
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
+import { cancelBatteryRefresh } from "../../services/batteryRefreshService";
 import { BTN } from "../../constants/buttons";
 
 // Below this last-known battery %, warn the user to charge before a reading.
 const LOW_BATTERY_THRESHOLD = 20;
+// A battery level older than this is treated as unknown, not as current.
+const BATTERY_FRESH_MS = 30 * 60 * 1000;
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -1154,6 +1157,21 @@ export default function CaptureScreen({ route, navigation }: any) {
         if (typeof data?.level === "number" && data?.mac) {
           addLog(`Battery: ${data.level}% (${data.type || "?"})`);
           dispatch(setDeviceBattery({ mac: data.mac, battery: data.level }));
+          // Live level from the device we just connected to. This is the
+          // reading the pre-scan warning defers to when its own level is
+          // stale: say so now, without interrupting the measurement.
+          const isThisDevice =
+            !targetMacRef.current ||
+            String(data.mac).toUpperCase() === targetMacRef.current.toUpperCase();
+          if (isThisDevice && data.level < LOW_BATTERY_THRESHOLD) {
+            showToast({
+              message: `Battery is low (${data.level}%). Charge your ${
+                device?.friendlyName || device?.name || "device"
+              } soon for reliable readings.`,
+              type: "info",
+              duration: 5000,
+            });
+          }
         }
       }),
       emitter.addListener("onError", (data: any) => {
@@ -1187,7 +1205,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch]);
+  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast]);
 
   // ============================================================================
   // START CAPTURE
@@ -1197,6 +1215,9 @@ export default function CaptureScreen({ route, navigation }: any) {
       Alert.alert("Error", "Device not found");
       return;
     }
+    // The SDK is a singleton: a startup/foreground battery refresh must not
+    // be scanning or connecting while a capture runs.
+    cancelBatteryRefresh();
     if (!IHealthDevices || !emitter) {
       Alert.alert("Error", "Native module not available");
       return;
@@ -1334,10 +1355,23 @@ export default function CaptureScreen({ route, navigation }: any) {
       startCapture();
     };
 
-    // Warn if the last-known battery (read on the previous connection) is low.
-    // Non-blocking: the patient can still try, since a reading may succeed.
+    // Warn before scanning only when the last-known battery is low AND
+    // recent. A level read last night says nothing about a monitor that was
+    // charged overnight — that stale warning made a patient "Try Anyway" on
+    // a full device. An old reading is treated as unknown: the capture
+    // proceeds, the connect reads the battery live, and the listener below
+    // warns then if it really is low. The startup/foreground battery
+    // refresh keeps this fresh for devices that are awake.
     const batt = device?.lastBattery;
-    if (typeof batt === "number" && batt >= 0 && batt < LOW_BATTERY_THRESHOLD) {
+    const battAt = device?.lastBatteryAt;
+    const battFresh =
+      typeof battAt === "number" && Date.now() - battAt < BATTERY_FRESH_MS;
+    if (
+      battFresh &&
+      typeof batt === "number" &&
+      batt >= 0 &&
+      batt < LOW_BATTERY_THRESHOLD
+    ) {
       const label = device?.friendlyName || device?.name || "device";
       addLog(`Low battery (${batt}%) — prompting to charge`);
       Alert.alert(

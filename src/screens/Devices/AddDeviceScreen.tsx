@@ -24,6 +24,7 @@ import {
   useCodeScanner,
 } from "react-native-vision-camera";
 
+import { cancelBatteryRefresh } from "../../services/batteryRefreshService";
 import deviceService, {
   type BluetoothStatus,
   type DiscoveredDevice,
@@ -178,6 +179,9 @@ export default function AddDeviceScreen() {
   }, []);
 
   const startScan = async () => {
+    // The SDK is a singleton: a startup/foreground battery refresh must not
+    // be scanning while the add-device scan runs.
+    cancelBatteryRefresh();
     try {
       await deviceService.ensureBluetoothReady();
     } catch (error: any) {

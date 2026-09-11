@@ -46,13 +46,40 @@ import {
 // Default BP thresholds (standard hypertension definition)
 const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
 
-// Single unified chart theme - dark navy with coral/amber lines
+// Single unified chart theme - dark navy with coral/amber lines.
+//
+// Every colour the chart library would otherwise default (black data
+// points, light-grey dashed rules, black axis tick marks) is set here, so
+// nothing on the slate background is left to the library's light-theme
+// defaults. Data points take their own series colour, so a systolic dot is
+// coral and a diastolic dot is amber — the same key as the legend.
 const CHART_THEME = {
   background: "#1e293b", // Slate 800
-  primaryLine: "#FF6B6B", // Coral (systolic / primary)
-  secondaryLine: "#FBBF24", // Amber (diastolic / secondary)
-  axisColor: "#94a3b8", // Slate 400
+  primaryLine: "#FF6B6B", // Coral (systolic / primary) — 4.9:1 on slate 800
+  secondaryLine: "#FBBF24", // Amber (diastolic / secondary) — 9.6:1 on slate 800
+  axisColor: "#94a3b8", // Slate 400 — axes and tick marks
+  rulesColor: "rgba(148, 163, 184, 0.35)", // Slate 400 at 35% — horizontal guides
   textColor: "#ffffff",
+  dataPointRadius: 4,
+};
+
+/** Shared LineChart props: axes, rules, labels and points for the dark theme. */
+const CHART_BASE_PROPS = {
+  initialSpacing: 20,
+  thickness: 3,
+  height: 140,
+  noOfSections: 4,
+  curved: true,
+  hideRules: false,
+  rulesType: "solid" as const,
+  rulesColor: CHART_THEME.rulesColor,
+  yAxisColor: CHART_THEME.axisColor,
+  xAxisColor: CHART_THEME.axisColor,
+  yAxisIndicesColor: CHART_THEME.axisColor,
+  xAxisIndicesColor: CHART_THEME.axisColor,
+  yAxisTextStyle: { color: CHART_THEME.textColor, fontSize: 11 },
+  xAxisLabelTextStyle: { color: CHART_THEME.textColor, fontSize: 10 },
+  dataPointsRadius: CHART_THEME.dataPointRadius,
 };
 
 interface DisplayReading extends SavedReading {
@@ -950,41 +977,26 @@ function DeviceHistoryTab({
                 <View style={styles.chartInner}>
                   {deviceType === "BP" ? (
                     <LineChart
+                      {...CHART_BASE_PROPS}
                       data={chartData.primary}
                       data2={chartData.secondary}
-                      initialSpacing={20}
                       spacing={Math.max(40, 280 / numbered.length)}
-                      thickness={3}
                       thickness2={3}
-                      height={140}
-                      noOfSections={4}
-                      curved
-                      hideRules={false}
-                      yAxisColor={CHART_THEME.axisColor}
-                      xAxisColor={CHART_THEME.axisColor}
-                      yAxisTextStyle={{ color: CHART_THEME.textColor, fontSize: 11 }}
-                      xAxisLabelTextStyle={{ color: CHART_THEME.textColor, fontSize: 10 }}
                       color={CHART_THEME.primaryLine}
                       color2={CHART_THEME.secondaryLine}
+                      dataPointsColor1={CHART_THEME.primaryLine}
+                      dataPointsColor2={CHART_THEME.secondaryLine}
                       yAxisOffset={chartData.yAxisOffset}
                       maxValue={chartData.yAxisMax}
                       hideDataPoints={numbered.length > 15}
                     />
                   ) : (
                     <LineChart
+                      {...CHART_BASE_PROPS}
                       data={chartData.primary}
-                      initialSpacing={20}
                       spacing={Math.max(40, 280 / numbered.length)}
-                      thickness={3}
-                      height={140}
-                      noOfSections={4}
-                      curved
-                      hideRules={false}
-                      yAxisColor={CHART_THEME.axisColor}
-                      xAxisColor={CHART_THEME.axisColor}
-                      yAxisTextStyle={{ color: CHART_THEME.textColor, fontSize: 11 }}
-                      xAxisLabelTextStyle={{ color: CHART_THEME.textColor, fontSize: 10 }}
                       color={CHART_THEME.primaryLine}
+                      dataPointsColor={CHART_THEME.primaryLine}
                       yAxisOffset={chartData.yAxisOffset}
                       maxValue={chartData.yAxisMax}
                       hideDataPoints={numbered.length > 15}
