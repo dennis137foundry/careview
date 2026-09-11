@@ -43,15 +43,20 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     private var bg5sControl: Bg5sControl? = null
 
     // Set by connectForSetup (add-device flow): this connection also sets the
-    // device's own clock and, on the BG5S, erases its memory. A device's
-    // stored readings carry ITS timestamp, and out of the box that clock
-    // reads 2017 — nothing recorded before setup can be trusted. Mirrors
-    // iOS _setupMAC. Cleared once consumed.
+    // device's own clock (BP5S via getFunctionInfo; the BG5S chain sets it on
+    // every connect anyway). A device's stored readings carry ITS timestamp,
+    // and out of the box that clock reads 2017 — the meter's clock is read
+    // BEFORE it is set and reported to JS (onDeviceClockSet.deviceDateBefore),
+    // which is what lets readings taken on the unset clock be dated later.
+    // Mirrors iOS _setupMAC. Cleared once consumed.
     private var setupMac: String? = null
 
     // setDeviceClock(purge=true) on an already-connected BG5S: erase memory
     // after the clock is set. Consumed by the ACTION_SET_TIME handler.
     private var bg5sPurgePendingMac: String? = null
+
+    // deleteDeviceRecords: settled when the meter confirms the erase.
+    private var pendingDeletePromise: Promise? = null
 
     // Offline record count reported by the last BG5S status query. The pull
     // is deferred until AFTER the clock is set so JS always has clockSetAt
@@ -632,14 +637,13 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 bg5sDeviceDateBefore = bg5sStatusDeviceDate(json)
                 sendGlucoseMeterEvent(mac, "status",
                     "Status received; offline records=$bg5sOfflineNum; meter clock=${bg5sDeviceDateBefore?.let { java.util.Date(it.toLong()) } ?: "unknown"}")
-                // A setup connect erases the memory once the clock is set.
-                if (setupMac.equals(mac, ignoreCase = true)) {
-                    setupMac = null
-                    bg5sPurgePendingMac = mac
-                }
+                // A setup connect on the BG5S needs nothing extra: this chain sets
+                // the clock and reports it on every connect.
+                if (setupMac.equals(mac, ignoreCase = true)) setupMac = null
                 // Continue the prep chain: set the meter clock. The offline pull
-                // (or the erase) is issued from ACTION_SET_TIME, never here, so
-                // JS receives onDeviceClockSet before any stored record.
+                // is issued from ACTION_SET_TIME, never here, so JS receives
+                // onDeviceClockSet (with the clock's pre-set reading) before any
+                // stored record.
                 try { control?.setTime(java.util.Date(), localTimezoneOffsetHours()) }
                 catch (e: Exception) { sendDebugLog("BG5S setTime error: ${e.message}") }
             }
@@ -650,8 +654,6 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                     try { control?.deleteOfflineData() }
                     catch (e: Exception) {
                         sendDebugLog("BG5S deleteOfflineData error: ${e.message}")
-                        // Clock is set even though the erase could not be issued;
-                        // JS filters by clockSetAt so stale records stay out.
                         finishBg5sClockSet(mac, purged = false)
                     }
                     return
@@ -659,17 +661,26 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 sendGlucoseMeterEvent(mac, "set_time", "Clock set; setting unit to mg/dL")
                 finishBg5sClockSet(mac, purged = false)
                 // Pull stored readings so offline measurements reach the EMR (iOS
-                // parity). Their timestamps are the meter's; JS drops any older
-                // than clockSetAt, which it has just been told.
+                // parity). Each carries the meter's timestamp and its time-proof
+                // flag; JS dates the flagged ones by the clock offset. When the
+                // meter holds nothing, say so — JS is waiting for this batch.
                 if (bg5sOfflineNum > 0) {
                     try { control?.getOfflineData() }
                     catch (e: Exception) { sendDebugLog("BG5S getOfflineData error: ${e.message}") }
+                } else {
+                    sendGlucoseMeterEvent(mac, "offline_synced", "Synced 0 offline record(s)")
                 }
             }
             Bg5sProfile.ACTION_DELETE_OFFLINE_DATA -> {
-                sendGlucoseMeterEvent(mac, "delete_offline_ok", "Memory erased — only readings taken from now on will be imported")
+                sendGlucoseMeterEvent(mac, "delete_offline_ok", "Meter memory erased")
                 bg5sOfflineNum = 0
-                finishBg5sClockSet(mac, purged = true)
+                if (pendingDeletePromise != null) {
+                    // deleteDeviceRecords after an import — not the clock chain.
+                    pendingDeletePromise?.resolve(true)
+                    pendingDeletePromise = null
+                } else {
+                    finishBg5sClockSet(mac, purged = true)
+                }
             }
             Bg5sProfile.ACTION_SET_UNIT ->
                 sendGlucoseMeterEvent(mac, "ready", "Unit set to mg/dL; meter ready")
@@ -702,8 +713,14 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                         val rec = arr.optJSONObject(i) ?: continue
                         val value = rec.optDouble(Bg5sProfile.DATA_VALUE, 0.0)
                         if (value > 0) {
+                            // DATA_TIME_PROOF: true = the meter's clock had been set when this
+                            // reading was taken, so its timestamp is trustworthy; false = taken
+                            // on the unset (2017) clock — JS dates it by the clock offset.
+                            // Absent on old firmware: treat as proven and let JS's plausibility
+                            // check catch a 2017 stamp.
+                            val timeProof = if (rec.has(Bg5sProfile.DATA_TIME_PROOF)) rec.optBoolean(Bg5sProfile.DATA_TIME_PROOF, true) else true
                             emitGlucoseReading(mac, value, rec.optString(Bg5sProfile.DATA_ID, "offline-$i"),
-                                bg5sRecordTimestamp(rec))
+                                bg5sRecordTimestamp(rec), timeProof)
                             emitted++
                         }
                     }
@@ -718,10 +735,12 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 val message = "BG5S error $num $desc".trim()
                 sendGlucoseMeterEvent(mac, "error", message)
                 sendError("BG5S_ERROR", message)
-                // A clock-set chain that was waiting on this meter is over.
+                // A clock-set chain or erase that was waiting on this meter is over.
                 bg5sPurgePendingMac = null
                 pendingClockPromise?.resolve(false)
                 pendingClockPromise = null
+                pendingDeletePromise?.resolve(false)
+                pendingDeletePromise = null
             }
             else -> sendDebugLog("BG5S: Unhandled action: $action")
         }
@@ -773,8 +792,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         sendEvent("onDeviceClockSet", params)
     }
 
-    private fun emitGlucoseReading(mac: String, value: Double, dataID: String, timestamp: Double) {
-        sendDebugLog("BG5S RESULT: $value mg/dL (dataID=$dataID, ts=${timestamp.toLong()})")
+    private fun emitGlucoseReading(mac: String, value: Double, dataID: String, timestamp: Double, timeProof: Boolean = true) {
+        sendDebugLog("BG5S RESULT: $value mg/dL (dataID=$dataID, ts=${timestamp.toLong()}, timeProof=$timeProof)")
         val params = Arguments.createMap().apply {
             putString("mac", mac)
             putString("type", "BG5S")
@@ -783,6 +802,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             putString("dataID", dataID)
             putString("source", "iHealthSDK")
             putDouble("timestamp", timestamp)
+            putBoolean("timeProof", timeProof)
         }
         sendEvent("onBloodGlucoseReading", params)
     }
@@ -1108,6 +1128,35 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             pendingClockPromise = null
             bg5sPurgePendingMac = null
             promise.reject("SET_CLOCK_ERROR", "Failed to set $deviceType clock: ${e.message}", e)
+        }
+    }
+
+    /**
+     * deleteDeviceRecords(mac: String, deviceType: String, promise: Promise)
+     *
+     * Erase the stored readings on an ALREADY-connected glucose meter. Called
+     * by the capture flow after every record it pulled has been saved
+     * locally, so a record is never re-delivered — and never re-dated against
+     * a later, different clock offset. Best-effort: if the meter has gone to
+     * sleep the records simply stay, and the app's deterministic reading ids
+     * skip them next time. Resolves true only when the meter confirmed.
+     *
+     * iOS sig: deleteDeviceRecords:(NSString *)mac deviceType:(NSString *)deviceType resolver:reject:
+     */
+    @ReactMethod
+    fun deleteDeviceRecords(mac: String, deviceType: String, promise: Promise) {
+        if (deviceType != "BG5S") { promise.resolve(false); return }
+        try {
+            val control = bg5sControl ?: iHealthDevicesManager.getInstance().getBg5sControl(mac)
+            if (control == null) { promise.resolve(false); return }
+            pendingDeletePromise?.resolve(false)
+            pendingDeletePromise = promise
+            sendGlucoseMeterEvent(mac, "delete_offline", "Erasing imported records from the meter")
+            control.deleteOfflineData()
+        } catch (e: Exception) {
+            pendingDeletePromise = null
+            sendDebugLog("BG5S deleteOfflineData error: ${e.message}")
+            promise.resolve(false)
         }
     }
 

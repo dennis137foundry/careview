@@ -85,13 +85,83 @@ const GLUCOSE_TIMING_OPTIONS = [
 
 type GlucoseTimingValue = (typeof GLUCOSE_TIMING_OPTIONS)[number]["value"];
 
-// Glucose-meter clock setup messages (see "Device clock trust" in the screen).
-const METER_SET_UP_MSG =
-  "Your glucose meter's clock has been set, and any readings it held from before setup were cleared — they could not be dated correctly. Take a reading on the meter now, then import it.";
-const METER_SETUP_FAILED_MSG =
-  "The meter connected, but the app could not set its clock. Keep the meter nearby and try again.";
-const ONLY_STALE_MSG =
-  "The meter only holds readings taken before it was set up in the app, and those cannot be used. Take a new reading on the meter, then try again.";
+// ---------------------------------------------------------------------------
+// Glucose meter time
+//
+// The BG5S stamps each stored reading with ITS OWN clock and flags whether
+// that clock had been set when the reading was taken (iOS `canCorrect`,
+// Android `timeProof`). Out of the box — and again after a dead battery —
+// the clock runs from 2017-01-01, so a flagged reading sits at a fixed
+// offset from real time. The app measures that offset whenever it finds the
+// meter's clock off (App.tsx → devices.clockOffsetMs) and dates flagged
+// readings by adding it. Unflagged readings are used as stamped. Nothing is
+// ever dated by import time: a reading is taken, then imported later.
+// ---------------------------------------------------------------------------
+
+// Earlier than this cannot be a real reading on any meter in service.
+const EARLIEST_PLAUSIBLE_READING_MS = Date.UTC(2025, 0, 1);
+// Phone/meter skew tolerated before "in the future" means "wrong".
+const FUTURE_SLACK_MS = 15 * 60 * 1000;
+
+function readingTakenOnUnsetClock(record: any): boolean {
+  if (record?.canCorrect === true) return true; // iOS BG5SRecordModel
+  if (record?.timeProof === false) return true; // Android DATA_TIME_PROOF
+  return false;
+}
+
+/**
+ * The real time a stored glucose reading was taken, or null when it cannot
+ * be dated (flagged, but no offset is known — the meter was set up by a
+ * build that did not record one). Never a time in the future or before the
+ * program existed.
+ */
+function datedBGTimestamp(record: any, clockOffsetMs: number | null): number | null {
+  const raw = parseBGTimestamp(record);
+  const flagged =
+    readingTakenOnUnsetClock(record) || raw < EARLIEST_PLAUSIBLE_READING_MS;
+  let ts = raw;
+  if (flagged) {
+    if (clockOffsetMs === null || !Number.isFinite(clockOffsetMs)) return null;
+    ts = raw + clockOffsetMs;
+  }
+  if (ts > Date.now() + FUTURE_SLACK_MS || ts < EARLIEST_PLAUSIBLE_READING_MS) {
+    return null;
+  }
+  return ts;
+}
+
+/**
+ * The sample window a reading taken at this time most likely belongs to —
+ * pre-selected in the prompt so tagging is one tap. The patient can always
+ * pick another.
+ */
+function suggestGlucoseTiming(ts: number): GlucoseTimingValue {
+  const d = new Date(ts);
+  const h = d.getHours() + d.getMinutes() / 60;
+  if (h < 5) return "overnight";
+  if (h < 9) return "before breakfast";
+  if (h < 11) return "after breakfast";
+  if (h < 13) return "before lunch";
+  if (h < 15) return "after lunch";
+  if (h < 18) return "before dinner";
+  if (h < 20.5) return "after dinner";
+  return "bedtime";
+}
+
+function formatReadingTime(ts: number): string {
+  const d = new Date(ts);
+  const today = new Date();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === today.toDateString()) return `Today ${time}`;
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+  const day = d.toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" });
+  return `${day} ${time}`;
+}
+
+const METER_CLOCK_UNKNOWN_MSG =
+  "Some readings on the meter were taken before its clock was set, and this app has no record of that clock. They were left on the meter. Take a new reading and import again.";
 
 function getGlucoseTimingLabel(value?: string): string {
   return (
@@ -119,15 +189,6 @@ function parseBGTimestamp(record: any): number {
   }
 
   return Date.now();
-}
-
-function getLatestBGRecord(payload: any): any | null {
-  const records = Array.isArray(payload?.records) ? payload.records : [];
-  if (records.length === 0) return null;
-
-  return [...records].sort(
-    (a, b) => parseBGTimestamp(b) - parseBGTimestamp(a)
-  )[0];
 }
 
 function buildBGReadingId(deviceId: string, data: any): string {
@@ -198,36 +259,36 @@ export default function CaptureScreen({ route, navigation }: any) {
   const deviceDbId = device?.id;
 
   // ==========================================================================
-  // Device clock trust (glucose meter)
+  // Glucose import (see "Glucose meter time" above)
   //
-  // A BG5S's stored records carry the METER's timestamp, and out of the box
-  // that clock reads 2017. The app sets the clock when the meter is added
-  // (and erases its memory) and again on every connect; the moment of the
-  // last set is the device's clockSetAt. Only records stamped at or after
-  // the clockSetAt that was in force WHEN THIS CAPTURE CONNECTED are
-  // trusted — that value is snapshotted into clockFloorRef at connect time,
-  // because the connect itself re-sets the clock and the store then holds
-  // "now", which would wrongly reject readings taken an hour ago. A null
-  // floor means the meter has never been set up: set it up now, erase, and
-  // ask for a fresh reading instead of importing anything.
+  // Every connection to the meter is a full sync: native reads the meter's
+  // clock, sets it, and reports both (App.tsx keeps the offset); this screen
+  // then pulls EVERY stored reading, dates each one, drops what is already
+  // captured, and walks the rest oldest-first through the sample-window
+  // prompt — one pre-selected tap each. Once all are saved the meter's
+  // memory is erased so nothing is re-delivered or re-dated later. Skipped
+  // or cancelled readings stay on the meter and are offered again.
   // ==========================================================================
   const store = useStore<RootState>();
-  const currentClockSetAt = useCallback((): number | null => {
+  const currentClockOffset = useCallback((): number | null => {
     const d = store.getState().devices.devices.find((x) => x.id === deviceDbId);
-    return typeof d?.clockSetAt === "number" && Number.isFinite(d.clockSetAt)
-      ? d.clockSetAt
+    return typeof d?.clockOffsetMs === "number" && Number.isFinite(d.clockOffsetMs)
+      ? d.clockOffsetMs
       : null;
   }, [store, deviceDbId]);
-  const clockFloorRef = useRef<number | null>(null);
-  // Android: the native side sets the clock on every connect by itself; when
-  // the meter had never been set up we also want its memory erased once the
-  // clock lands. Holds the mac awaiting that erase.
-  const pendingFirstSetupMacRef = useRef<string>("");
 
-  const isStaleStoredRecord = useCallback((ts: number): boolean => {
-    const floor = clockFloorRef.current;
-    return floor === null || !Number.isFinite(ts) || ts < floor;
-  }, []);
+  // The readings still to tag in this import, oldest first, each carrying
+  // its dated `ts`; the prompt shows the head. Counters drive the summary
+  // and decide whether the meter may be erased at the end.
+  const glucoseQueueRef = useRef<any[]>([]);
+  const glucoseTotalRef = useRef(0);
+  const glucoseImportedRef = useRef(0);
+  const glucoseLeftOnMeterRef = useRef(0);
+  const glucoseMacRef = useRef<string>("");
+  const lastSavedGlucoseRef = useRef<any | null>(null);
+  // Android delivers stored records one event at a time, then says how
+  // many it sent; they are collected here until that batch-complete event.
+  const androidBGBatchRef = useRef<any[]>([]);
 
   // Stop the capture and explain. Same teardown as the other dead ends.
   const endCaptureWithAlert = useCallback((title: string, message: string) => {
@@ -544,18 +605,14 @@ export default function CaptureScreen({ route, navigation }: any) {
 
         if (data.connected) {
           if (device?.type === "BG") {
-            // Snapshot the trust floor BEFORE this connect re-sets the clock
-            // (see clockFloorRef). On iOS the BG5S effect below drives the
-            // rest; on Android the native side sets the clock and pulls the
-            // records by itself — a never-set-up meter also gets its memory
-            // erased once the clock-set event lands (pendingFirstSetupMacRef).
-            clockFloorRef.current = currentClockSetAt();
-            const firstSetup = clockFloorRef.current === null;
-            if (Platform.OS === "android" && firstSetup) {
-              pendingFirstSetupMacRef.current = String(data.mac || "");
-            }
+            // iOS: the BG5S effect below sets the clock and pulls the records.
+            // Android: native does both on connect and delivers the records
+            // through onBloodGlucoseReading, then onGlucoseMeterEvent
+            // "offline_synced" once the batch is complete.
+            androidBGBatchRef.current = [];
+            glucoseMacRef.current = String(data.mac || "");
             setPhase("measure");
-            setStatusText(firstSetup ? "Setting up your meter..." : "Checking stored readings...");
+            setStatusText("Checking stored readings...");
             return;
           }
 
@@ -741,127 +798,217 @@ export default function CaptureScreen({ route, navigation }: any) {
     [device, dispatch, playSuccessAnimation, syncToEMR, showToast]
   );
 
-  const promptForGlucoseTiming = useCallback(
-    async (data: any) => {
-      if (readingReceivedRef.current) return;
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  // Shared teardown once an import is over (all tagged, cancelled, or
+  // nothing to import). `lastSaved` drives the success view.
+  const endGlucoseImport = useCallback(
+    async (lastSaved: any | null) => {
+      const imported = glucoseImportedRef.current;
+      const leftOnMeter = glucoseLeftOnMeterRef.current;
+      const mac = glucoseMacRef.current;
 
-      const value = Number(data?.value);
-      if (!Number.isFinite(value) || value <= 0) {
-        addLog("BG5S returned no usable glucose value");
-        IHealthDevices?.stopScan?.().catch(() => {});
-        IHealthDevices?.disconnectAll?.().catch(() => {});
-        IHealthDevices?.allowSleep?.();
-        targetMacRef.current = "";
-        setBusy(false);
-        setPhase("idle");
-        setStatusText("");
-        Alert.alert(
-          "No Glucose Reading",
-          "The meter connected, but no stored glucose reading was found. Take a reading on the meter, then try capture again."
+      setShowGlucoseTimingModal(false);
+      setPendingGlucoseReading(null);
+      glucoseQueueRef.current = [];
+
+      // Erase the meter only when everything it held is now safely in the
+      // app. If anything was skipped or cancelled, leave the memory alone —
+      // deterministic reading ids keep the saved ones from re-importing, and
+      // the rest are offered again next time.
+      if (imported > 0 && leftOnMeter === 0 && mac) {
+        const erased = await deviceService.deleteDeviceRecords(mac, "BG5S");
+        addLog(
+          erased
+            ? "Meter memory erased after import"
+            : "Meter memory not erased (meter asleep?) — ids will dedup next time"
         );
-        return;
       }
 
-      // The meter re-delivers its stored records on every connection (we
-      // never erase its memory). Reading ids are deterministic — built
-      // from the meter's own record id — so an id hit means this exact
-      // record was already captured: don't re-prompt for the sample
-      // window, don't re-save (a re-save resets the synced flag and
-      // triggers a redundant EMR round-trip the server would just dedup).
-      const candidateId = buildBGReadingId(deviceDbId || "", {
-        ...data,
-        timestamp: parseBGTimestamp(data),
-      });
-      if (readingExists(candidateId)) {
-        addLog(`BG5S record already captured (${candidateId}) — skipping`);
-        IHealthDevices?.stopScan?.().catch(() => {});
-        IHealthDevices?.disconnectAll?.().catch(() => {});
-        IHealthDevices?.allowSleep?.();
-        targetMacRef.current = "";
+      IHealthDevices?.stopScan?.().catch(() => {});
+      IHealthDevices?.disconnectAll?.().catch(() => {});
+      IHealthDevices?.allowSleep?.();
+      targetMacRef.current = "";
+
+      if (lastSaved) {
+        setLastReading({
+          glucose: lastSaved.value,
+          unit: lastSaved.unit,
+          timing: lastSaved.timing,
+          timingLabel: getGlucoseTimingLabel(lastSaved.timing),
+          takenAt: lastSaved.ts,
+          importedCount: imported,
+        });
+        setStatusText(`${lastSaved.value} ${lastSaved.unit}`);
+        setBusy(false);
+        playSuccessAnimation();
+        if (imported > 1) {
+          showToast({
+            message: `${imported} readings imported from your meter.`,
+            type: "success",
+            duration: 3000,
+          });
+        }
+        syncToEMR();
+      } else {
+        readingReceivedRef.current = false;
         setBusy(false);
         setPhase("idle");
         setStatusText("");
-        Alert.alert(
-          "No New Readings",
-          "The reading stored on your meter has already been captured. Take a new reading on the meter, then capture again."
-        );
+      }
+    },
+    [addLog, playSuccessAnimation, showToast, syncToEMR]
+  );
+
+  // Show the prompt for the head of the queue.
+  const promptNextGlucoseReading = useCallback(() => {
+    const next = glucoseQueueRef.current[0];
+    if (!next) return;
+    setPendingGlucoseReading(next);
+    setBusy(false);
+    setStatusText("Select sample window");
+    setShowGlucoseTimingModal(true);
+  }, []);
+
+  /**
+   * Entry point for every stored-record batch the meter hands over (iOS:
+   * the pull below; Android: the buffered onBloodGlucoseReading events).
+   * Dates, dedups, orders, then starts the prompt loop.
+   */
+  const beginGlucoseImport = useCallback(
+    (records: any[], mac: string) => {
+      if (readingReceivedRef.current) return;
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      glucoseMacRef.current = mac || glucoseMacRef.current;
+
+      const offset = currentClockOffset();
+      const deviceIdForReading = deviceDbId || "";
+      const usable: any[] = [];
+      let undatable = 0;
+      let alreadyCaptured = 0;
+
+      for (const rec of records) {
+        const value = Number(rec?.value);
+        if (!Number.isFinite(value) || value <= 0) continue;
+        const ts = datedBGTimestamp(rec, offset);
+        if (ts === null) {
+          undatable += 1;
+          addLog(
+            `BG5S record ${rec?.dataID || "?"} could not be dated (flagged, offset ${offset ?? "unknown"}) — left on meter`
+          );
+          continue;
+        }
+        // Deterministic id from the meter's own record id: an id hit means
+        // this exact record was already captured — don't re-prompt, don't
+        // re-save (a re-save would reset the synced flag).
+        const id = buildBGReadingId(deviceIdForReading, { ...rec, timestamp: ts });
+        if (readingExists(id)) {
+          alreadyCaptured += 1;
+          continue;
+        }
+        usable.push({ ...rec, ts, id, value, unit: rec?.unit || "mg/dL" });
+      }
+
+      usable.sort((a, b) => a.ts - b.ts);
+      addLog(
+        `BG5S import: ${records.length} on meter, ${usable.length} new, ${alreadyCaptured} already captured, ${undatable} undatable`
+      );
+
+      if (usable.length === 0) {
+        // Nothing to tag. Say why, then stand down.
+        readingReceivedRef.current = false;
+        glucoseImportedRef.current = 0;
+        glucoseLeftOnMeterRef.current = undatable;
+        if (undatable > 0) {
+          endCaptureWithAlert("Readings Could Not Be Dated", METER_CLOCK_UNKNOWN_MSG);
+        } else if (alreadyCaptured > 0) {
+          endCaptureWithAlert(
+            "No New Readings",
+            "Every reading stored on your meter has already been captured. Take a new reading on the meter, then capture again."
+          );
+        } else {
+          endCaptureWithAlert(
+            "No Glucose Reading",
+            "The meter connected, but no stored glucose reading was found. Take a reading on the meter, then try capture again."
+          );
+        }
         return;
       }
 
       readingReceivedRef.current = true;
+      glucoseQueueRef.current = usable;
+      glucoseTotalRef.current = usable.length;
+      glucoseImportedRef.current = 0;
+      glucoseLeftOnMeterRef.current = undatable;
+      lastSavedGlucoseRef.current = null;
+      // Keep the link up: the meter is erased once everything is tagged.
       IHealthDevices?.stopScan?.().catch(() => {});
-      IHealthDevices?.disconnectAll?.().catch(() => {});
-      IHealthDevices?.allowSleep?.();
-
-      setPendingGlucoseReading(data);
-      setBusy(false);
-      setStatusText("Select sample window");
-      setShowGlucoseTimingModal(true);
+      promptNextGlucoseReading();
     },
-    [addLog, deviceDbId]
+    [addLog, currentClockOffset, deviceDbId, endCaptureWithAlert, promptNextGlucoseReading]
   );
 
+  // Save the reading being shown with the chosen window, then move on.
   const saveGlucoseReading = useCallback(
     async (timing: GlucoseTimingValue) => {
       const data = pendingGlucoseReading;
       if (!data) return;
 
-      const value = Number(data?.value);
-      const ts = parseBGTimestamp(data);
-      // Same source as the already-captured check in promptForGlucoseTiming
-      // — the two MUST build identical ids.
-      const deviceIdForReading = deviceDbId || "";
-      const unit = data?.unit || "mg/dL";
-
       try {
         await dispatch(
           addReadingAndPersist({
-            id: buildBGReadingId(deviceIdForReading, { ...data, timestamp: ts }),
-            ts,
+            id: data.id,
+            ts: data.ts,
             type: "BG",
-            deviceId: deviceIdForReading,
+            deviceId: deviceDbId || "",
             deviceName: device?.friendlyName || device?.name || "Glucose Meter",
-            value,
-            unit,
+            value: data.value,
+            unit: data.unit,
             measurementCondition: timing,
           })
         ).unwrap();
       } catch (err) {
         console.error("[Capture] Failed to save glucose reading:", err);
-        readingReceivedRef.current = false;
-        setBusy(false);
-        setStatusText("");
         showToast({
           message: "Couldn't save your glucose reading. Please try again.",
           type: "error",
           duration: 4000,
         });
-        return;
+        return; // Prompt stays up; the patient can retry the tap.
       }
 
-      setShowGlucoseTimingModal(false);
-      setPendingGlucoseReading(null);
-      setLastReading({
-        glucose: value,
-        unit,
-        timing,
-        timingLabel: getGlucoseTimingLabel(timing),
-      });
-      setStatusText(`${value} ${unit}`);
-      setBusy(false);
-      playSuccessAnimation();
-      syncToEMR();
+      glucoseImportedRef.current += 1;
+      lastSavedGlucoseRef.current = { ...data, timing };
+      glucoseQueueRef.current = glucoseQueueRef.current.slice(1);
+      if (glucoseQueueRef.current.length > 0) {
+        promptNextGlucoseReading();
+        return;
+      }
+      await endGlucoseImport(lastSavedGlucoseRef.current);
     },
     [
       device,
+      deviceDbId,
       dispatch,
+      endGlucoseImport,
       pendingGlucoseReading,
-      playSuccessAnimation,
+      promptNextGlucoseReading,
       showToast,
-      syncToEMR,
     ]
   );
+
+  // Leave this reading on the meter and move on.
+  const skipGlucoseReading = useCallback(async () => {
+    if (!pendingGlucoseReading) return;
+    glucoseLeftOnMeterRef.current += 1;
+    glucoseQueueRef.current = glucoseQueueRef.current.slice(1);
+    if (glucoseQueueRef.current.length > 0) {
+      promptNextGlucoseReading();
+      return;
+    }
+    // Nothing else to tag. Success view only if something was saved.
+    await endGlucoseImport(
+      glucoseImportedRef.current > 0 ? lastSavedGlucoseRef.current : null
+    );
+  }, [endGlucoseImport, pendingGlucoseReading, promptNextGlucoseReading]);
 
   // BG5S capture uses the working debug path: connect, pull stored records,
   // then ask for the sample window before saving and syncing.
@@ -871,7 +1018,7 @@ export default function CaptureScreen({ route, navigation }: any) {
   // delivers them via onBloodGlucoseReading (handled by the reading listener below),
   // so running this here would just throw "offline data API not available".
   useEffect(() => {
-    if (!emitter || device?.type !== "BG") return;
+    if (!emitter || deviceType !== "BG") return;
     if (Platform.OS !== "ios") return;
 
     const wait = (ms: number) =>
@@ -904,56 +1051,27 @@ export default function CaptureScreen({ route, navigation }: any) {
         return;
       }
 
-      // The trust floor for this visit: the clockSetAt in force before this
-      // connect touches the meter's clock. Computed here, synchronously, so
-      // it cannot see the clock-set event this handler is about to cause.
-      const floor = currentClockSetAt();
-      clockFloorRef.current = floor;
-      const firstSetup = floor === null;
-
       setPhase("measure");
-      setStatusText(firstSetup ? "Setting up your meter..." : "Checking stored readings...");
-      addLog(
-        firstSetup
-          ? "BG5S connected; never set up — setting clock and erasing memory"
-          : "BG5S connected; setting clock, then reading stored records"
-      );
+      setStatusText("Checking stored readings...");
+      addLog("BG5S connected; reading its clock, setting it, then pulling stored records");
 
       try {
-        // Set the meter's clock on every visit — a dead battery resets it to
-        // 2017 and every reading after that would be dated wrong. First
-        // visit ever: erase the memory too (nothing in it can be dated) and
-        // ask for a fresh reading rather than importing anything.
-        const clockOk = await deviceService.setDeviceClock(data.mac, "BG5S", firstSetup);
-        if (firstSetup) {
-          endCaptureWithAlert(
-            clockOk ? "Meter Set Up" : "Setup Failed",
-            clockOk ? METER_SET_UP_MSG : METER_SETUP_FAILED_MSG
-          );
-          return;
-        }
+        // Every visit: read the meter's clock, set it. Native reports both
+        // (onDeviceClockSet) and App.tsx keeps the offset when the clock was
+        // found off — out of the box, or reset by a dead battery — which is
+        // what dates the readings the meter flags as taken on the unset clock.
+        // Must complete BEFORE the pull so the offset is in the store.
+        const clockOk = await deviceService.setDeviceClock(data.mac, "BG5S", false);
         if (!clockOk) {
-          addLog("BG5S clock set failed on this visit; importing against the previous clockSetAt");
+          addLog("BG5S clock could not be set this visit; importing with the last known offset");
         }
 
         const payload = await readStoredBG5SData(data.mac);
         const records: any[] = Array.isArray(payload?.records) ? payload.records : [];
-        const fresh = records.filter((r) => !isStaleStoredRecord(parseBGTimestamp(r)));
-        const stale = records.length - fresh.length;
-        if (stale > 0) {
-          addLog(`BG5S: dropped ${stale} stored record(s) stamped before the clock was set`);
-        }
-        if (fresh.length === 0 && stale > 0) {
-          endCaptureWithAlert("No New Readings", ONLY_STALE_MSG);
-          return;
-        }
-        const latest = getLatestBGRecord({ records: fresh });
-        await promptForGlucoseTiming({
-          ...(latest || {}),
-          mac: data.mac,
-          type: "BG5S",
-          source: "iHealthSDK",
-        });
+        beginGlucoseImport(
+          records.map((r) => ({ ...r, mac: data.mac, type: "BG5S", source: "iHealthSDK" })),
+          data.mac
+        );
       } catch (e: any) {
         addLog(`BG5S stored read error: ${e?.message || String(e)}`);
         IHealthDevices?.stopScan?.().catch(() => {});
@@ -971,14 +1089,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     });
 
     return () => sub.remove();
-  }, [
-    addLog,
-    deviceType,
-    promptForGlucoseTiming,
-    currentClockSetAt,
-    isStaleStoredRecord,
-    endCaptureWithAlert,
-  ]);
+  }, [addLog, deviceType, beginGlucoseImport]);
 
   // Listen for readings
   useEffect(() => {
@@ -995,36 +1106,20 @@ export default function CaptureScreen({ route, navigation }: any) {
       }),
       emitter.addListener("onBloodGlucoseReading", (data: any) => {
         if (device?.type !== "BG") return;
-        // Android delivers the meter's stored records here. Each carries the
-        // METER's timestamp; anything stamped before the clock was set (or
-        // arriving from a meter never set up) is untrusted and dropped.
-        const ts = parseBGTimestamp(data);
-        if (isStaleStoredRecord(ts)) {
-          addLog(`BG: dropped stored record stamped ${new Date(ts).toISOString()} — before the meter's clock was set`);
-          return;
-        }
-        addLog(`BG: ${data.value} ${data.unit || "mg/dL"}`);
-        promptForGlucoseTiming(data);
+        if (Platform.OS !== "android") return; // iOS pulls the batch itself
+        // Android delivers the meter's stored records one event at a time,
+        // each with the meter's timestamp and its time-proof flag. Collect
+        // them; the import starts on the batch-complete event below.
+        androidBGBatchRef.current.push(data);
+        addLog(`BG: buffered ${data.value} ${data.unit || "mg/dL"} (timeProof=${String(data.timeProof)})`);
       }),
-      // Android: native sets the meter's clock on every connect. When this
-      // capture found the meter never set up, finish the setup here — erase
-      // its memory — and ask for a fresh reading instead of importing.
-      emitter.addListener("onDeviceClockSet", (data: any) => {
-        const pending = pendingFirstSetupMacRef.current;
-        if (!pending || !data?.mac || data.mac.toUpperCase() !== pending.toUpperCase()) return;
-        pendingFirstSetupMacRef.current = "";
-        if (data.purged) {
-          endCaptureWithAlert("Meter Set Up", METER_SET_UP_MSG);
-          return;
-        }
-        deviceService
-          .setDeviceClock(data.mac, "BG5S", true)
-          .then((ok) =>
-            endCaptureWithAlert(
-              ok ? "Meter Set Up" : "Setup Failed",
-              ok ? METER_SET_UP_MSG : METER_SETUP_FAILED_MSG
-            )
-          );
+      emitter.addListener("onGlucoseMeterEvent", (data: any) => {
+        if (device?.type !== "BG") return;
+        if (Platform.OS !== "android") return;
+        if (data?.stage !== "offline_synced" || !busyRef.current) return;
+        const batch = androidBGBatchRef.current;
+        androidBGBatchRef.current = [];
+        beginGlucoseImport(batch, String(data.mac || glucoseMacRef.current));
       }),
       emitter.addListener("onBatteryLevel", (data: any) => {
         if (typeof data?.level === "number" && data?.mac) {
@@ -1063,7 +1158,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, promptForGlucoseTiming, dispatch, isStaleStoredRecord, endCaptureWithAlert]);
+  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch]);
 
   // ============================================================================
   // START CAPTURE
@@ -1249,13 +1344,15 @@ export default function CaptureScreen({ route, navigation }: any) {
     navigation.goBack();
   }, [navigation]);
 
+  // Stop the import. Untagged readings stay on the meter (memory is not
+  // erased) and are offered again next time; anything already tagged is
+  // kept and synced.
   const cancelGlucoseTiming = useCallback(() => {
-    setShowGlucoseTimingModal(false);
-    setPendingGlucoseReading(null);
-    readingReceivedRef.current = false;
-    setPhase("idle");
-    setStatusText("");
-  }, []);
+    glucoseLeftOnMeterRef.current += glucoseQueueRef.current.length;
+    endGlucoseImport(
+      glucoseImportedRef.current > 0 ? lastSavedGlucoseRef.current : null
+    );
+  }, [endGlucoseImport]);
 
   // ==========================================================================
   // Render helpers
@@ -1424,7 +1521,12 @@ export default function CaptureScreen({ route, navigation }: any) {
             <Text style={[styles.weightValue, isSuccess && styles.weightValueSuccess]}>{lastReading.glucose}</Text>
             <Text style={[styles.readingUnit, isSuccess && styles.readingUnitSuccess]}>{lastReading.unit || "mg/dL"}</Text>
             {lastReading.timingLabel ? (
-              <Text style={[styles.subReading, isSuccess && styles.subReadingSuccess]}>{lastReading.timingLabel}</Text>
+              <Text style={[styles.subReading, isSuccess && styles.subReadingSuccess]}>
+                {lastReading.timingLabel}
+                {typeof lastReading.takenAt === "number"
+                  ? ` · ${formatReadingTime(lastReading.takenAt)}`
+                  : ""}
+              </Text>
             ) : null}
             {syncStatus !== "" && (
               <Text
@@ -1662,31 +1764,59 @@ export default function CaptureScreen({ route, navigation }: any) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.glucoseTimingModal}>
-            <Text style={styles.glucoseTimingTitle}>Glucose sample window</Text>
+            <Text style={styles.glucoseTimingTitle}>
+              {glucoseTotalRef.current > 1
+                ? `Reading ${glucoseTotalRef.current - glucoseQueueRef.current.length + 1} of ${glucoseTotalRef.current} — when was it taken?`
+                : "When was this reading taken?"}
+            </Text>
             <Text style={styles.glucoseTimingValue}>
               {pendingGlucoseReading?.value} {pendingGlucoseReading?.unit || "mg/dL"}
             </Text>
+            {typeof pendingGlucoseReading?.ts === "number" && (
+              <Text style={styles.glucoseTimingWhen}>
+                {formatReadingTime(pendingGlucoseReading.ts)}
+              </Text>
+            )}
             <View style={styles.glucoseTimingGrid}>
-              {GLUCOSE_TIMING_OPTIONS.map((option) => (
-                <TouchableOpacity
-                  key={option.value}
-                  style={styles.glucoseTimingOption}
-                  onPress={() => saveGlucoseReading(option.value)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.glucoseTimingOptionText}>
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {GLUCOSE_TIMING_OPTIONS.map((option) => {
+                // The likely window for the time the meter recorded is
+                // highlighted so tagging is one tap; any other is a tap too.
+                const suggested =
+                  typeof pendingGlucoseReading?.ts === "number" &&
+                  suggestGlucoseTiming(pendingGlucoseReading.ts) === option.value;
+                return (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.glucoseTimingOption,
+                      suggested && styles.glucoseTimingOptionSuggested,
+                    ]}
+                    onPress={() => saveGlucoseReading(option.value)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.glucoseTimingOptionText}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-            <TouchableOpacity
-              style={styles.glucoseTimingCancel}
-              onPress={cancelGlucoseTiming}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.glucoseTimingCancelText}>Cancel</Text>
-            </TouchableOpacity>
+            <View style={styles.glucoseTimingFooter}>
+              <TouchableOpacity
+                style={styles.glucoseTimingCancel}
+                onPress={skipGlucoseReading}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.glucoseTimingCancelText}>Skip this one</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.glucoseTimingCancel}
+                onPress={cancelGlucoseTiming}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.glucoseTimingCancelText}>Stop</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -2077,7 +2207,13 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
     marginTop: 8,
-    marginBottom: 18,
+    marginBottom: 4,
+  },
+  glucoseTimingWhen: {
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 14,
+    textAlign: "center",
+    marginBottom: 14,
   },
   glucoseTimingGrid: {
     flexDirection: "row",
@@ -2101,6 +2237,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     textAlign: "center",
+  },
+  glucoseTimingOptionSuggested: {
+    backgroundColor: "rgba(67,160,71,0.55)",
+    borderColor: "#A5D6A7",
+    borderWidth: 2,
+  },
+  glucoseTimingFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 8,
   },
   glucoseTimingCancel: {
     minHeight: 44,

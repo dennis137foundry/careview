@@ -181,6 +181,13 @@ export function initDB() {
   } catch (e) {
     // Column already exists
   }
+  // Migration: the glucose meter's clock offset. See DeviceRecord.clockOffsetMs.
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN clockOffsetMs INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'clockOffsetMs' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
 
   // Create readings table
   db.execute(`
@@ -427,14 +434,22 @@ export type DeviceRecord = {
   lastBattery?: number | null;
   lastBatteryAt?: number | null; // epoch ms of the last battery read
 
-  // Epoch ms of the moment the app last set this device's own clock (and,
-  // for the BG5S, erased its memory). A device's stored readings carry the
-  // device's timestamp, and out of the box that clock reads 2017 — so
-  // nothing recorded before this moment is trusted: stored records older
-  // than clockSetAt are dropped, never saved, never synced. null = the app
-  // has not set the clock yet (setup connect failed, or a device with no
-  // clock). Live readings are stamped by the phone and are unaffected.
+  // Epoch ms of the moment the app last set this device's own clock. null =
+  // the app has not set it yet (setup connect failed, or a device with no
+  // clock). Shown on the device card. Live readings are stamped by the
+  // phone and are unaffected.
   clockSetAt?: number | null;
+
+  // Glucose meter only. (phone time − meter time), in ms, measured the last
+  // time the app found the meter's clock OFF — out of the box it reads
+  // 2017, and it resets after a dead battery. The meter flags every stored
+  // reading taken while its clock was unset (it keeps that clock running
+  // from 2017, so those readings sit at a fixed offset from real time);
+  // adding this offset dates them correctly. Set by the onDeviceClockSet
+  // listener in App.tsx whenever the pre-set clock was off by more than a
+  // few minutes; null = never measured (a flagged reading cannot be dated
+  // and is left on the meter).
+  clockOffsetMs?: number | null;
 
   // Real 48-bit hardware address, read from GATT System ID (0x2A23) during
   // BLE bonding. Needed because `mac` above is NOT a MAC on iOS for generic
@@ -526,6 +541,24 @@ export function updateDeviceBatteryByMac(mac: string, battery: number): void {
  * Record that the app set this device's clock at `at` (epoch ms). Stored
  * readings older than this are untrusted — see DeviceRecord.clockSetAt.
  */
+/**
+ * Remember the glucose meter's clock offset (phone − meter, ms) measured
+ * while its clock was off. See DeviceRecord.clockOffsetMs.
+ */
+export function updateDeviceClockOffsetByMac(mac: string, offsetMs: number): void {
+  try {
+    db.execute(
+      "UPDATE devices SET clockOffsetMs = ? WHERE mac = ? COLLATE NOCASE;",
+      [Math.round(offsetMs), mac]
+    );
+    if (__DEV__) {
+      console.log(`[DB] clockOffsetMs=${Math.round(offsetMs)} stored for device mac ${mac}`);
+    }
+  } catch (e) {
+    console.error("[DB] Failed to update device clockOffsetMs:", e);
+  }
+}
+
 export function updateDeviceClockSetAtByMac(mac: string, at: number): void {
   try {
     db.execute(
@@ -570,7 +603,7 @@ export function updateDeviceEmrUnits(
 export function getDevicesWithoutEmrUnitId(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, clockOffsetMs, hardwareMac FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -629,7 +662,7 @@ export function updateDeviceName(deviceId: string, newName: string) {
 export function getDevices(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices ORDER BY name;"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, clockOffsetMs, hardwareMac FROM devices ORDER BY name;"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -648,7 +681,7 @@ export function getDevices(): DeviceRecord[] {
 export function getDevice(id: string): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices WHERE id = ?;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, clockOffsetMs, hardwareMac FROM devices WHERE id = ?;",
       [id]
     );
     if (res.rows && res.rows.length > 0) {
@@ -664,7 +697,7 @@ export function getDevice(id: string): DeviceRecord | null {
 export function getDeviceByType(type: "BP" | "SCALE" | "BG"): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices WHERE type = ? LIMIT 1;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, clockOffsetMs, hardwareMac FROM devices WHERE type = ? LIMIT 1;",
       [type]
     );
     if (res.rows && res.rows.length > 0) {

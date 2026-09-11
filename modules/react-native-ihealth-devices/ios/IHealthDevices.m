@@ -94,10 +94,11 @@ static NSString * const kBLEBatteryLevelCharUUID = @"2A19";
     NSString *_batteryOnlyMAC;
 
     // Set by connectForSetup alongside _batteryOnlyMAC: the same short
-    // connection also sets the device's own clock and, on the BG5S, erases
-    // its memory. A device's stored readings carry ITS timestamp, and out
-    // of the box that clock reads 2017 — so nothing recorded before this
-    // moment can be trusted. Cleared once consumed.
+    // connection also sets the device's own clock. A device's stored
+    // readings carry ITS timestamp, and out of the box that clock reads
+    // 2017 — the meter's clock is read BEFORE it is set and reported to JS
+    // (onDeviceClockSet.deviceDateBefore), which is what lets readings taken
+    // on the unset clock be dated later. Cleared once consumed.
     NSString *_setupMAC;
 
     // CoreBluetooth for BLE GATT devices
@@ -252,10 +253,12 @@ RCT_EXPORT_MODULE();
 }
 
 // BG5S: set the meter's clock to now and, when `purge` is YES, erase every
-// record in its memory. Stored glucose records carry the METER's timestamp;
-// a brand-new meter says 2017, so a record taken before this call can never
-// be dated correctly and is discarded rather than charted nine years in the
-// past. Runs on an already-connected device; `completion` always fires.
+// record in its memory. Stored glucose records carry the METER's timestamp
+// and a flag saying whether that clock had been set when the reading was
+// taken (BG5SRecordModel.canCorrect). `before` is the meter's clock read
+// just before this call; JS keeps (phone now − before) as the device's
+// clock offset and dates flagged readings with it. Runs on an
+// already-connected device; `completion` always fires.
 - (void)bg5sSetClock:(BG5S *)device mac:(NSString *)mac purge:(BOOL)purge deviceDateBefore:(NSDate *)before completion:(void (^)(BOOL ok, BOOL purged))completion {
     float timezone = (float)([[NSTimeZone localTimeZone] secondsFromGMTForDate:[NSDate date]] / 3600.0);
     [self sendBG5SEvent:@"set_time" mac:mac message:[NSString stringWithFormat:@"Setting clock (tz %.2f)%@", timezone, purge ? @" then erasing memory" : @""] extra:nil];
@@ -297,10 +300,12 @@ RCT_EXPORT_MODULE();
 // add-device flow (the normal connect path auto-inflates BP cuffs).
 //
 // When this connection was opened by connectForSetup (_setupMAC matches),
-// the device's clock is set on the same visit: BG5S via setTime + memory
-// erase, BP3L/BP5S via commandFunction (the SDK's "synchronize time"). BP5,
-// HS2 and HS2S expose no clock we use — their readings are live and stamped
-// by the phone — so setup is battery-only for them.
+// the device's clock is set on the same visit: BG5S via setTime (its memory
+// is NOT erased — readings already on it are dated by the offset and
+// imported at the next capture), BP3L/BP5S via commandFunction (the SDK's
+// "synchronize time"). BP5, HS2 and HS2S expose no clock we use — their
+// readings are live and stamped by the phone — so setup is battery-only
+// for them.
 - (void)queryBatteryOnly:(NSString *)mac type:(NSString *)type {
     BOOL setup = _setupMAC && [[_setupMAC uppercaseString] isEqualToString:[mac uppercaseString]];
     if (setup) _setupMAC = nil;
@@ -362,10 +367,10 @@ RCT_EXPORT_MODULE();
         [d queryStateInfoWithSuccess:^(BG5SStateInfo *stateInfo) {
             [self emitBatteryForMac:mac type:type level:@(stateInfo.batteryValue)];
             if (!setup) { done(); return; }
-            [self bg5sSetClock:d mac:mac purge:YES deviceDateBefore:stateInfo.deviceDate completion:^(BOOL ok, BOOL purged) { done(); }];
+            [self bg5sSetClock:d mac:mac purge:NO deviceDateBefore:stateInfo.deviceDate completion:^(BOOL ok, BOOL purged) { done(); }];
         } errorBlock:^(BG5SError error, NSString *detailInfo) {
             if (!setup) { done(); return; }
-            [self bg5sSetClock:d mac:mac purge:YES deviceDateBefore:nil completion:^(BOOL ok, BOOL purged) { done(); }];
+            [self bg5sSetClock:d mac:mac purge:NO deviceDateBefore:nil completion:^(BOOL ok, BOOL purged) { done(); }];
         }];
     } else {
         // HS4S and unknown types have no battery API.
@@ -2346,6 +2351,27 @@ RCT_EXPORT_METHOD(setDeviceClock:(NSString *)mac deviceType:(NSString *)deviceTy
         return;
     }
     resolve(@NO);
+}
+
+// Erase the stored readings on an ALREADY-connected glucose meter. Called
+// by the capture flow after every record it pulled has been saved locally,
+// so a record is never re-delivered — and never re-dated against a later,
+// different clock offset. Best-effort: if the meter has already gone to
+// sleep the records simply stay, and the app's deterministic reading ids
+// skip them next time. Resolves YES only when the meter confirmed.
+RCT_EXPORT_METHOD(deleteDeviceRecords:(NSString *)mac deviceType:(NSString *)deviceType resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
+    if (![deviceType isEqualToString:@"BG5S"]) { resolve(@NO); return; }
+    BG5S *d = [self getBG5SWithMac:mac];
+    if (!d) { resolve(@NO); return; }
+    [self sendBG5SEvent:@"delete_offline" mac:mac message:@"Erasing imported records from the meter" extra:nil];
+    [d deleteRecordWithSuccessBlock:^{
+        [self sendBG5SEvent:@"delete_offline_ok" mac:mac message:@"Meter memory erased" extra:nil];
+        resolve(@YES);
+    } errorBlock:^(BG5SError error, NSString *detailInfo) {
+        NSString *text = [NSString stringWithFormat:@"%@ (%ld) %@", [self bg5sErrorText:error], (long)error, detailInfo ?: @""];
+        [self sendBG5SEvent:@"delete_offline_error" mac:mac message:text extra:@{@"error": @(error)}];
+        resolve(@NO);
+    }];
 }
 
 - (void)startBatteryOnlyConnect:(NSString *)mac deviceType:(NSString *)deviceType setup:(BOOL)setup resolver:(RCTPromiseResolveBlock)resolve {

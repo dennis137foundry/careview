@@ -393,11 +393,11 @@ const deviceService = {
 
   /**
    * Add-device flow: the same short connection as connectForBattery, but the
-   * device's own clock is set on the way — and the BG5S's memory erased.
-   * Stored readings carry the DEVICE's timestamp, and a meter out of the box
-   * says 2017, so nothing recorded before this moment is trusted. The result
-   * arrives via onDeviceClockSet (stored as the device's clockSetAt). Falls
-   * back to a plain battery connect on a native binary without the method.
+   * device's own clock is set on the way. Stored readings carry the DEVICE's
+   * timestamp, and a meter out of the box says 2017; the clock is read before
+   * it is set and reported via onDeviceClockSet, so readings already on the
+   * meter can be dated by the offset at the next import. Nothing is erased.
+   * Falls back to a plain battery connect on a native binary without the method.
    */
   connectForSetup: async (mac: string, deviceType: string): Promise<boolean> => {
     try {
@@ -430,6 +430,24 @@ const deviceService = {
       return await IHealthDevices.setDeviceClock(mac, deviceType, purge);
     } catch (error) {
       console.warn("[deviceService] setDeviceClock error:", error);
+      return false;
+    }
+  },
+
+  /**
+   * Erase the stored readings on an ALREADY-connected glucose meter, after
+   * every record pulled from it has been saved locally. Best-effort — if the
+   * meter has gone to sleep the records stay and are skipped next time by
+   * their deterministic ids. Resolves true only when the meter confirmed.
+   */
+  deleteDeviceRecords: async (mac: string, deviceType: string): Promise<boolean> => {
+    try {
+      if (typeof IHealthDevices?.deleteDeviceRecords !== "function") {
+        return false;
+      }
+      return await IHealthDevices.deleteDeviceRecords(mac, deviceType);
+    } catch (error) {
+      console.warn("[deviceService] deleteDeviceRecords error:", error);
       return false;
     }
   },

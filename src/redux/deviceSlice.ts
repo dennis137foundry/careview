@@ -9,6 +9,7 @@ import {
   updateDeviceEmrUnits as updateEmrUnitsInDB,
   updateDeviceBatteryByMac as updateBatteryInDB,
   updateDeviceClockSetAtByMac as updateClockSetAtInDB,
+  updateDeviceClockOffsetByMac as updateClockOffsetInDB,
   DeviceRecord
 } from "../services/sqliteService";
 
@@ -130,6 +131,23 @@ const deviceSlice = createSlice({
         device.clockSetAt = at;
       }
     },
+
+    // The glucose meter's clock was found off by this much (phone − meter,
+    // ms) just before the app set it. Readings the meter flags as taken on
+    // the unset clock are dated by adding this. See DeviceRecord.clockOffsetMs.
+    setDeviceClockOffset: (
+      state,
+      action: PayloadAction<{ mac: string; offsetMs: number }>
+    ) => {
+      const { mac, offsetMs } = action.payload;
+      updateClockOffsetInDB(mac, offsetMs);
+      const device = state.devices.find(
+        (d) => d.mac?.toUpperCase() === mac.toUpperCase()
+      );
+      if (device) {
+        device.clockOffsetMs = Math.round(offsetMs);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(loadDevices.fulfilled, (state, action) => {
@@ -148,6 +166,7 @@ export const {
   setDeviceEmrUnits,
   setDeviceBattery,
   setDeviceClockSetAt,
+  setDeviceClockOffset,
 } = deviceSlice.actions;
 
 export default deviceSlice.reducer;

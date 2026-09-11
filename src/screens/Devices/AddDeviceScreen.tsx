@@ -377,15 +377,15 @@ export default function AddDeviceScreen() {
       dispatch(addDevice(deviceRecord));
 
       // Set the device up in the background: one short connection that
-      // sets its own clock (and erases a glucose meter's memory), then
-      // reads the battery and disconnects — never starts a measurement.
-      // A device's stored readings carry ITS clock, and out of the box
-      // that clock says 2017; only readings taken from this moment on are
-      // ever imported. The device is still awake right now (it was just
-      // advertising), so this is the one moment pairing can reach it.
-      // Results land via the app-level onDeviceClockSet / onBatteryLevel
-      // listeners. BLE devices had their clock written and battery read
-      // during the bond above.
+      // reads its own clock, sets it, then reads the battery and
+      // disconnects — never starts a measurement. A glucose meter's stored
+      // readings carry ITS clock, and out of the box that clock says 2017;
+      // the pre-set reading is reported so readings already on the meter
+      // can be dated by the offset at the first import. Nothing is erased.
+      // The device is still awake right now (it was just advertising), so
+      // this is the one moment pairing can reach it. Results land via the
+      // app-level onDeviceClockSet / onBatteryLevel listeners. BLE devices
+      // had their clock written and battery read during the bond above.
       if (!isBle) {
         deviceService.connectForSetup(device.mac, device.type).catch(() => {});
       }

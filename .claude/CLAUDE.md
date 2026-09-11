@@ -154,8 +154,9 @@ startScan(deviceTypes[]) → Promise<void>
 stopScan() → Promise<void>
 connectDevice(mac, deviceType) → Promise<boolean>
 connectForBattery(mac, deviceType) → Promise<boolean>  // Battery-only: connect → query battery → disconnect, never measures. Result via onBatteryLevel. Resolves false for HS4S/GATT.
-connectForSetup(mac, deviceType) → Promise<boolean>    // Add-device flow: same short connect, but also sets the device's own clock (BG5S: setTime + erase memory; BP3L/BP5S: SDK time sync) before battery + disconnect. Result via onDeviceClockSet.
-setDeviceClock(mac, deviceType, purge) → Promise<boolean>  // Already-connected device. BG5S: set clock, and with purge erase its memory. BP3L/BP5S: time sync. Others resolve false.
+connectForSetup(mac, deviceType) → Promise<boolean>    // Add-device flow: same short connect, but also reads + sets the device's own clock (BG5S: setTime; BP3L/BP5S: SDK time sync) before battery + disconnect. Nothing erased. Result via onDeviceClockSet.
+setDeviceClock(mac, deviceType, purge) → Promise<boolean>  // Already-connected device. BG5S: read + set clock (purge=false in practice). BP3L/BP5S: time sync. Others resolve false.
+deleteDeviceRecords(mac, deviceType) → Promise<boolean>  // BG5S only: erase the meter's stored readings — called after every pulled record is saved locally. Best-effort.
 disconnectDevice(mac) → Promise<void>
 disconnectAll() → Promise<void>
 startMeasurement(mac) → Promise<void>
@@ -171,9 +172,10 @@ onDeviceFound       → { mac, name, type, rssi, source }
 onConnectionStateChanged → { mac, type, connected, source }
 onScanStateChanged  → { scanning: boolean }
 onBloodPressureReading → { mac, type, systolic, diastolic, pulse, timestamp, source }
+onBloodGlucoseReading → { mac, type, value, unit, dataID, timestamp, timeProof, source }  // Android: one per stored record, then onGlucoseMeterEvent stage "offline_synced". `timestamp` is the METER's clock; timeProof=false means taken before it was set. iOS pulls records via debugBG5SGetOfflineData instead (each has measureDate + canCorrect).
 onWeightReading     → { mac, type, weight, unit, timestamp, source }
 onBatteryLevel      → { mac, type, level, source, timestamp }  // Emitted on every connection (capture + battery-only connect after add). Global listener in App.tsx dispatches setDeviceBattery. No battery API: HS4S, GATT devices.
-onDeviceClockSet    → { mac, type, at, purged, deviceDateBefore? }  // The app just set the device's own clock; `at` = phone time (epoch ms). Global listener in App.tsx dispatches setDeviceClockSetAt → devices.clockSetAt.
+onDeviceClockSet    → { mac, type, at, purged, deviceDateBefore? }  // The app just set the device's own clock; `at` = phone time (epoch ms), `deviceDateBefore` = what the clock read first. App.tsx stores clockSetAt, and when the clock was off by >10 min, clockOffsetMs = at − deviceDateBefore (dates readings the meter flags as taken on the unset clock).
 onError             → { code, message }
 onDebugLog          → { message }
 ```
@@ -206,6 +208,12 @@ onDebugLog          → { message }
 
 ## Clinical Features
 
+### Blood Glucose Import (BG5S)
+- The meter is not live: the patient tests on the meter, the app imports later. Every reading is dated by the METER's clock, never by import time
+- Every connection (add-device and Capture) is a full sync: native reads the meter's clock, sets it, reports both (`onDeviceClockSet`); the screen pulls ALL stored records, dates each, dedups by deterministic id, and walks the new ones oldest-first through the sample-window prompt (likely window pre-selected from time of day; Skip leaves it on the meter). Once all are saved the meter's memory is erased (`deleteDeviceRecords`)
+- Out of the box (and after a dead battery) the meter's clock runs from 2017-01-01. It flags readings taken on the unset clock (iOS `canCorrect`, Android `timeProof=false`); App.tsx stores `clockOffsetMs = phone − meter` whenever the clock is found off, and `datedBGTimestamp` adds it to flagged readings. No pairing order is required of the patient
+- Server backstop: `vitals_sync.php` rejects readings dated before the patient's enrollment or in the future
+
 ### Blood Pressure Monitoring
 - Captures systolic, diastolic, heart rate from iHealth devices
 - Color-coded readings based on physician-set thresholds (default: 140/90)
@@ -237,7 +245,7 @@ onDebugLog          → { message }
 
 ### SQLite Tables
 - `user` — patient profile, BP thresholds
-- `devices` — registered devices (type, MAC, model, friendly name, source, clockSetAt)
+- `devices` — registered devices (type, MAC, model, friendly name, source, clockSetAt, clockOffsetMs)
 - `readings` — vital signs (type, values, timestamp, sync status)
 - `screening_responses` — health checks, urine protein results, "can't test" reports, hospital reports
 - `app_settings` — key-value pairs (e.g., first launch flag)

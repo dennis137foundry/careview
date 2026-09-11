@@ -18,7 +18,11 @@ import {
   ensureUrineRemindersScheduled,
 } from "./src/services/urineReminderService";
 import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
-import { setDeviceBattery, setDeviceClockSetAt } from "./src/redux/deviceSlice";
+import {
+  setDeviceBattery,
+  setDeviceClockSetAt,
+  setDeviceClockOffset,
+} from "./src/redux/deviceSlice";
 import { checkProfileOnForeground } from "./src/services/profileRefreshService";
 import deviceService from "./src/services/deviceService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
@@ -28,6 +32,10 @@ import {
 } from "./src/services/authToken";
 import AppNavigator from "./src/navigation/AppNavigator";
 import { ToastProvider, useToast } from "./src/components/Toast";
+
+// A device clock more than this far from the phone's was not set (or was
+// reset) — small drift is normal and is simply corrected by setting it.
+const CLOCK_OFF_THRESHOLD_MS = 10 * 60 * 1000;
 
 const MyTheme = {
   ...DefaultTheme,
@@ -127,13 +135,27 @@ function RootApp() {
     });
 
     // App-wide too: native reports every time it sets a device's own clock
-    // (add-device setup, and every glucose-meter connect). Stored here so
-    // the capture flow can refuse stored readings older than this moment.
-    const clockSub = deviceService.onDeviceClockSet(({ mac, at }) => {
-      if (typeof at === "number" && Number.isFinite(at) && mac) {
+    // (add-device setup, and every glucose-meter connect), including what
+    // the clock read just BEFORE it was set. A glucose meter out of the box
+    // — or after a dead battery — runs from 2017; when it is found off by
+    // more than a few minutes, remember (phone − meter) as the device's
+    // clock offset. The meter flags readings taken on the unset clock, and
+    // the capture flow dates them by adding this offset.
+    const clockSub = deviceService.onDeviceClockSet(
+      ({ mac, at, deviceDateBefore }) => {
+        if (typeof at !== "number" || !Number.isFinite(at) || !mac) return;
         store.dispatch(setDeviceClockSetAt({ mac, at }));
+        if (
+          typeof deviceDateBefore === "number" &&
+          Number.isFinite(deviceDateBefore) &&
+          Math.abs(at - deviceDateBefore) > CLOCK_OFF_THRESHOLD_MS
+        ) {
+          store.dispatch(
+            setDeviceClockOffset({ mac, offsetMs: at - deviceDateBefore })
+          );
+        }
       }
-    });
+    );
 
     // Cleanup on unmount
     return () => {
