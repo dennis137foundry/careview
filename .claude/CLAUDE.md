@@ -204,6 +204,13 @@ onDebugLog          → { message }
 5. HIPAA: If different patient logs in, all prior patient data is wiped
 6. Demo account: phone `5550001234` seeds 60 days of test data
 
+### Session lifetime (authToken.ts)
+- `verify_code.php` issues a 1 h access JWT + 30 d refresh token; `authedFetch` adds the Bearer header and refreshes once on 401
+- The phone number is the login credential. The EMR keeps it unique per patient and **releases it at discharge** (phone nulled, login flag off, every refresh token revoked); clearing/changing the phone or switching "App Login Enabled" off in the EMR revokes sessions the same way
+- Every EMR endpoint answers **`403 app_login_disabled`** once access is revoked. `authedFetch` treats that (from any call, including refresh) as the end of the session: tokens cleared, one `logout`, toast "Your CareView access has been turned off by your care team". A 401 on refresh, or a 401 with no refresh token, ends it as "session expired"
+- `profileRefreshService` runs on launch and every foreground (5-min throttle); besides EDD/thresholds it is what discovers a revocation promptly — there is no push channel
+- `send_code` / `verify_code` map `app_login_disabled` to a plain "turned off by your care team" message
+
 ---
 
 ## Clinical Features
@@ -213,6 +220,10 @@ onDebugLog          → { message }
 - Every connection (add-device and Capture) is a full sync: native reads the meter's clock, sets it, reports both (`onDeviceClockSet`); the screen pulls ALL stored records, dates each, dedups by deterministic id, and walks the new ones oldest-first through the sample-window prompt (likely window pre-selected from time of day; Skip leaves it on the meter). Once all are saved the meter's memory is erased (`deleteDeviceRecords`)
 - Out of the box (and after a dead battery) the meter's clock runs from 2017-01-01. It flags readings taken on the unset clock (iOS `canCorrect`, Android `timeProof=false`); App.tsx stores `clockOffsetMs = phone − meter` whenever the clock is found off, and `datedBGTimestamp` adds it to flagged readings. No pairing order is required of the patient
 - Server backstop: `vitals_sync.php` rejects readings dated before the patient's enrollment or in the future
+- Time frames: the meter reports its status time and its record times as `"yyyy-MM-dd HH:mm:ss"` in **UTC** — Android parses both as GMT (parsing one in local time would shift every corrected reading by the phone's UTC offset). iOS gets `NSDate`s from the SDK and also emits epoch-ms `timestamp`. A reading whose time cannot be read is **undatable**: it is left on the meter, never dated by import time, and the reading id never falls back to `Date.now()`
+- Only the BG5S's memory is ever read. iHealth BP monitors and scales are live and phone-stamped; the A&D GATT cuff writes its clock at pairing and its readings carry that. BP3L/BP5S get an SDK time sync at add-device for hygiene only
+- Deliberately not used: the SDK's `processData:deviceDate:` / `adjustOfflineData` (same offset arithmetic, done in JS uniformly). Known edge: a meter that resets twice between imports dates the older batch with the newer offset (bounded to [2025, now+15 min])
+- Devices card shows "Clock set <date>" / "Not set up yet — tap Capture to set the meter's clock" for a glucose meter
 
 ### Blood Pressure Monitoring
 - Captures systolic, diastolic, heart rate from iHealth devices
@@ -257,6 +268,7 @@ onDebugLog          → { message }
 - Network monitoring via @react-native-community/netinfo
 - Auto-pause when offline, auto-resume when online
 - Deduplication handled server-side (duplicates_skipped in response)
+- **Refused readings.** The EMR refuses a reading it will never accept (impossible value; date before the patient's enrollment or in the future) and reports it per reading. The batch answer is **207** (was 400, which made the app treat the whole batch as failed and stalled the queue). The app marks such a reading `synced = 2` — `rejected` on `SavedReading`, red cloud-alert badge and "Rejected by EMR" in the History CSV — and never resends it. An old-style 400 body that carries per-reading results is read as a 207
 
 ---
 
