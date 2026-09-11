@@ -102,6 +102,8 @@ type GlucoseTimingValue = (typeof GLUCOSE_TIMING_OPTIONS)[number]["value"];
 const EARLIEST_PLAUSIBLE_READING_MS = Date.UTC(2025, 0, 1);
 // Phone/meter skew tolerated before "in the future" means "wrong".
 const FUTURE_SLACK_MS = 15 * 60 * 1000;
+// Longest the import waits for the meter to confirm an erase.
+const ERASE_TIMEOUT_MS = 6000;
 
 function readingTakenOnUnsetClock(record: any): boolean {
   if (record?.canCorrect === true) return true; // iOS BG5SRecordModel
@@ -117,6 +119,7 @@ function readingTakenOnUnsetClock(record: any): boolean {
  */
 function datedBGTimestamp(record: any, clockOffsetMs: number | null): number | null {
   const raw = parseBGTimestamp(record);
+  if (raw === null) return null;
   const flagged =
     readingTakenOnUnsetClock(record) || raw < EARLIEST_PLAUSIBLE_READING_MS;
   let ts = raw;
@@ -171,7 +174,12 @@ function getGlucoseTimingLabel(value?: string): string {
   );
 }
 
-function parseBGTimestamp(record: any): number {
+/**
+ * The meter's own stamp on a stored record (epoch ms), or null when the
+ * record carries none the app can read. Never "now": a reading the app
+ * cannot date is left on the meter, not charted at import time.
+ */
+function parseBGTimestamp(record: any): number | null {
   if (typeof record?.timestamp === "number" && Number.isFinite(record.timestamp)) {
     return record.timestamp;
   }
@@ -188,11 +196,16 @@ function parseBGTimestamp(record: any): number {
     }
   }
 
-  return Date.now();
+  return null;
 }
 
+/**
+ * Deterministic id from the meter's own record id, so the same record is
+ * recognised on every connection. Falls back to the meter's stamp; never to
+ * the current time, which would make every import a new reading.
+ */
 function buildBGReadingId(deviceId: string, data: any): string {
-  const rawId = String(data?.dataID || data?.measureDate || data?.timestamp || Date.now());
+  const rawId = String(data?.dataID || data?.measureDate || data?.timestamp || "undated");
   const safeId = rawId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
   return `bg_${deviceId || "device"}_${safeId}`;
 }
@@ -290,9 +303,16 @@ export default function CaptureScreen({ route, navigation }: any) {
   // many it sent; they are collected here until that batch-complete event.
   const androidBGBatchRef = useRef<any[]>([]);
 
+  // A save in flight: the prompt's buttons are ignored until it settles, so
+  // a double tap cannot save the same reading twice or skip the next one.
+  const glucoseSavingRef = useRef(false);
+
   // Stop the capture and explain. Same teardown as the other dead ends.
+  // busyRef is cleared directly (not only via state) so the disconnect this
+  // triggers is never read as an "unexpected disconnect".
   const endCaptureWithAlert = useCallback((title: string, message: string) => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    busyRef.current = false;
     IHealthDevices?.stopScan?.().catch(() => {});
     IHealthDevices?.disconnectAll?.().catch(() => {});
     IHealthDevices?.allowSleep?.();
@@ -809,13 +829,18 @@ export default function CaptureScreen({ route, navigation }: any) {
       setShowGlucoseTimingModal(false);
       setPendingGlucoseReading(null);
       glucoseQueueRef.current = [];
+      setStatusText(imported > 0 ? "Finishing import..." : "");
 
       // Erase the meter only when everything it held is now safely in the
       // app. If anything was skipped or cancelled, leave the memory alone —
       // deterministic reading ids keep the saved ones from re-importing, and
-      // the rest are offered again next time.
+      // the rest are offered again next time. Bounded: a meter that has gone
+      // to sleep mid-prompt must not leave this screen waiting forever.
       if (imported > 0 && leftOnMeter === 0 && mac) {
-        const erased = await deviceService.deleteDeviceRecords(mac, "BG5S");
+        const erased = await Promise.race([
+          deviceService.deleteDeviceRecords(mac, "BG5S"),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ERASE_TIMEOUT_MS)),
+        ]);
         addLog(
           erased
             ? "Meter memory erased after import"
@@ -823,6 +848,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         );
       }
 
+      busyRef.current = false;
       IHealthDevices?.stopScan?.().catch(() => {});
       IHealthDevices?.disconnectAll?.().catch(() => {});
       IHealthDevices?.allowSleep?.();
@@ -950,7 +976,8 @@ export default function CaptureScreen({ route, navigation }: any) {
   const saveGlucoseReading = useCallback(
     async (timing: GlucoseTimingValue) => {
       const data = pendingGlucoseReading;
-      if (!data) return;
+      if (!data || glucoseSavingRef.current) return;
+      glucoseSavingRef.current = true;
 
       try {
         await dispatch(
@@ -967,6 +994,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         ).unwrap();
       } catch (err) {
         console.error("[Capture] Failed to save glucose reading:", err);
+        glucoseSavingRef.current = false;
         showToast({
           message: "Couldn't save your glucose reading. Please try again.",
           type: "error",
@@ -978,6 +1006,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       glucoseImportedRef.current += 1;
       lastSavedGlucoseRef.current = { ...data, timing };
       glucoseQueueRef.current = glucoseQueueRef.current.slice(1);
+      glucoseSavingRef.current = false;
       if (glucoseQueueRef.current.length > 0) {
         promptNextGlucoseReading();
         return;
@@ -997,7 +1026,7 @@ export default function CaptureScreen({ route, navigation }: any) {
 
   // Leave this reading on the meter and move on.
   const skipGlucoseReading = useCallback(async () => {
-    if (!pendingGlucoseReading) return;
+    if (!pendingGlucoseReading || glucoseSavingRef.current) return;
     glucoseLeftOnMeterRef.current += 1;
     glucoseQueueRef.current = glucoseQueueRef.current.slice(1);
     if (glucoseQueueRef.current.length > 0) {
@@ -1348,6 +1377,7 @@ export default function CaptureScreen({ route, navigation }: any) {
   // erased) and are offered again next time; anything already tagged is
   // kept and synced.
   const cancelGlucoseTiming = useCallback(() => {
+    if (glucoseSavingRef.current) return;
     glucoseLeftOnMeterRef.current += glucoseQueueRef.current.length;
     endGlucoseImport(
       glucoseImportedRef.current > 0 ? lastSavedGlucoseRef.current : null

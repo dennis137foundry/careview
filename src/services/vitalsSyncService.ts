@@ -23,6 +23,7 @@ import {
   getUnsyncedReadings,
   markReadingSynced,
   markReadingsSynced,
+  markReadingsRejected,
   getUnsyncedCount,
   getUnsyncedScreeningResponses,
   markScreeningResponseSynced,
@@ -330,6 +331,13 @@ async function sendVitalsToApi(payload: SyncPayload): Promise<SyncResponse> {
   const data: SyncResponse = await response.json();
 
   if (!response.ok && response.status !== 207) {
+    // An older EMR answered 400 to a batch it did process when any reading
+    // was refused. If the body carries per-reading results, treat it as the
+    // 207 it should have been so the accepted readings are marked synced
+    // and the refused ones are marked rejected rather than retried forever.
+    if (Array.isArray((data as any)?.results?.errors) && (data as any).results.errors.length > 0) {
+      return data;
+    }
     throw new Error((data as any).error || `HTTP ${response.status}`);
   }
 
@@ -488,6 +496,19 @@ export async function syncReading(reading: SavedReading): Promise<boolean> {
     }
 
     if (result.summary.errors > 0) {
+      // The EMR refused this reading for good (impossible value or date).
+      // Retrying cannot help: mark it rejected — kept locally, flagged,
+      // never resent — and let the queue move on.
+      const refusal = result.results.errors.find(
+        (err) => err.app_reading_id === reading.id
+      );
+      if (refusal) {
+        console.warn(`[VitalsSync] Reading ${reading.id} rejected by EMR: ${refusal.error}`);
+        markReadingsRejected([reading.id]);
+        updateState({ status: "idle", lastError: null, retryCount: 0 });
+        updatePendingCounts();
+        return false;
+      }
       throw new Error(result.results.errors[0]?.error || "Unknown error");
     }
 
@@ -582,14 +603,24 @@ export async function syncPendingReadings(): Promise<{
         totalSynced += syncedIds.length;
       }
 
-      totalFailed += result.summary.errors;
-
-      // Log any errors
+      // A per-reading error is the EMR refusing that reading for good
+      // (impossible value, impossible date) — retrying it would never
+      // succeed, and one such reading used to fail every sync cycle until
+      // the loop paused itself. Mark it rejected (kept locally, flagged,
+      // never resent) and count only errors we cannot attribute as failures.
+      const rejectedIds: string[] = [];
       result.results.errors.forEach((err) => {
         console.warn(
-          `[VitalsSync] Error for ${err.app_reading_id}: ${err.error}`
+          `[VitalsSync] Rejected by EMR ${err.app_reading_id ?? "(no id)"}: ${err.error}`
         );
+        if (err.app_reading_id) {
+          rejectedIds.push(err.app_reading_id);
+        }
       });
+      if (rejectedIds.length > 0) {
+        markReadingsRejected(rejectedIds);
+      }
+      totalFailed += result.summary.errors - rejectedIds.length;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       console.error(`[VitalsSync] Batch sync failed: ${message}`);

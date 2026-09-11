@@ -129,7 +129,18 @@ export async function authedFetch(
     return first;
   }
 
-  if (first.status !== 401 || !cachedRefresh) {
+  if (first.status !== 401) {
+    return first;
+  }
+
+  if (!cachedRefresh) {
+    // A signed-in session whose access token is refused and which has no
+    // refresh token to fall back on is over. Without this the app stayed
+    // "signed in" with every request failing, and nothing ever routed the
+    // patient back to sign in.
+    if (cachedAccess) {
+      endSession("session_expired");
+    }
     return first;
   }
 

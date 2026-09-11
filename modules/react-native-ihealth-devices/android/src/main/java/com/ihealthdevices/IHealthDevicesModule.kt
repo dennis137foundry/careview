@@ -746,8 +746,13 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    // The meter's clock as reported by getStatusInfo (epoch ms), or null. Only
-    // used to log how far off it was before we set it.
+    // The meter's clock as reported by getStatusInfo (epoch ms), or null.
+    // Reported to JS as deviceDateBefore: (phone − this) is the offset that
+    // dates readings taken on the unset clock, so it MUST be parsed in the
+    // same frame as bg5sRecordTimestamp parses the records — the meter
+    // reports both as "yyyy-MM-dd HH:mm:ss" in UTC. Parsing this one in
+    // local time would shift every corrected reading by the phone's UTC
+    // offset.
     private fun bg5sStatusDeviceDate(json: JSONObject): Double? {
         val raw = json.opt(Bg5sProfile.INFO_TIME) ?: return null
         return try {
@@ -755,7 +760,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 val v = raw.toDouble(); if (v < 1e11) v * 1000 else v
             } else {
                 val s = raw.toString().trim()
-                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).parse(s)?.time?.toDouble()
+                s.toDoubleOrNull()?.let { v -> return if (v < 1e11) v * 1000 else v }
+                val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                sdf.timeZone = java.util.TimeZone.getTimeZone("GMT")
+                sdf.parse(s)?.time?.toDouble()
             }
         } catch (_: Exception) { null }
     }
@@ -801,7 +809,9 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             putString("unit", "mg/dL")
             putString("dataID", dataID)
             putString("source", "iHealthSDK")
-            putDouble("timestamp", timestamp)
+            // NaN = the meter's time string could not be parsed; omit the key
+            // so JS sees no timestamp rather than a bogus one.
+            if (!timestamp.isNaN()) putDouble("timestamp", timestamp)
             putBoolean("timeProof", timeProof)
         }
         sendEvent("onBloodGlucoseReading", params)
@@ -851,8 +861,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 sendDebugLog("BG5S time parse failed for '$raw': ${e.message}")
             }
         }
-        // Last resort: now (better than dropping the reading entirely).
-        return System.currentTimeMillis().toDouble()
+        // Unparseable: report no timestamp at all. JS treats a reading it
+        // cannot date as undatable and leaves it on the meter — never dates
+        // it by import time.
+        return Double.NaN
     }
 
     // =========================================================================

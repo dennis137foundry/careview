@@ -1561,19 +1561,31 @@ RCT_EXPORT_MODULE();
 
 - (NSArray *)bg5sRecordsPayload:(NSArray *)records {
     NSMutableArray *out = [NSMutableArray new];
+    // Fixed POSIX locale: a phone set to a non-Gregorian calendar or
+    // non-Latin digits would otherwise produce a string JS cannot parse.
     NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
     formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss ZZZZZ";
 
     for (BG5SRecordModel *record in records) {
         NSString *dateString = record.measureDate ? [formatter stringFromDate:record.measureDate] : @"";
-        [out addObject:@{
+        NSMutableDictionary *entry = [@{
             @"dataID": record.dataID ?: @"",
             @"measureDate": dateString,
             @"timeZone": @(record.timeZone),
             @"value": @(record.value),
             @"unit": @"mg/dL",
+            // YES = taken while the meter's clock was unset; JS dates it by the
+            // clock offset. See "Glucose meter time" in CaptureScreen.
             @"canCorrect": @(record.canCorrect)
-        }];
+        } mutableCopy];
+        // Epoch ms, the same shape Android emits — what JS actually dates by.
+        // Absent when the SDK gave no date, so JS treats it as undatable.
+        if (record.measureDate) {
+            entry[@"timestamp"] = @([record.measureDate timeIntervalSince1970] * 1000);
+        }
+        [out addObject:entry];
     }
     return out;
 }

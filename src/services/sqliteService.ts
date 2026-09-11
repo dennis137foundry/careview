@@ -733,6 +733,10 @@ export type SavedReading = {
   unit: string;
   ts: number;
   synced?: boolean;
+  // The EMR refused this reading outright (impossible value, impossible
+  // date). It is kept for the patient's own history but never retried:
+  // synced = 2 in the table.
+  rejected?: boolean;
   measurementCondition?: string;
   // When the reading entered the app (capture/sync moment). Defaults to
   // `ts` when not provided (e.g. seeded demo data). BG5S stored records
@@ -805,6 +809,7 @@ export function getAllReadings(): SavedReading[] {
         out.push({
           ...row,
           synced: row.synced === 1,
+          rejected: row.synced === 2,
         } as SavedReading);
       }
     }
@@ -854,6 +859,26 @@ export function markReadingSynced(id: string) {
 }
 
 /** Mark multiple readings as synced */
+/**
+ * The EMR refused these readings (validation error: impossible value or
+ * date). Mark them so the sync loop stops retrying them — an unsyncable
+ * reading must not pause every other reading's sync — while keeping them
+ * in the patient's local history, flagged.
+ */
+export function markReadingsRejected(ids: string[]) {
+  if (ids.length === 0) return;
+  try {
+    const placeholders = ids.map(() => "?").join(",");
+    db.execute(
+      `UPDATE readings SET synced = 2 WHERE id IN (${placeholders}) AND synced = 0;`,
+      ids
+    );
+    console.warn("[DB] Readings marked rejected by EMR:", ids.length);
+  } catch (e) {
+    console.error("[DB] Failed to mark readings rejected:", e);
+  }
+}
+
 export function markReadingsSynced(ids: string[]) {
   try {
     if (ids.length === 0) return;
@@ -1192,6 +1217,7 @@ export default {
   getUnsyncedReadings,
   markReadingSynced,
   markReadingsSynced,
+  markReadingsRejected,
   getUnsyncedCount,
   // Screening
   saveScreeningResponse,

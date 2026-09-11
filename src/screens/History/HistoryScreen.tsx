@@ -410,7 +410,7 @@ export default function HistoryScreen() {
           r.unit ?? "",
           r.heartRate ?? "",
           r.measurementCondition ?? "",
-          r.synced ? "Yes" : "No",
+          r.synced ? "Yes" : r.rejected ? "Rejected by EMR" : "No",
           new Date(r.ts).toLocaleString(),
         ],
       }));
@@ -772,7 +772,7 @@ function DeviceHistoryTab({
 
   // Sync counts
   const unsyncedCount = useMemo(
-    () => numbered.filter((r) => !r.synced).length,
+    () => numbered.filter((r) => !r.synced && !r.rejected).length,
     [numbered]
   );
 
@@ -893,6 +893,16 @@ function DeviceHistoryTab({
                   name="cloud-check"
                   size={20}
                   color="#fff"
+                />
+              </View>
+            ) : item.rejected ? (
+              // The EMR refused this reading (impossible value or date); it
+              // is kept here but will not be sent again.
+              <View style={styles.rejectedBadge}>
+                <MaterialCommunityIcons
+                  name="cloud-alert"
+                  size={20}
+                  color="#c62828"
                 />
               </View>
             ) : (
@@ -1769,6 +1779,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 1,
     borderColor: "#ff9800",
+  },
+  rejectedBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#ffebee",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#c62828",
   },
   // Empty states
   emptyContainer: {
