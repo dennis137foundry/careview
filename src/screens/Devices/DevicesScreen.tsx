@@ -221,6 +221,24 @@ function SwipeableDeviceCard({
 
           <BatteryIndicator level={device.lastBattery} />
 
+          {/* Glucose meters: stored readings are dated by the meter's own
+              clock, which the app sets at setup. Until that has happened
+              nothing it holds can be imported — say so, and what to do. */}
+          {device.type === "BG" && (
+            <View style={styles.lastReadingRow}>
+              <MaterialIcons
+                name={device.clockSetAt ? "check-circle" : "error-outline"}
+                size={14}
+                color={device.clockSetAt ? "#2e7d32" : "#c62828"}
+              />
+              <Text style={device.clockSetAt ? styles.meta : styles.metaWarn}>
+                {device.clockSetAt
+                  ? `Clock set ${new Date(device.clockSetAt).toLocaleDateString()}`
+                  : "Not set up yet — tap Capture to set the meter's clock"}
+              </Text>
+            </View>
+          )}
+
           {lastReading ? (
             <View style={styles.lastReadingRow}>
               <MaterialIcons name="schedule" size={14} color="#888" />
@@ -574,6 +592,11 @@ const styles = StyleSheet.create({
     color: "#aaa",
     fontSize: 13,
     fontStyle: "italic",
+  },
+  metaWarn: {
+    color: "#c62828",
+    fontSize: 13,
+    flexShrink: 1,
   },
   row: {
     flexDirection: "row",

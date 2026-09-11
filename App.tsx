@@ -18,7 +18,7 @@ import {
   ensureUrineRemindersScheduled,
 } from "./src/services/urineReminderService";
 import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
-import { setDeviceBattery } from "./src/redux/deviceSlice";
+import { setDeviceBattery, setDeviceClockSetAt } from "./src/redux/deviceSlice";
 import { checkProfileOnForeground } from "./src/services/profileRefreshService";
 import deviceService from "./src/services/deviceService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
@@ -126,10 +126,20 @@ function RootApp() {
       }
     });
 
+    // App-wide too: native reports every time it sets a device's own clock
+    // (add-device setup, and every glucose-meter connect). Stored here so
+    // the capture flow can refuse stored readings older than this moment.
+    const clockSub = deviceService.onDeviceClockSet(({ mac, at }) => {
+      if (typeof at === "number" && Number.isFinite(at) && mac) {
+        store.dispatch(setDeviceClockSetAt({ mac, at }));
+      }
+    });
+
     // Cleanup on unmount
     return () => {
       appStateSub.remove();
       batterySub.remove();
+      clockSub.remove();
       if (cleanupSync) {
         cleanupSync();
       }

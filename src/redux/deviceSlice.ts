@@ -8,6 +8,7 @@ import {
   updateDeviceName as updateNameInDB,
   updateDeviceEmrUnits as updateEmrUnitsInDB,
   updateDeviceBatteryByMac as updateBatteryInDB,
+  updateDeviceClockSetAtByMac as updateClockSetAtInDB,
   DeviceRecord
 } from "../services/sqliteService";
 
@@ -112,6 +113,23 @@ const deviceSlice = createSlice({
         device.lastBatteryAt = Date.now();
       }
     },
+
+    // The app just set this device's own clock (native onDeviceClockSet).
+    // From this moment its stored readings are trusted; anything it hands
+    // over stamped earlier is dropped. Keyed by MAC like the battery event.
+    setDeviceClockSetAt: (
+      state,
+      action: PayloadAction<{ mac: string; at: number }>
+    ) => {
+      const { mac, at } = action.payload;
+      updateClockSetAtInDB(mac, at);
+      const device = state.devices.find(
+        (d) => d.mac?.toUpperCase() === mac.toUpperCase()
+      );
+      if (device) {
+        device.clockSetAt = at;
+      }
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(loadDevices.fulfilled, (state, action) => {
@@ -129,6 +147,7 @@ export const {
   renameDevice,
   setDeviceEmrUnits,
   setDeviceBattery,
+  setDeviceClockSetAt,
 } = deviceSlice.actions;
 
 export default deviceSlice.reducer;

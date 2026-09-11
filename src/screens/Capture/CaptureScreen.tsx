@@ -17,7 +17,7 @@ import {
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import { useSelector, useDispatch } from "react-redux";
+import { useSelector, useDispatch, useStore } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { addReadingAndPersist } from "../../redux/readingSlice";
@@ -84,6 +84,14 @@ const GLUCOSE_TIMING_OPTIONS = [
 ] as const;
 
 type GlucoseTimingValue = (typeof GLUCOSE_TIMING_OPTIONS)[number]["value"];
+
+// Glucose-meter clock setup messages (see "Device clock trust" in the screen).
+const METER_SET_UP_MSG =
+  "Your glucose meter's clock has been set, and any readings it held from before setup were cleared — they could not be dated correctly. Take a reading on the meter now, then import it.";
+const METER_SETUP_FAILED_MSG =
+  "The meter connected, but the app could not set its clock. Keep the meter nearby and try again.";
+const ONLY_STALE_MSG =
+  "The meter only holds readings taken before it was set up in the app, and those cannot be used. Take a new reading on the meter, then try again.";
 
 function getGlucoseTimingLabel(value?: string): string {
   return (
@@ -188,6 +196,51 @@ export default function CaptureScreen({ route, navigation }: any) {
   // this instead; it never changes for a given deviceId.
   const deviceType = device?.type;
   const deviceDbId = device?.id;
+
+  // ==========================================================================
+  // Device clock trust (glucose meter)
+  //
+  // A BG5S's stored records carry the METER's timestamp, and out of the box
+  // that clock reads 2017. The app sets the clock when the meter is added
+  // (and erases its memory) and again on every connect; the moment of the
+  // last set is the device's clockSetAt. Only records stamped at or after
+  // the clockSetAt that was in force WHEN THIS CAPTURE CONNECTED are
+  // trusted — that value is snapshotted into clockFloorRef at connect time,
+  // because the connect itself re-sets the clock and the store then holds
+  // "now", which would wrongly reject readings taken an hour ago. A null
+  // floor means the meter has never been set up: set it up now, erase, and
+  // ask for a fresh reading instead of importing anything.
+  // ==========================================================================
+  const store = useStore<RootState>();
+  const currentClockSetAt = useCallback((): number | null => {
+    const d = store.getState().devices.devices.find((x) => x.id === deviceDbId);
+    return typeof d?.clockSetAt === "number" && Number.isFinite(d.clockSetAt)
+      ? d.clockSetAt
+      : null;
+  }, [store, deviceDbId]);
+  const clockFloorRef = useRef<number | null>(null);
+  // Android: the native side sets the clock on every connect by itself; when
+  // the meter had never been set up we also want its memory erased once the
+  // clock lands. Holds the mac awaiting that erase.
+  const pendingFirstSetupMacRef = useRef<string>("");
+
+  const isStaleStoredRecord = useCallback((ts: number): boolean => {
+    const floor = clockFloorRef.current;
+    return floor === null || !Number.isFinite(ts) || ts < floor;
+  }, []);
+
+  // Stop the capture and explain. Same teardown as the other dead ends.
+  const endCaptureWithAlert = useCallback((title: string, message: string) => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    IHealthDevices?.stopScan?.().catch(() => {});
+    IHealthDevices?.disconnectAll?.().catch(() => {});
+    IHealthDevices?.allowSleep?.();
+    targetMacRef.current = "";
+    setBusy(false);
+    setPhase("idle");
+    setStatusText("");
+    Alert.alert(title, message);
+  }, []);
 
 
   // ==========================================================================
@@ -491,8 +544,18 @@ export default function CaptureScreen({ route, navigation }: any) {
 
         if (data.connected) {
           if (device?.type === "BG") {
+            // Snapshot the trust floor BEFORE this connect re-sets the clock
+            // (see clockFloorRef). On iOS the BG5S effect below drives the
+            // rest; on Android the native side sets the clock and pulls the
+            // records by itself — a never-set-up meter also gets its memory
+            // erased once the clock-set event lands (pendingFirstSetupMacRef).
+            clockFloorRef.current = currentClockSetAt();
+            const firstSetup = clockFloorRef.current === null;
+            if (Platform.OS === "android" && firstSetup) {
+              pendingFirstSetupMacRef.current = String(data.mac || "");
+            }
             setPhase("measure");
-            setStatusText("Checking stored readings...");
+            setStatusText(firstSetup ? "Setting up your meter..." : "Checking stored readings...");
             return;
           }
 
@@ -841,13 +904,50 @@ export default function CaptureScreen({ route, navigation }: any) {
         return;
       }
 
+      // The trust floor for this visit: the clockSetAt in force before this
+      // connect touches the meter's clock. Computed here, synchronously, so
+      // it cannot see the clock-set event this handler is about to cause.
+      const floor = currentClockSetAt();
+      clockFloorRef.current = floor;
+      const firstSetup = floor === null;
+
       setPhase("measure");
-      setStatusText("Checking stored readings...");
-      addLog("BG5S connected; reading stored records");
+      setStatusText(firstSetup ? "Setting up your meter..." : "Checking stored readings...");
+      addLog(
+        firstSetup
+          ? "BG5S connected; never set up — setting clock and erasing memory"
+          : "BG5S connected; setting clock, then reading stored records"
+      );
 
       try {
+        // Set the meter's clock on every visit — a dead battery resets it to
+        // 2017 and every reading after that would be dated wrong. First
+        // visit ever: erase the memory too (nothing in it can be dated) and
+        // ask for a fresh reading rather than importing anything.
+        const clockOk = await deviceService.setDeviceClock(data.mac, "BG5S", firstSetup);
+        if (firstSetup) {
+          endCaptureWithAlert(
+            clockOk ? "Meter Set Up" : "Setup Failed",
+            clockOk ? METER_SET_UP_MSG : METER_SETUP_FAILED_MSG
+          );
+          return;
+        }
+        if (!clockOk) {
+          addLog("BG5S clock set failed on this visit; importing against the previous clockSetAt");
+        }
+
         const payload = await readStoredBG5SData(data.mac);
-        const latest = getLatestBGRecord(payload);
+        const records: any[] = Array.isArray(payload?.records) ? payload.records : [];
+        const fresh = records.filter((r) => !isStaleStoredRecord(parseBGTimestamp(r)));
+        const stale = records.length - fresh.length;
+        if (stale > 0) {
+          addLog(`BG5S: dropped ${stale} stored record(s) stamped before the clock was set`);
+        }
+        if (fresh.length === 0 && stale > 0) {
+          endCaptureWithAlert("No New Readings", ONLY_STALE_MSG);
+          return;
+        }
+        const latest = getLatestBGRecord({ records: fresh });
         await promptForGlucoseTiming({
           ...(latest || {}),
           mac: data.mac,
@@ -871,7 +971,14 @@ export default function CaptureScreen({ route, navigation }: any) {
     });
 
     return () => sub.remove();
-  }, [addLog, device, promptForGlucoseTiming]);
+  }, [
+    addLog,
+    deviceType,
+    promptForGlucoseTiming,
+    currentClockSetAt,
+    isStaleStoredRecord,
+    endCaptureWithAlert,
+  ]);
 
   // Listen for readings
   useEffect(() => {
@@ -888,8 +995,36 @@ export default function CaptureScreen({ route, navigation }: any) {
       }),
       emitter.addListener("onBloodGlucoseReading", (data: any) => {
         if (device?.type !== "BG") return;
+        // Android delivers the meter's stored records here. Each carries the
+        // METER's timestamp; anything stamped before the clock was set (or
+        // arriving from a meter never set up) is untrusted and dropped.
+        const ts = parseBGTimestamp(data);
+        if (isStaleStoredRecord(ts)) {
+          addLog(`BG: dropped stored record stamped ${new Date(ts).toISOString()} — before the meter's clock was set`);
+          return;
+        }
         addLog(`BG: ${data.value} ${data.unit || "mg/dL"}`);
         promptForGlucoseTiming(data);
+      }),
+      // Android: native sets the meter's clock on every connect. When this
+      // capture found the meter never set up, finish the setup here — erase
+      // its memory — and ask for a fresh reading instead of importing.
+      emitter.addListener("onDeviceClockSet", (data: any) => {
+        const pending = pendingFirstSetupMacRef.current;
+        if (!pending || !data?.mac || data.mac.toUpperCase() !== pending.toUpperCase()) return;
+        pendingFirstSetupMacRef.current = "";
+        if (data.purged) {
+          endCaptureWithAlert("Meter Set Up", METER_SET_UP_MSG);
+          return;
+        }
+        deviceService
+          .setDeviceClock(data.mac, "BG5S", true)
+          .then((ok) =>
+            endCaptureWithAlert(
+              ok ? "Meter Set Up" : "Setup Failed",
+              ok ? METER_SET_UP_MSG : METER_SETUP_FAILED_MSG
+            )
+          );
       }),
       emitter.addListener("onBatteryLevel", (data: any) => {
         if (typeof data?.level === "number" && data?.mac) {
@@ -928,7 +1063,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, promptForGlucoseTiming, dispatch]);
+  }, [addLog, device, saveBPReading, saveWeightReading, promptForGlucoseTiming, dispatch, isStaleStoredRecord, endCaptureWithAlert]);
 
   // ============================================================================
   // START CAPTURE

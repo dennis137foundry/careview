@@ -172,6 +172,15 @@ export function initDB() {
   } catch (e) {
     // Column already exists
   }
+  // Migration: when the app last set the device's own clock. See
+  // DeviceRecord.clockSetAt. NULL for every device paired before this
+  // column existed, so the next connect runs the clock setup.
+  try {
+    db.execute("ALTER TABLE devices ADD COLUMN clockSetAt INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'clockSetAt' column to devices");
+  } catch (e) {
+    // Column already exists
+  }
 
   // Create readings table
   db.execute(`
@@ -418,6 +427,15 @@ export type DeviceRecord = {
   lastBattery?: number | null;
   lastBatteryAt?: number | null; // epoch ms of the last battery read
 
+  // Epoch ms of the moment the app last set this device's own clock (and,
+  // for the BG5S, erased its memory). A device's stored readings carry the
+  // device's timestamp, and out of the box that clock reads 2017 — so
+  // nothing recorded before this moment is trusted: stored records older
+  // than clockSetAt are dropped, never saved, never synced. null = the app
+  // has not set the clock yet (setup connect failed, or a device with no
+  // clock). Live readings are stamped by the phone and are unaffected.
+  clockSetAt?: number | null;
+
   // Real 48-bit hardware address, read from GATT System ID (0x2A23) during
   // BLE bonding. Needed because `mac` above is NOT a MAC on iOS for generic
   // BLE devices — CoreBluetooth only exposes a per-install UUID, so the same
@@ -505,6 +523,24 @@ export function updateDeviceBatteryByMac(mac: string, battery: number): void {
 }
 
 /**
+ * Record that the app set this device's clock at `at` (epoch ms). Stored
+ * readings older than this are untrusted — see DeviceRecord.clockSetAt.
+ */
+export function updateDeviceClockSetAtByMac(mac: string, at: number): void {
+  try {
+    db.execute(
+      "UPDATE devices SET clockSetAt = ? WHERE mac = ? COLLATE NOCASE;",
+      [at, mac]
+    );
+    if (__DEV__) {
+      console.log(`[DB] clockSetAt=${at} stored for device mac ${mac}`);
+    }
+  } catch (e) {
+    console.error("[DB] Failed to update device clockSetAt:", e);
+  }
+}
+
+/**
  * Populate the EMR inventory-unit IDs on an existing device row after
  * device_register.php returns them. emrAccessoryUnitId is only set for
  * XXL-cuff BP registrations; pass null for everything else.
@@ -534,7 +570,7 @@ export function updateDeviceEmrUnits(
 export function getDevicesWithoutEmrUnitId(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices WHERE emrUnitId IS NULL AND type IN ('BP', 'SCALE');"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -593,7 +629,7 @@ export function updateDeviceName(deviceId: string, newName: string) {
 export function getDevices(): DeviceRecord[] {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices ORDER BY name;"
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices ORDER BY name;"
     );
     const out: DeviceRecord[] = [];
     if (res.rows) {
@@ -612,7 +648,7 @@ export function getDevices(): DeviceRecord[] {
 export function getDevice(id: string): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices WHERE id = ?;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices WHERE id = ?;",
       [id]
     );
     if (res.rows && res.rows.length > 0) {
@@ -628,7 +664,7 @@ export function getDevice(id: string): DeviceRecord | null {
 export function getDeviceByType(type: "BP" | "SCALE" | "BG"): DeviceRecord | null {
   try {
     const res = db.execute(
-      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, hardwareMac FROM devices WHERE type = ? LIMIT 1;",
+      "SELECT id, name, type, mac, model, bottleCode, friendlyName, source, emrUnitId, emrAccessoryUnitId, cuffSize, lastBattery, lastBatteryAt, clockSetAt, hardwareMac FROM devices WHERE type = ? LIMIT 1;",
       [type]
     );
     if (res.rows && res.rows.length > 0) {

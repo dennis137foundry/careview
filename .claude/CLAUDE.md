@@ -154,6 +154,8 @@ startScan(deviceTypes[]) → Promise<void>
 stopScan() → Promise<void>
 connectDevice(mac, deviceType) → Promise<boolean>
 connectForBattery(mac, deviceType) → Promise<boolean>  // Battery-only: connect → query battery → disconnect, never measures. Result via onBatteryLevel. Resolves false for HS4S/GATT.
+connectForSetup(mac, deviceType) → Promise<boolean>    // Add-device flow: same short connect, but also sets the device's own clock (BG5S: setTime + erase memory; BP3L/BP5S: SDK time sync) before battery + disconnect. Result via onDeviceClockSet.
+setDeviceClock(mac, deviceType, purge) → Promise<boolean>  // Already-connected device. BG5S: set clock, and with purge erase its memory. BP3L/BP5S: time sync. Others resolve false.
 disconnectDevice(mac) → Promise<void>
 disconnectAll() → Promise<void>
 startMeasurement(mac) → Promise<void>
@@ -171,6 +173,7 @@ onScanStateChanged  → { scanning: boolean }
 onBloodPressureReading → { mac, type, systolic, diastolic, pulse, timestamp, source }
 onWeightReading     → { mac, type, weight, unit, timestamp, source }
 onBatteryLevel      → { mac, type, level, source, timestamp }  // Emitted on every connection (capture + battery-only connect after add). Global listener in App.tsx dispatches setDeviceBattery. No battery API: HS4S, GATT devices.
+onDeviceClockSet    → { mac, type, at, purged, deviceDateBefore? }  // The app just set the device's own clock; `at` = phone time (epoch ms). Global listener in App.tsx dispatches setDeviceClockSetAt → devices.clockSetAt.
 onError             → { code, message }
 onDebugLog          → { message }
 ```
@@ -234,7 +237,7 @@ onDebugLog          → { message }
 
 ### SQLite Tables
 - `user` — patient profile, BP thresholds
-- `devices` — registered devices (type, MAC, model, friendly name, source)
+- `devices` — registered devices (type, MAC, model, friendly name, source, clockSetAt)
 - `readings` — vital signs (type, values, timestamp, sync status)
 - `screening_responses` — health checks, urine protein results, "can't test" reports, hospital reports
 - `app_settings` — key-value pairs (e.g., first launch flag)

@@ -391,6 +391,49 @@ const deviceService = {
     }
   },
 
+  /**
+   * Add-device flow: the same short connection as connectForBattery, but the
+   * device's own clock is set on the way — and the BG5S's memory erased.
+   * Stored readings carry the DEVICE's timestamp, and a meter out of the box
+   * says 2017, so nothing recorded before this moment is trusted. The result
+   * arrives via onDeviceClockSet (stored as the device's clockSetAt). Falls
+   * back to a plain battery connect on a native binary without the method.
+   */
+  connectForSetup: async (mac: string, deviceType: string): Promise<boolean> => {
+    try {
+      if (typeof IHealthDevices?.connectForSetup !== "function") {
+        return deviceService.connectForBattery(mac, deviceType);
+      }
+      return await IHealthDevices.connectForSetup(mac, deviceType);
+    } catch (error) {
+      console.warn("[deviceService] Setup connect error:", error);
+      return false;
+    }
+  },
+
+  /**
+   * Set the clock on an ALREADY-connected device (capture flow). With
+   * `purge`, a BG5S also has its memory erased — used when a meter reaches
+   * capture never having been set up, so the patient takes a fresh reading
+   * instead of importing one stamped 2017. Resolves true when the device
+   * confirmed; false for devices with no clock we use.
+   */
+  setDeviceClock: async (
+    mac: string,
+    deviceType: string,
+    purge: boolean
+  ): Promise<boolean> => {
+    try {
+      if (typeof IHealthDevices?.setDeviceClock !== "function") {
+        return false;
+      }
+      return await IHealthDevices.setDeviceClock(mac, deviceType, purge);
+    } catch (error) {
+      console.warn("[deviceService] setDeviceClock error:", error);
+      return false;
+    }
+  },
+
   // ============================================================
   // Generic BLE (A&D UA-651BLE and other standard GATT BP/scale profiles)
   //
@@ -547,6 +590,23 @@ const deviceService = {
     callback: (event: { mac: string; type: string; level: number }) => void
   ): EmitterSubscription => {
     return eventEmitter.addListener("onBatteryLevel", callback);
+  },
+
+  /**
+   * The app has just set a device's own clock. `at` is the phone's time at
+   * that moment (epoch ms) — stored as the device's clockSetAt; stored
+   * readings stamped earlier are dropped. `purged` = memory erased too.
+   */
+  onDeviceClockSet: (
+    callback: (event: {
+      mac: string;
+      type: string;
+      at: number;
+      purged: boolean;
+      deviceDateBefore?: number;
+    }) => void
+  ): EmitterSubscription => {
+    return eventEmitter.addListener("onDeviceClockSet", callback);
   },
 
   /**

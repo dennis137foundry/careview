@@ -376,14 +376,18 @@ export default function AddDeviceScreen() {
       // 1. Save locally first — offline-safe. Registration can retry later.
       dispatch(addDevice(deviceRecord));
 
-      // Grab an initial battery reading in the background. Battery-only
-      // connect: never starts a measurement, disconnects on its own. The
-      // device is still awake right now (it was just advertising), so
-      // this is the one moment pairing can also learn the battery. The
-      // result lands via the app-level onBatteryLevel listener.
-      // BLE devices already reported battery during the bond above.
+      // Set the device up in the background: one short connection that
+      // sets its own clock (and erases a glucose meter's memory), then
+      // reads the battery and disconnects — never starts a measurement.
+      // A device's stored readings carry ITS clock, and out of the box
+      // that clock says 2017; only readings taken from this moment on are
+      // ever imported. The device is still awake right now (it was just
+      // advertising), so this is the one moment pairing can reach it.
+      // Results land via the app-level onDeviceClockSet / onBatteryLevel
+      // listeners. BLE devices had their clock written and battery read
+      // during the bond above.
       if (!isBle) {
-        deviceService.connectForBattery(device.mac, device.type).catch(() => {});
+        deviceService.connectForSetup(device.mac, device.type).catch(() => {});
       }
 
       // 2. Register with EMR inventory. BG5S stays local until the EMR

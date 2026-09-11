@@ -42,6 +42,25 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     // (setTime / setUnit / startMeasure / getOfflineData). Mirrors iOS BG5SController.
     private var bg5sControl: Bg5sControl? = null
 
+    // Set by connectForSetup (add-device flow): this connection also sets the
+    // device's own clock and, on the BG5S, erases its memory. A device's
+    // stored readings carry ITS timestamp, and out of the box that clock
+    // reads 2017 — nothing recorded before setup can be trusted. Mirrors
+    // iOS _setupMAC. Cleared once consumed.
+    private var setupMac: String? = null
+
+    // setDeviceClock(purge=true) on an already-connected BG5S: erase memory
+    // after the clock is set. Consumed by the ACTION_SET_TIME handler.
+    private var bg5sPurgePendingMac: String? = null
+
+    // Offline record count reported by the last BG5S status query. The pull
+    // is deferred until AFTER the clock is set so JS always has clockSetAt
+    // before any stored record arrives.
+    private var bg5sOfflineNum = 0
+
+    // Resolved when the async clock-set chain finishes (setDeviceClock).
+    private var pendingClockPromise: Promise? = null
+
     // Timer-based sequential scan
     private val scanHandler = Handler(Looper.getMainLooper())
     private var scanTypesList = listOf<String>()
@@ -389,6 +408,17 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                         // onDeviceNotify (action battery_bp / battery_hs) and is forwarded
                         // as an onBatteryLevel event. Never blocks measurement.
                         queryDeviceBattery(mac, normalizedType)
+                        // Setup connect: sync the cuff's clock too. Only the BP5S
+                        // exposes it on Android (getFunctionInfo); its answer arrives
+                        // as function_info_bp and is reported as onDeviceClockSet.
+                        // BP readings are live and phone-stamped regardless.
+                        if (setupMac.equals(mac, ignoreCase = true)) {
+                            setupMac = null
+                            if (normalizedType == "BP5S") {
+                                try { iHealthDevicesManager.getInstance().getBp5sControl(mac)?.getFunctionInfo() }
+                                catch (e: Exception) { sendDebugLog("BP5S getFunctionInfo error: ${e.message}") }
+                            }
+                        }
                     }
                 }
                 iHealthDevicesManager.DEVICE_STATE_DISCONNECTED -> {
@@ -493,6 +523,12 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             action.contains("battery", ignoreCase = true) -> {
                 emitBattery(mac, deviceType, json)
             }
+            action == BpProfile.ACTION_FUNCTION_INFORMATION_BP -> {
+                // getFunctionInfo() doubles as the SDK's "synchronize time".
+                emitClockSet(mac, deviceType, purged = false, deviceDateBefore = null)
+                pendingClockPromise?.resolve(true)
+                pendingClockPromise = null
+            }
             action.contains("result", ignoreCase = true) -> {
                 // iHealth Android SDK sends uppercase keys (HP, LP, PR, AHR).
                 // Fallback to lowercase variants for defensive compatibility.
@@ -592,21 +628,48 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         val control = bg5sControl
         when (action) {
             Bg5sProfile.ACTION_GET_STATUS_INFO -> {
-                val offlineNum = json.optInt(Bg5sProfile.INFO_OFFLINE_DATA_NUM, 0)
-                sendGlucoseMeterEvent(mac, "status", "Status received; offline records=$offlineNum")
-                // Continue the prep chain: set the meter clock, then the unit.
+                bg5sOfflineNum = json.optInt(Bg5sProfile.INFO_OFFLINE_DATA_NUM, 0)
+                bg5sDeviceDateBefore = bg5sStatusDeviceDate(json)
+                sendGlucoseMeterEvent(mac, "status",
+                    "Status received; offline records=$bg5sOfflineNum; meter clock=${bg5sDeviceDateBefore?.let { java.util.Date(it.toLong()) } ?: "unknown"}")
+                // A setup connect erases the memory once the clock is set.
+                if (setupMac.equals(mac, ignoreCase = true)) {
+                    setupMac = null
+                    bg5sPurgePendingMac = mac
+                }
+                // Continue the prep chain: set the meter clock. The offline pull
+                // (or the erase) is issued from ACTION_SET_TIME, never here, so
+                // JS receives onDeviceClockSet before any stored record.
                 try { control?.setTime(java.util.Date(), localTimezoneOffsetHours()) }
                 catch (e: Exception) { sendDebugLog("BG5S setTime error: ${e.message}") }
-                // Pull stored readings so offline measurements reach the EMR (iOS parity).
-                if (offlineNum > 0) {
+            }
+            Bg5sProfile.ACTION_SET_TIME -> {
+                if (bg5sPurgePendingMac.equals(mac, ignoreCase = true)) {
+                    bg5sPurgePendingMac = null
+                    sendGlucoseMeterEvent(mac, "set_time", "Clock set; erasing memory")
+                    try { control?.deleteOfflineData() }
+                    catch (e: Exception) {
+                        sendDebugLog("BG5S deleteOfflineData error: ${e.message}")
+                        // Clock is set even though the erase could not be issued;
+                        // JS filters by clockSetAt so stale records stay out.
+                        finishBg5sClockSet(mac, purged = false)
+                    }
+                    return
+                }
+                sendGlucoseMeterEvent(mac, "set_time", "Clock set; setting unit to mg/dL")
+                finishBg5sClockSet(mac, purged = false)
+                // Pull stored readings so offline measurements reach the EMR (iOS
+                // parity). Their timestamps are the meter's; JS drops any older
+                // than clockSetAt, which it has just been told.
+                if (bg5sOfflineNum > 0) {
                     try { control?.getOfflineData() }
                     catch (e: Exception) { sendDebugLog("BG5S getOfflineData error: ${e.message}") }
                 }
             }
-            Bg5sProfile.ACTION_SET_TIME -> {
-                sendGlucoseMeterEvent(mac, "set_time", "Clock set; setting unit to mg/dL")
-                try { control?.setUnit(Bg5sProfile.UNIT_MG) }
-                catch (e: Exception) { sendDebugLog("BG5S setUnit error: ${e.message}") }
+            Bg5sProfile.ACTION_DELETE_OFFLINE_DATA -> {
+                sendGlucoseMeterEvent(mac, "delete_offline_ok", "Memory erased — only readings taken from now on will be imported")
+                bg5sOfflineNum = 0
+                finishBg5sClockSet(mac, purged = true)
             }
             Bg5sProfile.ACTION_SET_UNIT ->
                 sendGlucoseMeterEvent(mac, "ready", "Unit set to mg/dL; meter ready")
@@ -655,9 +718,59 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 val message = "BG5S error $num $desc".trim()
                 sendGlucoseMeterEvent(mac, "error", message)
                 sendError("BG5S_ERROR", message)
+                // A clock-set chain that was waiting on this meter is over.
+                bg5sPurgePendingMac = null
+                pendingClockPromise?.resolve(false)
+                pendingClockPromise = null
             }
             else -> sendDebugLog("BG5S: Unhandled action: $action")
         }
+    }
+
+    // The meter's clock as reported by getStatusInfo (epoch ms), or null. Only
+    // used to log how far off it was before we set it.
+    private fun bg5sStatusDeviceDate(json: JSONObject): Double? {
+        val raw = json.opt(Bg5sProfile.INFO_TIME) ?: return null
+        return try {
+            if (raw is Number) {
+                val v = raw.toDouble(); if (v < 1e11) v * 1000 else v
+            } else {
+                val s = raw.toString().trim()
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).parse(s)?.time?.toDouble()
+            }
+        } catch (_: Exception) { null }
+    }
+    private var bg5sDeviceDateBefore: Double? = null
+
+    // Clock-set chain finished (set, or set + erased): tell JS, settle any
+    // waiting setDeviceClock promise, then finish the prep with the unit.
+    private fun finishBg5sClockSet(mac: String, purged: Boolean) {
+        emitClockSet(mac, "BG5S", purged, bg5sDeviceDateBefore)
+        bg5sDeviceDateBefore = null
+        pendingClockPromise?.resolve(true)
+        pendingClockPromise = null
+        try { bg5sControl?.setUnit(Bg5sProfile.UNIT_MG) }
+        catch (e: Exception) { sendDebugLog("BG5S setUnit error: ${e.message}") }
+    }
+
+    /**
+     * Tell JS the app has just set a device's own clock. `at` is the phone's
+     * time at that moment (epoch ms); JS stores it as the device's clockSetAt
+     * and drops any stored reading stamped earlier. Mirrors iOS
+     * emitClockSetForMac.
+     */
+    private fun emitClockSet(mac: String, deviceType: String, purged: Boolean, deviceDateBefore: Double?) {
+        val at = System.currentTimeMillis().toDouble()
+        sendDebugLog("CLOCK SET[$deviceType]: at=${at.toLong()} purged=$purged before=${deviceDateBefore?.toLong() ?: "?"}")
+        val params = Arguments.createMap().apply {
+            putString("mac", mac)
+            putString("type", deviceType)
+            putDouble("at", at)
+            putBoolean("purged", purged)
+            putString("source", "iHealthSDK")
+            if (deviceDateBefore != null) putDouble("deviceDateBefore", deviceDateBefore)
+        }
+        sendEvent("onDeviceClockSet", params)
     }
 
     private fun emitGlucoseReading(mac: String, value: Double, dataID: String, timestamp: Double) {
@@ -939,13 +1052,74 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
      */
     @ReactMethod
     fun connectForBattery(mac: String, deviceType: String, promise: Promise) {
+        startBatteryOnlyConnect(mac, deviceType, setup = false, promise)
+    }
+
+    /**
+     * connectForSetup(mac: String, deviceType: String, promise: Promise)
+     *
+     * Add-device flow. Same short connection as connectForBattery, but the
+     * device's own clock is set on the way (and the BG5S's memory erased) —
+     * see setupMac. The result lands via onDeviceClockSet; JS records it as
+     * the device's clockSetAt. Resolves false for types this cannot reach.
+     *
+     * iOS sig: connectForSetup:(NSString *)mac deviceType:(NSString *)deviceType resolver:reject:
+     */
+    @ReactMethod
+    fun connectForSetup(mac: String, deviceType: String, promise: Promise) {
+        startBatteryOnlyConnect(mac, deviceType, setup = true, promise)
+    }
+
+    /**
+     * setDeviceClock(mac: String, deviceType: String, purge: Boolean, promise: Promise)
+     *
+     * Set the clock on a device that is ALREADY connected (capture flow).
+     * BG5S: setTime, and with `purge` erase its memory too — used when a
+     * meter reaches the capture screen never having been set up, so the
+     * patient is asked for a fresh reading instead of importing one stamped
+     * 2017. BP5S: getFunctionInfo (the SDK's time sync). Everything else
+     * resolves false. Settles when the SDK's notify for the last step lands.
+     *
+     * iOS sig: setDeviceClock:(NSString *)mac deviceType:(NSString *)deviceType purge:(BOOL)purge resolver:reject:
+     */
+    @ReactMethod
+    fun setDeviceClock(mac: String, deviceType: String, purge: Boolean, promise: Promise) {
+        try {
+            when (deviceType) {
+                "BG5S" -> {
+                    val control = bg5sControl ?: iHealthDevicesManager.getInstance().getBg5sControl(mac)
+                    if (control == null) { promise.resolve(false); return }
+                    bg5sControl = control
+                    pendingClockPromise?.resolve(false)
+                    pendingClockPromise = promise
+                    bg5sPurgePendingMac = if (purge) mac else null
+                    control.setTime(java.util.Date(), localTimezoneOffsetHours())
+                }
+                "BP5S" -> {
+                    val control = iHealthDevicesManager.getInstance().getBp5sControl(mac)
+                    if (control == null) { promise.resolve(false); return }
+                    pendingClockPromise?.resolve(false)
+                    pendingClockPromise = promise
+                    control.getFunctionInfo()
+                }
+                else -> promise.resolve(false)
+            }
+        } catch (e: Exception) {
+            pendingClockPromise = null
+            bg5sPurgePendingMac = null
+            promise.reject("SET_CLOCK_ERROR", "Failed to set $deviceType clock: ${e.message}", e)
+        }
+    }
+
+    private fun startBatteryOnlyConnect(mac: String, deviceType: String, setup: Boolean, promise: Promise) {
         val supported = setOf("BP3L", "BP5", "BP5S", "HS2", "HS2S", "BG5S")
         if (deviceType !in supported) {
             promise.resolve(false)
             return
         }
         try {
-            sendDebugLog("Battery-only connect: $deviceType at $mac")
+            sendDebugLog("${if (setup) "Setup" else "Battery-only"} connect: $deviceType at $mac")
+            setupMac = if (setup) mac else null
             targetMAC = mac
             targetType = deviceType
 
