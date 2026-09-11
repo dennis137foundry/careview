@@ -441,7 +441,6 @@ export default function DashboardScreen() {
               activeOpacity={0.85}
               onPress={() => setShowUrinePicker(true)}
             >
-              <MaterialIcons name="add" size={18} color="#fff" />
               <Text style={styles.checkinButtonText} maxFontSizeMultiplier={1.2}>
                 Record result
               </Text>
@@ -467,7 +466,6 @@ export default function DashboardScreen() {
               activeOpacity={0.85}
               onPress={() => setShowHospitalModal(true)}
             >
-              <MaterialIcons name="local-hospital" size={18} color="#fff" />
               <Text style={styles.checkinButtonText} maxFontSizeMultiplier={1.2}>
                 I went to the hospital
               </Text>
@@ -871,20 +869,20 @@ const styles = StyleSheet.create({
   checkinChipAlertText: {
     color: ALERT,
   },
+  // Text-only buttons: an icon next to a wrapped two-line label crowded
+  // the hospital button and made the two look mismatched.
   checkinButton: {
-    width: 128,
-    flexDirection: "row",
+    width: 132,
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
     backgroundColor: BTN.primary,
     borderRadius: BTN.radius,
     paddingVertical: 12,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
   },
   checkinButtonText: {
-    flexShrink: 1,
-    fontSize: 13,
+    fontSize: 14,
+    lineHeight: 19,
     fontWeight: "700",
     color: "#fff",
     textAlign: "center",
