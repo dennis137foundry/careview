@@ -130,6 +130,12 @@ const authService = {
       if (data.error === "not_found") {
         throw new Error("Phone number not registered. Please contact your provider.");
       }
+      if (data.error === "app_login_disabled") {
+        // The number is on file but the EMR has turned app access off.
+        throw new Error(
+          "CareView access for this number has been turned off by your care team. Please contact your provider."
+        );
+      }
       if (data.error === "sms_failed") {
         throw new Error("Failed to send SMS. Please try again.");
       }
@@ -181,6 +187,12 @@ const authService = {
         }
         if (data.error === "patient_not_found") {
           throw new Error("Patient record not found.");
+        }
+        if (data.error === "app_login_disabled") {
+          // Access was turned off between the code being sent and entered.
+          throw new Error(
+            "CareView access for this number has been turned off by your care team. Please contact your provider."
+          );
         }
         throw new Error(data.error || "Verification failed");
       }

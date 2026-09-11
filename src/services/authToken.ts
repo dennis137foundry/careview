@@ -24,12 +24,26 @@ const REFRESH_TIMEOUT_MS = 10000;
 let cachedAccess: string | null = null;
 let cachedRefresh: string | null = null;
 
-// Callback fired exactly once per refresh-token death (401 from
-// refresh_token.php). App.tsx registers a handler that toasts the user
-// and dispatches logout, which routes back to AuthScreen via the gate
-// in AppNavigator.
-let onAuthExpired: (() => void) | null = null;
+// Why the session ended. App.tsx picks the toast wording from this.
+//   session_expired — the refresh token died (401 from refresh_token.php:
+//                     expired, rotated elsewhere, or replayed).
+//   access_revoked  — the EMR turned this patient's app access off
+//                     (403 `app_login_disabled` from any endpoint): the
+//                     office discharged her, cleared or changed her
+//                     verification phone, or switched App Login off.
+export type AuthExpiredReason = "session_expired" | "access_revoked";
+
+// Callback fired exactly once per session death. App.tsx registers a
+// handler that toasts the user and dispatches logout, which routes back
+// to AuthScreen via the gate in AppNavigator.
+let onAuthExpired: ((reason: AuthExpiredReason) => void) | null = null;
 let authExpiredFired = false;
+
+// The server's "this patient may not use the app" answer. Every authed
+// endpoint returns it, so it can arrive on a sync, a profile check, a
+// message send — not only on refresh.
+const ACCESS_REVOKED_STATUS = 403;
+const ACCESS_REVOKED_ERROR = "app_login_disabled";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -60,11 +74,15 @@ export function clearAuthTokens(): void {
 }
 
 /**
- * Register the handler fired when the refresh token is rejected (401 from
- * refresh_token.php). Called once at app boot from App.tsx with a closure
- * that has access to the Redux store and Toast provider.
+ * Register the handler fired when the session ends server-side — the
+ * refresh token is rejected (401 from refresh_token.php) or the EMR has
+ * revoked this patient's app access (403 `app_login_disabled`). Called
+ * once at app boot from App.tsx with a closure that has access to the
+ * Redux store and Toast provider.
  */
-export function setOnAuthExpired(cb: () => void): void {
+export function setOnAuthExpired(
+  cb: (reason: AuthExpiredReason) => void
+): void {
   onAuthExpired = cb;
   authExpiredFired = false;
 }
@@ -106,6 +124,11 @@ export async function authedFetch(
 ): Promise<Response> {
   const first = await fetch(url, withAuthHeader(options, cachedAccess));
 
+  if (await isAccessRevoked(first)) {
+    endSession("access_revoked");
+    return first;
+  }
+
   if (first.status !== 401 || !cachedRefresh) {
     return first;
   }
@@ -116,12 +139,46 @@ export async function authedFetch(
     return first; // Caller handles the 401 (session expired).
   }
 
-  return fetch(url, withAuthHeader(options, cachedAccess));
+  const second = await fetch(url, withAuthHeader(options, cachedAccess));
+  if (await isAccessRevoked(second)) {
+    endSession("access_revoked");
+  }
+  return second;
 }
 
 // ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
+
+/**
+ * True when the server answered "this patient may not use the app any
+ * more". Reads a clone so the caller's own res.json() still works.
+ */
+async function isAccessRevoked(res: Response): Promise<boolean> {
+  if (res.status !== ACCESS_REVOKED_STATUS) return false;
+  try {
+    const data = await res.clone().json();
+    return data?.error === ACCESS_REVOKED_ERROR;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Forget the tokens and tell the app once. Parallel authedFetch calls can
+ * all see the same rejection; the latch keeps it to one toast/one logout.
+ */
+function endSession(reason: AuthExpiredReason): void {
+  clearAuthTokens();
+  if (onAuthExpired && !authExpiredFired) {
+    authExpiredFired = true;
+    try {
+      onAuthExpired(reason);
+    } catch (e) {
+      console.error("[authToken] onAuthExpired threw:", e);
+    }
+  }
+}
 
 function withAuthHeader(
   options: RequestInit,
@@ -153,20 +210,16 @@ async function tryRefresh(): Promise<boolean> {
     );
 
     if (!res.ok) {
-      // 401 from refresh = token revoked/expired. Clear everything and
-      // fire the auth-expired callback exactly once so the app routes
-      // back to AuthScreen. Multiple parallel authedFetch calls can each
-      // hit this branch; latch prevents N toasts/N logouts.
+      // 401 from refresh = token revoked/expired; 403 app_login_disabled
+      // = the EMR turned this patient's access off (the server already
+      // revoked the rotated refresh token before answering). Either way
+      // the session is over: clear everything and route back to
+      // AuthScreen. Any other failure (5xx) leaves the tokens alone so a
+      // later call can retry.
       if (res.status === 401) {
-        clearAuthTokens();
-        if (onAuthExpired && !authExpiredFired) {
-          authExpiredFired = true;
-          try {
-            onAuthExpired();
-          } catch (e) {
-            console.error("[authToken] onAuthExpired threw:", e);
-          }
-        }
+        endSession("session_expired");
+      } else if (await isAccessRevoked(res)) {
+        endSession("access_revoked");
       }
       return false;
     }

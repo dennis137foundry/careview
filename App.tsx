@@ -19,7 +19,7 @@ import {
 } from "./src/services/urineReminderService";
 import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
 import { setDeviceBattery } from "./src/redux/deviceSlice";
-import { checkDailyProfileRefresh } from "./src/services/profileRefreshService";
+import { checkProfileOnForeground } from "./src/services/profileRefreshService";
 import deviceService from "./src/services/deviceService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
 import {
@@ -34,14 +34,16 @@ const MyTheme = {
   colors: { ...DefaultTheme.colors, background: "#ffffff" },
 };
 
-// Once-a-day EMR profile check (EDD + BP thresholds). Internally
-// self-throttled to one call per 24h; safe to invoke on every launch
-// and foreground. EMR-sourced EDD always overwrites a patient-entered one.
+// Foreground EMR profile check (EDD + BP thresholds). Internally
+// self-throttled inside the service; safe to invoke on every launch and
+// foreground. EMR-sourced EDD always overwrites a patient-entered one.
+// It is also the call that discovers the EMR has ended this patient's
+// app access, which authedFetch turns into a sign-out.
 async function runProfileRefresh() {
   const { user } = store.getState();
   if (!user.isAuthenticated) return;
 
-  const result = await checkDailyProfileRefresh(user.phone);
+  const result = await checkProfileOnForeground(user.phone);
   if (!result) return;
 
   if (result.edd) {
@@ -57,13 +59,19 @@ function RootApp() {
   useEffect(() => {
     let cleanupSync: (() => void) | undefined;
 
-    // Registered before any authedFetch can fire so the first 401 from
-    // refresh_token.php routes back to AuthScreen instead of looping.
-    setOnAuthExpired(() => {
+    // Registered before any authedFetch can fire so the first rejection
+    // from the server routes back to AuthScreen instead of looping.
+    // "access_revoked" is the EMR ending this patient's app access
+    // (discharge, phone cleared/changed, App Login switched off) — say so,
+    // rather than implying she can simply sign back in.
+    setOnAuthExpired((reason) => {
       showToast({
-        message: "Your session expired. Please sign in again.",
+        message:
+          reason === "access_revoked"
+            ? "Your CareView access has been turned off by your care team. Please contact them if you think this is a mistake."
+            : "Your session expired. Please sign in again.",
         type: "info",
-        duration: 4000,
+        duration: reason === "access_revoked" ? 8000 : 4000,
       });
       cancelUrineReminders();
       clearLoginSession();
@@ -95,7 +103,7 @@ function RootApp() {
     init();
 
     // Re-check when the app returns to the foreground (self-throttled
-    // to once per 24h inside the service).
+    // inside the service).
     const appStateSub = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
         // The "no hold in the login session" exception ends once the app
