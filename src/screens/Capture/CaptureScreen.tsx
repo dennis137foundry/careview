@@ -19,7 +19,7 @@ import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useSelector, useDispatch, useStore } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { addReadingAndPersist } from "../../redux/readingSlice";
 import { setDeviceBattery } from "../../redux/deviceSlice";
 import { syncPendingReadings } from "../../services/vitalsSyncService";
@@ -217,6 +217,9 @@ export default function CaptureScreen({ route, navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  // Both tab stacks hold a Capture screen; only the one in front owns the
+  // native events (see ownsEvent).
+  const isFocused = useIsFocused();
   const { deviceId } = route.params ?? {};
 
   const [busy, setBusy] = useState(false);
@@ -636,6 +639,19 @@ export default function CaptureScreen({ route, navigation }: any) {
           `[Connection] ${data.mac} connected=${data.connected} type=${data.type}`
         );
 
+        // Only the capture screen in front, mid-capture, for its own device.
+        // A connect from the background battery refresh or the other tab's
+        // capture is not ours to act on (and a "disconnect" from it must not
+        // be reported as this capture failing).
+        if (!isFocused || !busyRef.current) return;
+        if (
+          targetMacRef.current &&
+          data.mac &&
+          String(data.mac).toUpperCase() !== targetMacRef.current.toUpperCase()
+        ) {
+          return;
+        }
+
         if (data.connected) {
           if (device?.type === "BG") {
             // iOS: the BG5S effect below sets the clock and pulls the records.
@@ -690,7 +706,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       }
     );
     return () => sub.remove();
-  }, [addLog, device]);
+  }, [addLog, device, isFocused]);
 
   // Helper to sync after saving
   const syncToEMR = useCallback(async () => {
@@ -1083,7 +1099,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     };
 
     const sub = emitter.addListener("onConnectionStateChanged", async (data: any) => {
-      if (!data.connected || !busyRef.current || readingReceivedRef.current) return;
+      if (!isFocused || !data.connected || !busyRef.current || readingReceivedRef.current) return;
       const targetMac = targetMacRef.current;
       if (
         targetMac &&
@@ -1131,7 +1147,26 @@ export default function CaptureScreen({ route, navigation }: any) {
     });
 
     return () => sub.remove();
-  }, [addLog, deviceType, beginGlucoseImport]);
+  }, [addLog, deviceType, beginGlucoseImport, isFocused]);
+
+  // Native events are broadcast to every mounted listener. A reading (or a
+  // glucose record, or an error) belongs to THIS screen only when this
+  // screen is in front, is in the middle of a capture, and the event comes
+  // from the device it is capturing. Anything else — a reading for the
+  // other capture screen, a battery-only connect from the background
+  // refresh, a stray emission after the capture ended — is ignored, never
+  // saved under this screen's device, and never allowed to tear down
+  // someone else's connection.
+  const ownsEvent = useCallback(
+    (mac: unknown): boolean => {
+      if (!isFocused || !busyRef.current || readingReceivedRef.current) return false;
+      const target = targetMacRef.current;
+      if (!target) return false;
+      if (typeof mac !== "string" || !mac) return true; // event without an address
+      return mac.toUpperCase() === target.toUpperCase();
+    },
+    [isFocused]
+  );
 
   // Listen for readings
   useEffect(() => {
@@ -1139,15 +1174,17 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     const subs = [
       emitter.addListener("onBloodPressureReading", (data: any) => {
+        if (!ownsEvent(data?.mac)) return;
         addLog(`BP: ${data.systolic}/${data.diastolic} pulse=${data.pulse}`);
         saveBPReading(data);
       }),
       emitter.addListener("onWeightReading", (data: any) => {
+        if (!ownsEvent(data?.mac)) return;
         addLog(`Weight: ${data.weight} ${data.unit}`);
         saveWeightReading(data);
       }),
       emitter.addListener("onBloodGlucoseReading", (data: any) => {
-        if (device?.type !== "BG") return;
+        if (device?.type !== "BG" || !ownsEvent(data?.mac)) return;
         if (Platform.OS !== "android") return; // iOS pulls the batch itself
         // Android delivers the meter's stored records one event at a time,
         // each with the meter's timestamp and its time-proof flag. Collect
@@ -1158,7 +1195,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       emitter.addListener("onGlucoseMeterEvent", (data: any) => {
         if (device?.type !== "BG") return;
         if (Platform.OS !== "android") return;
-        if (data?.stage !== "offline_synced" || !busyRef.current) return;
+        if (data?.stage !== "offline_synced" || !ownsEvent(data?.mac)) return;
         const batch = androidBGBatchRef.current;
         androidBGBatchRef.current = [];
         beginGlucoseImport(batch, String(data.mac || glucoseMacRef.current));
@@ -1170,10 +1207,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           // Live level from the device we just connected to. This is the
           // reading the pre-scan warning defers to when its own level is
           // stale: say so now, without interrupting the measurement.
-          const isThisDevice =
-            !targetMacRef.current ||
-            String(data.mac).toUpperCase() === targetMacRef.current.toUpperCase();
-          if (isThisDevice && data.level < LOW_BATTERY_THRESHOLD) {
+          if (ownsEvent(data.mac) && data.level < LOW_BATTERY_THRESHOLD) {
             showToast({
               message: `Battery is low (${data.level}%). Charge your ${
                 device?.friendlyName || device?.name || "device"
@@ -1189,8 +1223,9 @@ export default function CaptureScreen({ route, navigation }: any) {
         addLog(`Error: ${msg}`);
         const code = String(data.code || data.state || "");
 
-        // If we're actively trying to capture, reset and tell the user
-        if (busyRef.current && !readingReceivedRef.current) {
+        // If THIS screen is actively trying to capture, reset and tell the user.
+        // A blurred capture screen must not tear down another screen's link.
+        if (isFocused && busyRef.current && !readingReceivedRef.current) {
           if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
@@ -1215,7 +1250,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast]);
+  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast, ownsEvent, isFocused]);
 
   // ============================================================================
   // START CAPTURE

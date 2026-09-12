@@ -6,6 +6,10 @@ import {
   LocalUser,
   wipeAllPatientData,
   getLastScreeningResponse,
+  getAppSetting,
+  setAppSetting,
+  adoptUnownedData,
+  purgeDataNotOwnedBy,
 } from "./sqliteService";
 import { markLoginSession } from "./urineProteinSession";
 import { scheduleUrineReminders } from "./urineReminderService";
@@ -17,6 +21,11 @@ import {
 } from "./authToken";
 
 const API_BASE = "https://trinitycareview.com/api/careviewapp";
+
+// app_settings key: the patient whose data is on this phone. Survives a plain
+// sign-out (which keeps readings and devices); cleared by "Sign Out & Wipe
+// Data" along with everything else. See the ownership note in sqliteService.
+const OWNER_PATIENT_ID_KEY = "owner_patient_id";
 const REQUEST_TIMEOUT = 10000; // 10 seconds
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1500; // 1.5 seconds between retries
@@ -237,11 +246,21 @@ const authService = {
       // ---------------------------------------------------------------
       try {
         const previousUser = await getUser();
-        if (previousUser && previousUser.patientId !== user.patientId) {
+        // A plain sign-out deletes only the user row and keeps every reading
+        // and device, so the patient signs back in and finds everything. It
+        // also used to forget WHO those rows belonged to: with no user row,
+        // this comparison never fired and the next patient to sign in — the
+        // App Review demo account followed by a real patient — inherited the
+        // previous patient's history and uploaded her unsent readings under
+        // the new ID. The owner is now remembered in app_settings, which a
+        // plain sign-out leaves alone and "Sign Out & Wipe Data" clears.
+        const previousOwner =
+          previousUser?.patientId ?? getAppSetting(OWNER_PATIENT_ID_KEY) ?? null;
+        if (previousOwner && previousOwner !== user.patientId) {
           // Patient IDs in this log — dev only.
           if (__DEV__) {
             console.log(
-              `[Auth] Different patient detected (was ${previousUser.patientId}, now ${user.patientId}) — wiping local data`
+              `[Auth] Different patient detected (was ${previousOwner}, now ${user.patientId}) — wiping local data`
             );
           }
           wipeAllPatientData();
@@ -256,6 +275,14 @@ const authService = {
           user.eddSource = previousUser.eddSource ?? "patient";
         }
         saveUser(user);
+        // Record the owner for the next sign-in's comparison, claim any rows
+        // that predate the ownership stamp, and — the guarantee that holds
+        // even if a sign-out path ever forgets to record the owner — drop
+        // anything stamped with a different patient before it can be shown
+        // or synced.
+        setAppSetting(OWNER_PATIENT_ID_KEY, user.patientId);
+        adoptUnownedData(user.patientId);
+        purgeDataNotOwnedBy(user.patientId);
         // Urine protein: never hold the home screen in the session the
         // login happened in, and (re)build the local reminder series. A
         // same-patient re-login keeps its local rows, so anchor on the last

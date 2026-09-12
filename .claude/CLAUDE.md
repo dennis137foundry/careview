@@ -26,7 +26,7 @@ src/
   screens/
     Auth/         - Phone-based SMS login (AuthScreen, CodeVerifyScreen)
     Dashboard/    - Home: wellness fact (tap → WellnessHistoryScreen), urine protein + health events tiles, latest readings
-    Capture/      - Device measurement flow (BLE connect → measure → save)
+    Capture/      - Device measurement flow (BLE connect → measure → save). Both the Home and Devices stacks hold a Capture screen; tabs use popToTopOnBlur so only one is ever mounted, and every native-event listener also checks focused + capturing + same device (`ownsEvent`) before saving or tearing anything down
     Devices/      - Device management (list, add, scan QR, rename)
     History/      - Reading history with charts, export CSV, sync status
     Profile/      - User info, provider details, messaging, sign out
@@ -202,8 +202,9 @@ onDebugLog          → { message }
 2. User enters 6-digit code → `authService.verifyCode(phone, code)`
 3. Server returns patient profile with BP thresholds
 4. User saved to SQLite, Redux state updated (`login()`)
-5. HIPAA: If different patient logs in, all prior patient data is wiped
+5. HIPAA: If a different patient logs in, all prior patient data is wiped. A plain Sign Out keeps readings/devices (the patient signs back in and finds them) but remembers the owner in `app_settings.owner_patient_id`, so the comparison still works with no user row; "Sign Out & Wipe Data" clears everything
 6. Demo account: phone `5550001234` seeds 60 days of test data
+7. **Data ownership.** Every reading and screening response is stamped with `patientId` (the signed-in patient at save time); every read and the sync loop are scoped to the signed-in patient, and login adopts unstamped legacy rows then purges any stamped with someone else. So even if a sign-out path ever forgets the owner, another patient's rows are never shown or uploaded under the wrong ID
 
 ### Session lifetime (authToken.ts)
 - `verify_code.php` issues a 1 h access JWT + 30 d refresh token; `authedFetch` adds the Bearer header and refreshes once on 401

@@ -20,7 +20,7 @@
 // All seeded readings are marked synced = true so they don't trigger uploads.
 // ============================================================================
 
-import { saveReading, saveDevice, updateUserEdd } from "./sqliteService";
+import { saveReading, saveDevice, updateUserEdd, currentPatientId } from "./sqliteService";
 import type { DailyHealthCheckData, UrineProteinData } from "./sqliteService";
 
 const DEMO_PHONE = "5550001234";
@@ -403,8 +403,8 @@ function saveScreeningResponseWithTimestamp(
 
   try {
     db.execute(
-      "INSERT OR REPLACE INTO screening_responses (id, type, timestamp, data, synced) VALUES (?, ?, ?, ?, 1);",
-      [id, type, timestamp, dataJson]
+      "INSERT OR REPLACE INTO screening_responses (id, type, timestamp, data, synced, patientId) VALUES (?, ?, ?, ?, 1, ?);",
+      [id, type, timestamp, dataJson, currentPatientId()]
     );
   } catch (e) {
     console.error("[Demo] Failed to save screening response:", e);

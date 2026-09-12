@@ -26,6 +26,14 @@ export default function TabNavigator() {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
+        // Leaving a tab collapses its stack. The Home and Devices stacks each
+        // hold a Capture screen; with the inactive stack kept mounted, a
+        // Capture screen left open on one tab stayed alive behind the other,
+        // and its reading listeners saved the other screen's measurement
+        // under its own device (and tore the other capture's link down).
+        // Its blur cleanup already disconnects any capture in progress, so
+        // an idle Capture screen has nothing to keep.
+        popToTopOnBlur: true,
         tabBarStyle: {
           backgroundColor: "#002040",
           paddingTop: 16,

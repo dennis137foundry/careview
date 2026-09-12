@@ -46,7 +46,7 @@ import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { useDispatch, useSelector } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
 import { addReadingAndPersist } from "../../redux/readingSlice";
 import { setDeviceBattery } from "../../redux/deviceSlice";
@@ -161,6 +161,9 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   // keyed on it would re-run — cleanup first — disarming mid-measurement.
   const deviceDbId = device?.id;
   const deviceMac = device?.mac;
+  // Both tab stacks can hold a capture screen; only the one in front acts
+  // on native events.
+  const isFocused = useIsFocused();
   const deviceType = device?.type;
 
   const [phase, setPhase] = useState<Phase>("idle");
@@ -475,12 +478,24 @@ export default function BleCaptureScreen({ route, navigation }: any) {
         // arriving here would mean another flow is active; ignore it rather
         // than cross-contaminate.
         if (data?.source !== "BLE_GATT") return;
+        // And only while THIS screen is in front, armed, and the reading comes
+        // from the monitor it armed for. Both tab stacks can hold a capture
+        // screen; a blurred one must never save the other's reading.
+        if (!isFocused || !armedRef.current) return;
+        if (
+          deviceMac &&
+          data?.mac &&
+          String(data.mac).toUpperCase() !== String(deviceMac).toUpperCase()
+        ) {
+          log(`Ignoring reading from another monitor (${data.mac})`);
+          return;
+        }
         log(`BP received: ${data.systolic}/${data.diastolic} pulse=${data.pulse}`);
         setPhase("receiving");
         saveReading(data);
       }),
       emitter.addListener("onConnectionStateChanged", (data: any) => {
-        if (data?.connected && armedRef.current) {
+        if (data?.connected && armedRef.current && isFocused) {
           setPhase("receiving");
           setStatusText("Monitor found. Collecting your reading…");
         }
@@ -494,7 +509,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [dispatch, log, saveReading]);
+  }, [dispatch, log, saveReading, isFocused, deviceMac]);
 
   // Pulse animation while waiting
   useEffect(() => {

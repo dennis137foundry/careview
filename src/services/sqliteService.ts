@@ -247,7 +247,91 @@ export function initDB() {
     );
   `);
 
+  // =====================================================================
+  // Data ownership. Every reading and screening response is stamped with
+  // the patient who was signed in when it was saved, and the sync loop
+  // only ever sends rows that belong to the patient signed in NOW. A plain
+  // sign-out keeps all local data (the patient signs back in with the same
+  // phone and finds it), so without this stamp a different patient signing
+  // in afterwards — the App Review demo account, then a real patient — could
+  // see, and upload under her own ID, someone else's readings.
+  //
+  // Rows from before this column existed carry no owner. If a patient is
+  // signed in right now they are hers (there has only ever been one patient
+  // per phone); otherwise they are adopted by the next patient to sign in
+  // (adoptUnownedData) — the login safeguard has already decided by then
+  // whether the previous owner was someone else and wiped if so.
+  // =====================================================================
+  try {
+    db.execute("ALTER TABLE readings ADD COLUMN patientId TEXT DEFAULT NULL;");
+    console.log("[DB] Added 'patientId' column to readings");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    db.execute("ALTER TABLE screening_responses ADD COLUMN patientId TEXT DEFAULT NULL;");
+    console.log("[DB] Added 'patientId' column to screening_responses");
+  } catch (e) {
+    // Column already exists
+  }
+  try {
+    const signedIn = currentPatientId();
+    if (signedIn) adoptUnownedData(signedIn);
+  } catch (e) {
+    console.error("[DB] Failed to stamp legacy rows with the signed-in patient:", e);
+  }
+
   console.log("[DB] Database initialized");
+}
+
+/**
+ * The patient signed in right now (the single `user` row), or null.
+ * Synchronous: quick-sqlite executes on the calling thread.
+ */
+export function currentPatientId(): string | null {
+  try {
+    const res = db.execute("SELECT patientId FROM user LIMIT 1;");
+    if (res.rows && res.rows.length > 0) {
+      const id = res.rows.item(0).patientId;
+      return id ? String(id) : null;
+    }
+  } catch (e) {
+    console.error("[DB] Failed to read current patient:", e);
+  }
+  return null;
+}
+
+/**
+ * Stamp rows that predate the ownership column with this patient. See the
+ * ownership note in initDB. Idempotent.
+ */
+export function adoptUnownedData(patientId: string): void {
+  db.execute("UPDATE readings SET patientId = ? WHERE patientId IS NULL;", [patientId]);
+  db.execute("UPDATE screening_responses SET patientId = ? WHERE patientId IS NULL;", [
+    patientId,
+  ]);
+}
+
+/**
+ * Remove any rows that belong to a patient other than this one. The login
+ * safeguard wipes everything when the patient changes, so normally there is
+ * nothing here — this is the guarantee that holds even if some sign-out
+ * path forgets to record who was signed in.
+ */
+export function purgeDataNotOwnedBy(patientId: string): number {
+  const a = db.execute(
+    "DELETE FROM readings WHERE patientId IS NOT NULL AND patientId <> ?;",
+    [patientId]
+  );
+  const b = db.execute(
+    "DELETE FROM screening_responses WHERE patientId IS NOT NULL AND patientId <> ?;",
+    [patientId]
+  );
+  const removed = (a.rowsAffected ?? 0) + (b.rowsAffected ?? 0);
+  if (removed > 0) {
+    console.warn(`[DB] Purged ${removed} row(s) belonging to a different patient`);
+  }
+  return removed;
 }
 
 // ----------------------
@@ -756,7 +840,7 @@ export function saveReading(
   // Falls back to ts so seeded/legacy rows behave as if captured when taken.
   const capturedAt = r.capturedAt ?? ts;
   db.execute(
-    "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition, capturedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+    "INSERT OR REPLACE INTO readings (id, deviceId, deviceName, type, value, value2, heartRate, unit, ts, synced, measurementCondition, capturedAt, patientId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
     [
       id,
       r.deviceId,
@@ -770,6 +854,8 @@ export function saveReading(
       r.synced ? 1 : 0,
       r.measurementCondition ?? null,
       capturedAt,
+      // Owner: the patient signed in right now. See the ownership note in initDB.
+      currentPatientId(),
     ]
   );
   // Reading ID + measurement_condition (contains pulse for BP) — PHI.
@@ -801,7 +887,9 @@ export function readingExists(id: string): boolean {
 
 export function getAllReadings(): SavedReading[] {
   try {
-    const res = db.execute("SELECT * FROM readings ORDER BY ts DESC;");
+    const owner = currentPatientId();
+    if (!owner) return [];
+    const res = db.execute("SELECT * FROM readings WHERE patientId = ? ORDER BY ts DESC;", [owner]);
     const out: SavedReading[] = [];
     if (res.rows) {
       for (let i = 0; i < res.rows.length; i++) {
@@ -827,8 +915,11 @@ export function getAllReadings(): SavedReading[] {
 /** Get all readings that haven't been synced yet */
 export function getUnsyncedReadings(): SavedReading[] {
   try {
+    const owner = currentPatientId();
+    if (!owner) return [];
     const res = db.execute(
-      "SELECT * FROM readings WHERE synced = 0 ORDER BY ts ASC;"
+      "SELECT * FROM readings WHERE synced = 0 AND patientId = ? ORDER BY ts ASC;",
+      [owner]
     );
     const out: SavedReading[] = [];
     if (res.rows) {
@@ -897,7 +988,8 @@ export function markReadingsSynced(ids: string[]) {
 export function getUnsyncedCount(): number {
   try {
     const res = db.execute(
-      "SELECT COUNT(*) as count FROM readings WHERE synced = 0;"
+      "SELECT COUNT(*) as count FROM readings WHERE synced = 0 AND patientId = ?;",
+      [currentPatientId() ?? ""]
     );
     if (res.rows && res.rows.length > 0) {
       return res.rows.item(0).count;
@@ -973,8 +1065,8 @@ export function saveScreeningResponse(
   const dataJson = JSON.stringify(data);
 
   db.execute(
-    "INSERT INTO screening_responses (id, type, timestamp, data, synced) VALUES (?, ?, ?, ?, 0);",
-    [id, type, timestamp, dataJson]
+    "INSERT INTO screening_responses (id, type, timestamp, data, synced, patientId) VALUES (?, ?, ?, ?, 0, ?);",
+    [id, type, timestamp, dataJson, currentPatientId()]
   );
   // Screening IDs link to PHI in the EMR — dev only.
   if (__DEV__) {
@@ -991,8 +1083,8 @@ export function getLastScreeningResponse(
 ): ScreeningResponse | null {
   try {
     const res = db.execute(
-      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? ORDER BY timestamp DESC LIMIT 1;",
-      [type]
+      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? AND patientId = ? ORDER BY timestamp DESC LIMIT 1;",
+      [type, currentPatientId() ?? ""]
     );
     if (res.rows && res.rows.length > 0) {
       const row = res.rows.item(0);
@@ -1021,8 +1113,8 @@ export function getScreeningResponsesInRange(
 ): ScreeningResponse[] {
   try {
     const res = db.execute(
-      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC;",
-      [type, startTs, endTs]
+      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? AND timestamp >= ? AND timestamp <= ? AND patientId = ? ORDER BY timestamp DESC;",
+      [type, startTs, endTs, currentPatientId() ?? ""]
     );
     const out: ScreeningResponse[] = [];
     if (res.rows) {
@@ -1052,8 +1144,8 @@ export function getScreeningResponsesByType(
 ): ScreeningResponse[] {
   try {
     const res = db.execute(
-      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? ORDER BY timestamp DESC;",
-      [type]
+      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE type = ? AND patientId = ? ORDER BY timestamp DESC;",
+      [type, currentPatientId() ?? ""]
     );
     const out: ScreeningResponse[] = [];
     if (res.rows) {
@@ -1083,7 +1175,8 @@ export function getScreeningResponsesByType(
 export function getAllScreeningResponses(): ScreeningResponse[] {
   try {
     const res = db.execute(
-      "SELECT id, type, timestamp, data, synced FROM screening_responses ORDER BY timestamp DESC;"
+      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE patientId = ? ORDER BY timestamp DESC;",
+      [currentPatientId() ?? ""]
     );
     const out: ScreeningResponse[] = [];
     if (res.rows) {
@@ -1111,7 +1204,8 @@ export function getAllScreeningResponses(): ScreeningResponse[] {
 export function getUnsyncedScreeningResponses(): ScreeningResponse[] {
   try {
     const res = db.execute(
-      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE synced = 0 ORDER BY timestamp ASC;"
+      "SELECT id, type, timestamp, data, synced FROM screening_responses WHERE synced = 0 AND patientId = ? ORDER BY timestamp ASC;",
+      [currentPatientId() ?? ""]
     );
     const out: ScreeningResponse[] = [];
     if (res.rows) {
