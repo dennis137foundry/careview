@@ -31,6 +31,8 @@ import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
 import { markDeviceScreenActive } from "../../services/batteryRefreshService";
+import { refreshProfile } from "../../services/profileRefreshService";
+import { isBPHigh as bpIsHigh, isGlucoseHigh } from "../../utils/thresholdLogic";
 import { BTN } from "../../constants/buttons";
 
 // Below this last-known battery %, warn the user to charge before a reading.
@@ -244,10 +246,8 @@ export default function CaptureScreen({ route, navigation }: any) {
   const [showHealthCheckModal, setShowHealthCheckModal] = useState(false);
   const [healthCheckCompleted, setHealthCheckCompleted] = useState(false);
 
-  // BP Thresholds from Redux
-  const bpThresholds = useSelector(
-    (state: RootState) => state.user.bpThresholds
-  );
+  // The EMR-resolved thresholds (BP + glucose), last values the EMR sent.
+  const thresholds = useSelector((state: RootState) => state.user.thresholds);
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -289,6 +289,15 @@ export default function CaptureScreen({ route, navigation }: any) {
   // or cancelled readings stay on the meter and are offered again.
   // ==========================================================================
   const store = useStore<RootState>();
+
+  // The EMR may have changed this patient's thresholds since launch: refresh
+  // when this screen opens so the reading about to be taken is judged by
+  // the current value. Fire-and-forget; the stored value stands if offline.
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfile(dispatch, store.getState);
+    }, [dispatch, store])
+  );
   const currentClockOffset = useCallback((): number | null => {
     const d = store.getState().devices.devices.find((x) => x.id === deviceDbId);
     return typeof d?.clockOffsetMs === "number" && Number.isFinite(d.clockOffsetMs)
@@ -344,14 +353,11 @@ export default function CaptureScreen({ route, navigation }: any) {
     busyRef.current = busy;
   }, [busy]);
 
-  // Check if BP reading is high based on thresholds
+  // High = at or above the EMR-resolved threshold. No local fallback: the
+  // store always holds the last values the EMR sent (utils/thresholdLogic).
   const isBPHigh = useCallback(
-    (systolic: number, diastolic: number) => {
-      const sysHigh = bpThresholds?.systolicHigh || 140;
-      const diaHigh = bpThresholds?.diastolicHigh || 90;
-      return systolic >= sysHigh || diastolic >= diaHigh;
-    },
-    [bpThresholds]
+    (systolic: number, diastolic: number) => bpIsHigh(systolic, diastolic, thresholds),
+    [thresholds]
   );
 
   // ============================================================================
@@ -746,7 +752,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       const isHigh = isBPHigh(data.systolic, data.diastolic);
       if (isHigh) {
         addLog(
-          `BP reading is HIGH (threshold: ${bpThresholds?.systolicHigh}/${bpThresholds?.diastolicHigh})`
+          `BP reading is HIGH (threshold: ${thresholds.systolicHigh}/${thresholds.diastolicHigh})`
         );
       }
 
@@ -794,7 +800,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       playSuccessAnimation,
       syncToEMR,
       isBPHigh,
-      bpThresholds,
+      thresholds,
       addLog,
       showToast,
     ]
@@ -886,6 +892,8 @@ export default function CaptureScreen({ route, navigation }: any) {
       if (lastSaved) {
         setLastReading({
           glucose: lastSaved.value,
+          // Same test the EMR applies, against the threshold it resolved.
+          isHigh: isGlucoseHigh(Number(lastSaved.value), thresholds),
           unit: lastSaved.unit,
           timing: lastSaved.timing,
           timingLabel: getGlucoseTimingLabel(lastSaved.timing),
@@ -910,7 +918,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         setStatusText("");
       }
     },
-    [addLog, playSuccessAnimation, showToast, syncToEMR]
+    [addLog, playSuccessAnimation, showToast, syncToEMR, thresholds]
   );
 
   // Show the prompt for the head of the queue.
@@ -1562,8 +1570,8 @@ export default function CaptureScreen({ route, navigation }: any) {
               <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
                 <MaterialIcons name="warning" size={18} color="#FF5252" />
                 <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
-                  Above threshold ({bpThresholds?.systolicHigh}/
-                  {bpThresholds?.diastolicHigh})
+                  Above threshold ({thresholds.systolicHigh}/
+                  {thresholds.diastolicHigh})
                 </Text>
               </View>
             )}
@@ -1624,8 +1632,24 @@ export default function CaptureScreen({ route, navigation }: any) {
               { transform: [{ scale: successScale }] },
             ]}
           >
-            <Text style={[styles.weightValue, isSuccess && styles.weightValueSuccess]}>{lastReading.glucose}</Text>
+            <Text
+              style={[
+                styles.weightValue,
+                isSuccess && styles.weightValueSuccess,
+                lastReading.isHigh && styles.bpValueHigh,
+              ]}
+            >
+              {lastReading.glucose}
+            </Text>
             <Text style={[styles.readingUnit, isSuccess && styles.readingUnitSuccess]}>{lastReading.unit || "mg/dL"}</Text>
+            {lastReading.isHigh && (
+              <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
+                <MaterialIcons name="warning" size={18} color="#FF5252" />
+                <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
+                  Above threshold ({thresholds.glucoseHigh})
+                </Text>
+              </View>
+            )}
             {lastReading.timingLabel ? (
               <Text style={[styles.subReading, isSuccess && styles.subReadingSuccess]}>
                 {lastReading.timingLabel}

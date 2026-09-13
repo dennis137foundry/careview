@@ -1,4 +1,5 @@
 import { open } from "react-native-quick-sqlite";
+import { EMR_DEFAULT_THRESHOLDS, type VitalThresholds } from "../utils/thresholdLogic";
 
 // Open (or create) the local database
 const db = open({ name: "trinity.db" });
@@ -20,6 +21,7 @@ export function initDB() {
       providerPracticeName TEXT,
       systolicHigh INTEGER DEFAULT 140,
       diastolicHigh INTEGER DEFAULT 90,
+      glucoseHigh INTEGER DEFAULT 180,
       authToken TEXT,
       refreshToken TEXT,
       edd TEXT DEFAULT NULL,
@@ -37,6 +39,15 @@ export function initDB() {
   try {
     db.execute("ALTER TABLE user ADD COLUMN diastolicHigh INTEGER DEFAULT 90;");
     console.log("[DB] Added 'diastolicHigh' column to user");
+  } catch (e) {
+    // Column already exists
+  }
+  // Migration (app 2.4): glucose threshold, delivered by the EMR alongside
+  // the BP pair. The column default is the EMR's own default and is only
+  // ever seen between upgrading from 2.3 and the first profile refresh.
+  try {
+    db.execute("ALTER TABLE user ADD COLUMN glucoseHigh INTEGER DEFAULT 180;");
+    console.log("[DB] Added 'glucoseHigh' column to user");
   } catch (e) {
     // Column already exists
   }
@@ -345,8 +356,11 @@ export interface LocalUser {
   providerFirstName: string;
   providerLastName: string;
   providerPracticeName: string;
+  // The high-reading thresholds as the EMR last sent them (her own → her
+  // provider's → system default). See utils/thresholdLogic.ts.
   systolicHigh?: number;
   diastolicHigh?: number;
+  glucoseHigh?: number;
   authToken?: string | null;
   refreshToken?: string | null;
   // Estimated due date "YYYY-MM-DD". 'emr' wins over 'patient' — a
@@ -364,8 +378,8 @@ export function saveUser(u: LocalUser) {
   db.execute("DELETE FROM user;");
   db.execute(
     `INSERT INTO user
-     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken, edd, eddSource)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, glucoseHigh, authToken, refreshToken, edd, eddSource)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
     [
       u.patientId,
       u.firstName,
@@ -374,8 +388,9 @@ export function saveUser(u: LocalUser) {
       u.providerFirstName,
       u.providerLastName,
       u.providerPracticeName,
-      u.systolicHigh ?? 140,
-      u.diastolicHigh ?? 90,
+      u.systolicHigh ?? EMR_DEFAULT_THRESHOLDS.systolicHigh,
+      u.diastolicHigh ?? EMR_DEFAULT_THRESHOLDS.diastolicHigh,
+      u.glucoseHigh ?? EMR_DEFAULT_THRESHOLDS.glucoseHigh,
       u.authToken ?? null,
       u.refreshToken ?? null,
       u.edd ?? null,
@@ -411,6 +426,20 @@ export function updateUserEdd(edd: string | null, source: EddSource | null) {
   }
 }
 
+/**
+ * Replace the stored thresholds with what the EMR just sent. Targeted UPDATE
+ * so tokens/EDD are untouched. Throws on failure — callers surface it.
+ */
+export function updateUserThresholds(t: VitalThresholds) {
+  db.execute(
+    "UPDATE user SET systolicHigh = ?, diastolicHigh = ?, glucoseHigh = ?;",
+    [t.systolicHigh, t.diastolicHigh, t.glucoseHigh]
+  );
+  if (__DEV__) {
+    console.log(`[DB] Thresholds updated: ${t.systolicHigh}/${t.diastolicHigh}, BG ${t.glucoseHigh}`);
+  }
+}
+
 export function clearUser() {
   try {
     db.execute("DELETE FROM user;");
@@ -423,7 +452,7 @@ export function clearUser() {
 export async function getUser(): Promise<LocalUser | null> {
   try {
     const res = db.execute(
-      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, authToken, refreshToken, edd, eddSource FROM user LIMIT 1;"
+      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, glucoseHigh, authToken, refreshToken, edd, eddSource FROM user LIMIT 1;"
     );
     if (!res.rows || res.rows.length === 0) return null;
 

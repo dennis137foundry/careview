@@ -19,7 +19,8 @@ import { loadReadings } from "../../redux/readingSlice";
 import { loadDevices } from "../../redux/deviceSlice";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import type { AppDispatch, RootState } from "../../redux/store";
-import { isBPHigh, setEdd } from "../../redux/userSlice";
+import { setEdd } from "../../redux/userSlice";
+import { isBPHigh, isGlucoseHigh } from "../../utils/thresholdLogic";
 import DueDateForm from "../../components/DueDateForm";
 import {
   getIsFirstLaunch,
@@ -80,7 +81,7 @@ export default function DashboardScreen() {
 
   const readings = useSelector((state: RootState) => state.readings.items);
   const user = useSelector((state: RootState) => state.user);
-  const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
+  const thresholds = useSelector((state: RootState) => state.user.thresholds);
 
   const [, setIsFirstLaunch] = useState<boolean>(false);
 
@@ -196,7 +197,7 @@ export default function DashboardScreen() {
 
   const isBPReadingHigh = (reading: any) => {
     if (!reading?.value || !reading?.value2) return false;
-    return isBPHigh(reading.value, reading.value2, bpThresholds);
+    return isBPHigh(reading.value, reading.value2, thresholds);
   };
 
   const handleUrineComplete = (_result: ProteinResult) => {
@@ -245,16 +246,21 @@ export default function DashboardScreen() {
 
   const firstName = user.firstName || "there";
 
-  // One slide per reading in the 48h window. BP slides carry the
-  // threshold coloring; glucose slides show the timing context.
+  // One slide per reading in the 48h window. BP and glucose slides carry
+  // the threshold colouring (the EMR-resolved thresholds, same test as the
+  // chart); glucose slides also show the timing context.
   const renderReadingSlide = ({ item }: { item: any }) => {
     const isBP = item.type === "BP";
     const isBG = item.type === "BG";
-    const high = isBP && isBPReadingHigh(item);
+    const high = isBP
+      ? isBPReadingHigh(item)
+      : isBG
+        ? isGlucoseHigh(Number(item.value) || 0, thresholds)
+        : false;
 
     const iconName = isBP ? "favorite" : isBG ? "opacity" : "monitor-weight";
-    const iconColor = isBP ? (high ? ALERT : "#c62828") : isBG ? "#e65100" : BLUE;
-    const iconBg = isBP ? (high ? "#f7d6d6" : "#fdecec") : isBG ? "#fff3e0" : "#e6f1fb";
+    const iconColor = isBP ? (high ? ALERT : "#c62828") : isBG ? (high ? ALERT : "#e65100") : BLUE;
+    const iconBg = isBP ? (high ? "#f7d6d6" : "#fdecec") : isBG ? (high ? "#f7d6d6" : "#fff3e0") : "#e6f1fb";
     const label = isBP ? "Blood pressure" : isBG ? "Blood glucose" : "Weight";
 
     return (
@@ -278,8 +284,11 @@ export default function DashboardScreen() {
             {high ? "Above range" : "In range"}
             {item.heartRate ? ` · HR ${item.heartRate}` : ""}
           </Text>
-        ) : isBG && item.measurementCondition ? (
-          <Text style={styles.statTrendMuted}>{item.measurementCondition}</Text>
+        ) : isBG ? (
+          <Text style={[styles.statTrend, { color: high ? ALERT : OK }]}>
+            {high ? "Above range" : "In range"}
+            {item.measurementCondition ? ` · ${item.measurementCondition}` : ""}
+          </Text>
         ) : (
           <Text style={[styles.statTrend, { color: OK }]}>Recorded</Text>
         )}

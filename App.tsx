@@ -17,13 +17,13 @@ import {
   cancelUrineReminders,
   ensureUrineRemindersScheduled,
 } from "./src/services/urineReminderService";
-import { loadUser, logout, setEdd, setBPThresholds } from "./src/redux/userSlice";
+import { loadUser, logout } from "./src/redux/userSlice";
 import {
   setDeviceBattery,
   setDeviceClockSetAt,
   setDeviceClockOffset,
 } from "./src/redux/deviceSlice";
-import { checkProfileOnForeground } from "./src/services/profileRefreshService";
+import { refreshProfile } from "./src/services/profileRefreshService";
 import deviceService from "./src/services/deviceService";
 import { refreshDeviceBatteries } from "./src/services/batteryRefreshService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
@@ -43,22 +43,14 @@ const MyTheme = {
   colors: { ...DefaultTheme.colors, background: "#ffffff" },
 };
 
-// Foreground EMR profile check (EDD + BP thresholds). Internally
-// self-throttled inside the service; safe to invoke on every launch and
-// foreground. EMR-sourced EDD always overwrites a patient-entered one.
-// It is also the call that discovers the EMR has ended this patient's
-// app access, which authedFetch turns into a sign-out.
-async function runProfileRefresh() {
-  const { user } = store.getState();
-  if (!user.isAuthenticated) return;
-
-  const result = await checkProfileOnForeground(user.phone);
-  if (!result) return;
-
-  if (result.edd) {
-    store.dispatch(setEdd({ edd: result.edd, source: "emr" }));
-  }
-  store.dispatch(setBPThresholds(result.bpThresholds));
+// EMR profile check (EDD + the high-reading thresholds). Runs on EVERY
+// launch and foreground — no throttle — so a threshold changed in the EMR
+// is on the phone before the next reading is judged (the capture screens
+// refresh once more when they open). EMR-sourced EDD always overwrites a
+// patient-entered one. It is also the call that discovers the EMR has ended
+// this patient's app access, which authedFetch turns into a sign-out.
+function runProfileRefresh() {
+  return refreshProfile(store.dispatch, store.getState);
 }
 
 function RootApp() {
@@ -118,8 +110,7 @@ function RootApp() {
     };
     init();
 
-    // Re-check when the app returns to the foreground (self-throttled
-    // inside the service).
+    // Re-check when the app returns to the foreground — every time.
     const appStateSub = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
         // The "no hold in the login session" exception ends once the app

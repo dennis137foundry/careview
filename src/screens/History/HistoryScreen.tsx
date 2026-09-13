@@ -18,7 +18,11 @@ import {
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { useDispatch, useSelector } from "react-redux";
 import { loadReadings } from "../../redux/readingSlice";
-import { isBPHigh } from "../../redux/userSlice";
+import {
+  isBPHigh,
+  isGlucoseHigh,
+  type VitalThresholds,
+} from "../../utils/thresholdLogic";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { BTN } from "../../constants/buttons";
@@ -42,9 +46,6 @@ import {
   unableReasonLabel,
   HIGHEST_WINDOW_MS,
 } from "../../services/urineProteinLogic";
-
-// Default BP thresholds (standard hypertension definition)
-const DEFAULT_BP_THRESHOLDS = { systolicHigh: 140, diastolicHigh: 90 };
 
 // Single unified chart theme - dark navy with coral/amber lines.
 //
@@ -205,9 +206,8 @@ export default function HistoryScreen() {
 
   const { items } = useSelector((state: RootState) => state.readings);
   const devices = useSelector((state: RootState) => state.devices.devices);
-  const bpThresholds = useSelector(
-    (state: RootState) => state.user.bpThresholds
-  );
+  // The EMR-resolved thresholds (BP + glucose) — never a local default.
+  const thresholds = useSelector((state: RootState) => state.user.thresholds);
 
   /**
    * Resolve a reading's device label at render time rather than trusting the
@@ -649,7 +649,7 @@ export default function HistoryScreen() {
             onToggleSort={() => toggleSort(currentKey)}
             refreshing={refreshing}
             onRefresh={onRefresh}
-            bpThresholds={bpThresholds ?? DEFAULT_BP_THRESHOLDS}
+            thresholds={thresholds}
           />
         )}
       </View>
@@ -662,11 +662,11 @@ export default function HistoryScreen() {
 function SummaryStats({
   data,
   type,
-  bpThresholds,
+  thresholds,
 }: {
   data: SavedReading[];
   type: string;
-  bpThresholds: { systolicHigh: number; diastolicHigh: number };
+  thresholds: VitalThresholds;
 }) {
   const stats = useMemo(() => {
     if (!data || data.length === 0) return null;
@@ -696,14 +696,20 @@ function SummaryStats({
           : null;
 
       const highCount = data.filter((r) =>
-        isBPHigh(r.value || 0, r.value2 || 0, bpThresholds)
+        isBPHigh(r.value || 0, r.value2 || 0, thresholds)
       ).length;
 
       return { avg, high, low, avg2, high2, low2, avgHR, highCount };
     }
 
-    return { avg, high, low };
-  }, [data, type, bpThresholds]);
+    // Glucose is judged like BP, against the EMR-resolved threshold.
+    const highCount =
+      type === "BG"
+        ? data.filter((r) => isGlucoseHigh(r.value || 0, thresholds)).length
+        : undefined;
+
+    return { avg, high, low, highCount };
+  }, [data, type, thresholds]);
 
   if (!stats) return null;
 
@@ -741,7 +747,7 @@ function SummaryStats({
           <Text style={styles.statValue}>{stats.avgHR}</Text>
         </View>
       )}
-      {type === "BP" && stats.highCount != null && stats.highCount > 0 && (
+      {(type === "BP" || type === "BG") && stats.highCount != null && stats.highCount > 0 && (
         <View style={styles.statItem}>
           <MaterialIcons name="warning" size={16} color="#c62828" />
           <Text style={styles.statLabel}>Elevated</Text>
@@ -761,14 +767,14 @@ function DeviceHistoryTab({
   onToggleSort,
   refreshing,
   onRefresh,
-  bpThresholds,
+  thresholds,
 }: {
   data: SavedReading[];
   sortAsc: boolean;
   onToggleSort: () => void;
   refreshing: boolean;
   onRefresh: () => void;
-  bpThresholds: { systolicHigh: number; diastolicHigh: number };
+  thresholds: VitalThresholds;
 }) {
   // Sort chronologically for numbering
   const chronological = useMemo(() => {
@@ -840,12 +846,14 @@ function DeviceHistoryTab({
     };
   }, [numbered, deviceType, showChart]);
 
+  // BP and glucose alike, against the EMR-resolved thresholds.
   const isReadingHigh = useCallback(
     (item: DisplayReading): boolean => {
-      if (item.type !== "BP") return false;
-      return isBPHigh(item.value || 0, item.value2 || 0, bpThresholds);
+      if (item.type === "BP") return isBPHigh(item.value || 0, item.value2 || 0, thresholds);
+      if (item.type === "BG") return isGlucoseHigh(item.value || 0, thresholds);
+      return false;
     },
-    [bpThresholds]
+    [thresholds]
   );
 
   const renderItem = useCallback(
@@ -968,7 +976,7 @@ function DeviceHistoryTab({
               <SummaryStats
                 data={data}
                 type={deviceType}
-                bpThresholds={bpThresholds}
+                thresholds={thresholds}
               />
             )}
 

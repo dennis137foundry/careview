@@ -14,6 +14,7 @@ import {
 import { markLoginSession } from "./urineProteinSession";
 import { scheduleUrineReminders } from "./urineReminderService";
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
+import { EMR_DEFAULT_THRESHOLDS, thresholdsFromServer } from "../utils/thresholdLogic";
 import {
   setAuthTokens,
   clearAuthTokens,
@@ -206,14 +207,15 @@ const authService = {
         throw new Error(data.error || "Verification failed");
       }
 
-      // Extract BP thresholds from response (with defaults)
-      const bpThresholds = data.bpThresholds || {};
-      const systolicHigh = bpThresholds.systolicHigh ?? 140;
-      const diastolicHigh = bpThresholds.diastolicHigh ?? 90;
+      // The thresholds the EMR resolved for this patient (her own → her
+      // provider's → system default). The EMR always sends all three; the
+      // defaults here only cover an EMR older than 2026-09-13.
+      const thresholds = thresholdsFromServer(data, EMR_DEFAULT_THRESHOLDS);
+      const { systolicHigh, diastolicHigh, glucoseHigh } = thresholds;
 
       // Per-patient thresholds — PHI. Dev builds only.
       if (__DEV__) {
-        console.log("[Auth] BP Thresholds from server:", { systolicHigh, diastolicHigh });
+        console.log("[Auth] Thresholds from server:", thresholds);
       }
 
       // Build LocalUser from response. JWT + refresh token come from the
@@ -229,6 +231,7 @@ const authService = {
         providerPracticeName: data.provider?.practiceName || "",
         systolicHigh,
         diastolicHigh,
+        glucoseHigh,
         authToken: data.token ?? null,
         refreshToken: data.refreshToken ?? null,
         edd: data.patient?.edd ?? null,

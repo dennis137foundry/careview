@@ -44,7 +44,7 @@ import {
 } from "react-native";
 import LinearGradient from "react-native-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import { useDispatch, useSelector } from "react-redux";
+import { useDispatch, useSelector, useStore } from "react-redux";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 
@@ -54,6 +54,8 @@ import { syncPendingReadings } from "../../services/vitalsSyncService";
 import { hasDailyHealthCheckToday, readingExists } from "../../services/sqliteService";
 import type { DeviceRecord } from "../../services/sqliteService";
 import type { RootState, AppDispatch } from "../../redux/store";
+import { refreshProfile } from "../../services/profileRefreshService";
+import { isBPHigh as bpIsHigh } from "../../utils/thresholdLogic";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
@@ -145,12 +147,21 @@ function isPlausibleBP(systolic: number, diastolic: number, pulse: number): bool
 
 export default function BleCaptureScreen({ route, navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
+  const store = useStore<RootState>();
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
   const { deviceId } = route.params ?? {};
 
   const devices = useSelector((state: RootState) => state.devices.devices);
-  const bpThresholds = useSelector((state: RootState) => state.user.bpThresholds);
+  const thresholds = useSelector((state: RootState) => state.user.thresholds);
+  // The EMR may have changed this patient's thresholds since launch: refresh
+  // when this screen opens so the reading about to be taken is judged by
+  // the current value. Fire-and-forget; the stored value stands if offline.
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfile(dispatch, store.getState);
+    }, [dispatch, store])
+  );
   const device: DeviceRecord | undefined = useMemo(
     () => devices.find((d) => d.id === deviceId),
     [devices, deviceId]
@@ -237,13 +248,11 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     }
   }, []);
 
+  // High = at or above the EMR-resolved threshold. No local fallback: the
+  // store always holds the last values the EMR sent (utils/thresholdLogic).
   const isBPHigh = useCallback(
-    (systolic: number, diastolic: number) => {
-      const sysHigh = bpThresholds?.systolicHigh || 140;
-      const diaHigh = bpThresholds?.diastolicHigh || 90;
-      return systolic >= sysHigh || diastolic >= diaHigh;
-    },
-    [bpThresholds]
+    (systolic: number, diastolic: number) => bpIsHigh(systolic, diastolic, thresholds),
+    [thresholds]
   );
 
   // ==========================================================================
@@ -700,8 +709,8 @@ export default function BleCaptureScreen({ route, navigation }: any) {
           <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
             <MaterialIcons name="warning" size={18} color="#FF5252" />
             <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
-              Above threshold ({bpThresholds?.systolicHigh}/
-              {bpThresholds?.diastolicHigh})
+              Above threshold ({thresholds.systolicHigh}/
+              {thresholds.diastolicHigh})
             </Text>
           </View>
         )}

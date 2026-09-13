@@ -3,17 +3,19 @@ import {
   getUser,
   clearUser,
   updateUserEdd,
+  updateUserThresholds,
   LocalUser,
   EddSource,
 } from "../services/sqliteService";
+import {
+  EMR_DEFAULT_THRESHOLDS,
+  thresholdsFromStored,
+  type VitalThresholds,
+} from "../utils/thresholdLogic";
 
 // ----------------------------------
 // State type definition
 // ----------------------------------
-interface BPThresholds {
-  systolicHigh: number;
-  diastolicHigh: number;
-}
 
 interface UserState {
   isAuthenticated: boolean;
@@ -33,8 +35,10 @@ interface UserState {
   edd?: string | null;
   eddSource?: EddSource | null;
 
-  // BP Thresholds from physician
-  bpThresholds: BPThresholds;
+  // The high-reading thresholds the EMR resolved for this patient (her own →
+  // her provider's → system default, per number). Written at login and by
+  // every profile refresh; mirrored to SQLite. Never edited on the phone.
+  thresholds: VitalThresholds;
 }
 
 // ----------------------------------
@@ -43,10 +47,9 @@ interface UserState {
 const initialState: UserState = {
   isAuthenticated: false,
   loading: true,
-  bpThresholds: {
-    systolicHigh: 140,  // Default values per clinical guidelines
-    diastolicHigh: 90,
-  },
+  // Placeholder until loadUser() restores the stored values; nothing is
+  // judged before a user exists.
+  thresholds: EMR_DEFAULT_THRESHOLDS,
 };
 
 // ----------------------------------
@@ -85,11 +88,8 @@ const userSlice = createSlice({
       state.eddSource = u.eddSource ?? null;
       state.loading = false;
 
-      // Set BP thresholds from login response
-      state.bpThresholds = {
-        systolicHigh: u.systolicHigh ?? 140,
-        diastolicHigh: u.diastolicHigh ?? 90,
-      };
+      // Thresholds from the login response (already saved to SQLite by authService)
+      state.thresholds = thresholdsFromStored(u);
     },
 
     // --- Manual override if needed ---
@@ -108,16 +108,19 @@ const userSlice = createSlice({
       state.eddSource = u.eddSource ?? null;
       state.loading = false;
 
-      // Set BP thresholds
-      state.bpThresholds = {
-        systolicHigh: u.systolicHigh ?? 140,
-        diastolicHigh: u.diastolicHigh ?? 90,
-      };
+      state.thresholds = thresholdsFromStored(u);
     },
 
-    // --- Update BP thresholds separately (e.g., from a refresh) ---
-    setBPThresholds: (state, action: PayloadAction<BPThresholds>) => {
-      state.bpThresholds = action.payload;
+    // --- Thresholds from a profile refresh (persists to SQLite too).
+    // Until 2.4 this updated Redux only, so a value refreshed in the
+    // foreground was lost on the next cold start.
+    setThresholds: (state, action: PayloadAction<VitalThresholds>) => {
+      state.thresholds = action.payload;
+      try {
+        updateUserThresholds(action.payload);
+      } catch (e) {
+        console.error("[User] Failed to persist thresholds:", e);
+      }
     },
 
     // --- Set/replace the due date (persists to SQLite too).
@@ -160,10 +163,7 @@ const userSlice = createSlice({
       state.edd = null;
       state.eddSource = null;
       state.loading = false;
-      state.bpThresholds = {
-        systolicHigh: 140,
-        diastolicHigh: 90,
-      };
+      state.thresholds = EMR_DEFAULT_THRESHOLDS;
     },
   },
 
@@ -184,11 +184,9 @@ const userSlice = createSlice({
         state.edd = u.edd ?? null;
         state.eddSource = u.eddSource ?? null;
 
-        // Restore BP thresholds from SQLite
-        state.bpThresholds = {
-          systolicHigh: u.systolicHigh ?? 140,
-          diastolicHigh: u.diastolicHigh ?? 90,
-        };
+        // Restore the last thresholds the EMR sent (a 2.3 row has no
+        // glucoseHigh yet; the launch-time refresh fills it in).
+        state.thresholds = thresholdsFromStored(u);
       }
 
       state.loading = false;
@@ -200,31 +198,10 @@ const userSlice = createSlice({
 // Selectors
 // ----------------------------------
 
-/**
- * Check if a BP reading is considered HIGH based on physician thresholds
- * Returns true if systolic >= threshold OR diastolic >= threshold
- */
-export const isBPHigh = (
-  systolic: number,
-  diastolic: number,
-  thresholds: BPThresholds
-): boolean => {
-  return systolic >= thresholds.systolicHigh || diastolic >= thresholds.diastolicHigh;
-};
-
-/**
- * Get color for BP reading based on threshold
- */
-export const getBPColor = (
-  systolic: number,
-  diastolic: number,
-  thresholds: BPThresholds
-): 'normal' | 'high' => {
-  return isBPHigh(systolic, diastolic, thresholds) ? 'high' : 'normal';
-};
+// The High predicates (isBPHigh, isGlucoseHigh) live in utils/thresholdLogic.ts.
 
 // ----------------------------------
 // Exports
 // ----------------------------------
-export const { login, logout, setUser, setBPThresholds, setEdd } = userSlice.actions;
+export const { login, logout, setUser, setThresholds, setEdd } = userSlice.actions;
 export default userSlice.reducer;

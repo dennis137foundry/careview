@@ -38,7 +38,7 @@ src/
     seedDemoData.ts          - 60-day demo data generator for testing
   redux/
     store.ts          - Redux store config
-    userSlice.ts      - Auth state, BP thresholds, provider info
+    userSlice.ts      - Auth state, EMR-resolved thresholds (BP + glucose), provider info
     deviceSlice.ts    - Registered device management
     readingSlice.ts   - Vital sign readings
   components/
@@ -78,7 +78,8 @@ All API calls use POST with JSON bodies.
 | Endpoint | Purpose | Service |
 |----------|---------|---------|
 | `https://trinitycareview.com/api/careviewapp/send_code.php` | Send SMS verification code | authService.ts |
-| `https://trinitycareview.com/api/careviewapp/verify_code.php` | Verify code, return patient profile + BP thresholds | authService.ts |
+| `https://trinitycareview.com/api/careviewapp/verify_code.php` | Verify code, return patient profile + thresholds (`bpThresholds`, `bgThresholds`) | authService.ts |
+| `https://trinitycareview.com/api/careviewapp/patient_profile.php` | EDD + thresholds, fetched on every launch, foreground and capture-screen open | profileRefreshService.ts |
 
 ### Data Sync
 | Endpoint | Purpose | Service |
@@ -192,7 +193,7 @@ onDebugLog          → { message }
 
 1. User enters phone number → `authService.sendCode(phone)` → SMS sent
 2. User enters 6-digit code → `authService.verifyCode(phone, code)`
-3. Server returns patient profile with BP thresholds
+3. Server returns patient profile with the EMR-resolved thresholds (BP + glucose)
 4. User saved to SQLite, Redux state updated (`login()`)
 5. HIPAA: If different patient logs in, all prior patient data is wiped
 6. Demo account: phone `5550001234` seeds 60 days of test data
@@ -203,8 +204,23 @@ onDebugLog          → { message }
 
 ### Blood Pressure Monitoring
 - Captures systolic, diastolic, heart rate from iHealth devices
-- Color-coded readings based on physician-set thresholds (default: 140/90)
+- Color-coded readings based on the EMR-resolved thresholds (see below)
 - `isBPHigh()` checks: systolic >= threshold OR diastolic >= threshold
+
+### High-reading thresholds (app 2.4+)
+- **The EMR is the only source of a threshold.** It resolves, per number, the patient's own
+  value → her provider's → the system default (`VITAL_THRESHOLDS.MD` in the EMR repo) and sends
+  the result as `bpThresholds { systolicHigh, diastolicHigh }` + `bgThresholds { high }`
+- Fetched at login and by `profileRefreshService` on **every** cold start, **every** return to
+  the foreground, and whenever a capture screen opens — no interval gate — so a change made in
+  the EMR is on the phone before the next reading is judged
+- Stored with the user row (SQLite `systolicHigh / diastolicHigh / glucoseHigh`) only so a
+  capture still works offline; the phone never invents a value. `EMR_DEFAULT_THRESHOLDS` in
+  `utils/thresholdLogic.ts` mirrors the EMR defaults and is used only for a column a stored row
+  predates (upgrade from 2.3), until the launch-time fetch replaces it
+- Glucose is judged exactly like BP: `isGlucoseHigh()` (value >= `glucoseHigh`) drives the
+  capture "Above threshold" badge, the dashboard slide colour and the History row/stats
+- Predicates and parsing are pure in `utils/thresholdLogic.ts`, tested in `__tests__/`
 
 ### Daily Health Check (Preeclampsia Screening)
 - Prompted before BP readings (once per day, resets at 2am)
@@ -231,7 +247,7 @@ onDebugLog          → { message }
 ## Data Persistence
 
 ### SQLite Tables
-- `user` — patient profile, BP thresholds
+- `user` — patient profile, the last thresholds the EMR sent (BP + glucose)
 - `devices` — registered devices (type, MAC, model, friendly name, source)
 - `readings` — vital signs (type, values, timestamp, sync status)
 - `screening_responses` — health checks, urine protein results, "can't test" reports, hospital reports
