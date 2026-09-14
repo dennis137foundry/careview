@@ -114,10 +114,24 @@ const userSlice = createSlice({
     // --- Thresholds from a profile refresh (persists to SQLite too).
     // Until 2.4 this updated Redux only, so a value refreshed in the
     // foreground was lost on the next cold start.
+    // No-op when nothing changed: the profile is fetched on every launch,
+    // foreground and capture-screen open, and a fresh object with the same
+    // three numbers would re-render every threshold consumer and re-create
+    // the capture screens' callbacks (which re-registers their native
+    // listeners) for no reason — and write SQLite each time.
     setThresholds: (state, action: PayloadAction<VitalThresholds>) => {
-      state.thresholds = action.payload;
+      const t = action.payload;
+      const cur = state.thresholds;
+      if (
+        cur.systolicHigh === t.systolicHigh &&
+        cur.diastolicHigh === t.diastolicHigh &&
+        cur.glucoseHigh === t.glucoseHigh
+      ) {
+        return;
+      }
+      state.thresholds = t;
       try {
-        updateUserThresholds(action.payload);
+        updateUserThresholds(t);
       } catch (e) {
         console.error("[User] Failed to persist thresholds:", e);
       }
