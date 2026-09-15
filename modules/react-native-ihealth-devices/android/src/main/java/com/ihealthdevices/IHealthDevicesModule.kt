@@ -739,14 +739,16 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                         val rec = arr.optJSONObject(i) ?: continue
                         val value = rec.optDouble(Bg5sProfile.DATA_VALUE, 0.0)
                         if (value > 0) {
-                            // DATA_TIME_PROOF: true = the meter's clock had been set when this
-                            // reading was taken, so its timestamp is trustworthy; false = taken
-                            // on the unset (2017) clock — JS dates it by the clock offset.
-                            // Absent on old firmware: treat as proven and let JS's plausibility
-                            // check catch a 2017 stamp.
-                            val timeProof = if (rec.has(Bg5sProfile.DATA_TIME_PROOF)) rec.optBoolean(Bg5sProfile.DATA_TIME_PROOF, true) else true
+                            // DATA_TIME_PROOF: true = this reading was taken BEFORE the meter's
+                            // clock was set and its stamp needs correcting (the SDK's own
+                            // adjustOfflineData re-dates exactly the records where it is true);
+                            // false = the clock had been set, the stamp is real. Same meaning
+                            // as iOS BG5SRecordModel.canCorrect, so it is emitted under that
+                            // name. Absent on old firmware: not flagged — JS's plausibility
+                            // check still catches a 2017 stamp.
+                            val canCorrect = rec.optBoolean(Bg5sProfile.DATA_TIME_PROOF, false)
                             emitGlucoseReading(mac, value, rec.optString(Bg5sProfile.DATA_ID, "offline-$i"),
-                                bg5sRecordTimestamp(rec), timeProof)
+                                bg5sRecordTimestamp(rec), canCorrect)
                             emitted++
                         }
                     }
@@ -828,8 +830,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         sendEvent("onDeviceClockSet", params)
     }
 
-    private fun emitGlucoseReading(mac: String, value: Double, dataID: String, timestamp: Double, timeProof: Boolean = true) {
-        sendDebugLog("BG5S RESULT: $value mg/dL (dataID=$dataID, ts=${timestamp.toLong()}, timeProof=$timeProof)")
+    // canCorrect: true = taken on the unset clock, JS must re-date it by the
+    // clock offset (iOS emits the same field from BG5SRecordModel.canCorrect).
+    private fun emitGlucoseReading(mac: String, value: Double, dataID: String, timestamp: Double, canCorrect: Boolean = false) {
+        sendDebugLog("BG5S RESULT: $value mg/dL (dataID=$dataID, ts=${timestamp.toLong()}, canCorrect=$canCorrect)")
         val params = Arguments.createMap().apply {
             putString("mac", mac)
             putString("type", "BG5S")
@@ -840,7 +844,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             // NaN = the meter's time string could not be parsed; omit the key
             // so JS sees no timestamp rather than a bogus one.
             if (!timestamp.isNaN()) putDouble("timestamp", timestamp)
-            putBoolean("timeProof", timeProof)
+            putBoolean("canCorrect", canCorrect)
         }
         sendEvent("onBloodGlucoseReading", params)
     }

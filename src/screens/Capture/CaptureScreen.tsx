@@ -93,9 +93,10 @@ type GlucoseTimingValue = (typeof GLUCOSE_TIMING_OPTIONS)[number]["value"];
 // ---------------------------------------------------------------------------
 // Glucose meter time
 //
-// The BG5S stamps each stored reading with ITS OWN clock and flags whether
-// that clock had been set when the reading was taken (iOS `canCorrect`,
-// Android `timeProof`). Out of the box — and again after a dead battery —
+// The BG5S stamps each stored reading with ITS OWN clock and flags the
+// readings taken before that clock was set (`canCorrect` — iOS
+// BG5SRecordModel.canCorrect, Android DATA_TIME_PROOF; both true = "the
+// stamp needs correcting"). Out of the box — and again after a dead battery —
 // the clock runs from 2017-01-01, so a flagged reading sits at a fixed
 // offset from real time. The app measures that offset whenever it finds the
 // meter's clock off (App.tsx → devices.clockOffsetMs) and dates flagged
@@ -111,9 +112,11 @@ const FUTURE_SLACK_MS = 15 * 60 * 1000;
 const ERASE_TIMEOUT_MS = 6000;
 
 function readingTakenOnUnsetClock(record: any): boolean {
-  if (record?.canCorrect === true) return true; // iOS BG5SRecordModel
-  if (record?.timeProof === false) return true; // Android DATA_TIME_PROOF
-  return false;
+  // Both platforms emit the same flag with the same meaning: true = taken on
+  // the unset clock. (Android's DATA_TIME_PROOF is true for exactly the
+  // records the SDK's own adjustOfflineData re-dates — it is NOT "time is
+  // proven"; reading it that way flagged every good reading as undatable.)
+  return record?.canCorrect === true;
 }
 
 /**
@@ -1202,7 +1205,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         // each with the meter's timestamp and its time-proof flag. Collect
         // them; the import starts on the batch-complete event below.
         androidBGBatchRef.current.push(data);
-        addLog(`BG: buffered ${data.value} ${data.unit || "mg/dL"} (timeProof=${String(data.timeProof)})`);
+        addLog(`BG: buffered ${data.value} ${data.unit || "mg/dL"} (canCorrect=${String(data.canCorrect)})`);
       }),
       emitter.addListener("onGlucoseMeterEvent", (data: any) => {
         if (device?.type !== "BG") return;
