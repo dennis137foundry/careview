@@ -31,7 +31,7 @@ const BATTERY_MODELS = new Set(["BP3L", "BP5", "BP5S", "HS2", "HS2S", "BG5S"]);
 
 const THROTTLE_MS = 10 * 60 * 1000; // at most one refresh per 10 minutes
 const SCAN_WINDOW_MS = 12_000; // how long to listen for registered devices
-const PER_DEVICE_TIMEOUT_MS = 6_000; // how long to wait for one battery read
+const PER_DEVICE_TIMEOUT_MS = 12_000; // connect + battery read + native disconnect
 
 let running = false;
 let lastRunAt = 0;
@@ -119,6 +119,9 @@ export async function refreshDeviceBatteries(opts: { force?: boolean } = {}): Pr
   running = true;
   cancelled = false;
   lastRunAt = Date.now();
+  // Whether any battery-only connect was issued — decides whether a cancel
+  // must drop a half-open link.
+  let connectedAny = false;
 
   try {
     // The SDK must be authenticated before it will scan; the capture and
@@ -160,35 +163,52 @@ export async function refreshDeviceBatteries(opts: { force?: boolean } = {}): Pr
     await deviceService.stopScan().catch(() => {});
     if (found.size === 0) return;
 
-    // 2. One battery-only connection per device, in turn. The result lands
-    //    via the app-level onBatteryLevel listener (App.tsx); here we only
-    //    wait for it — or a timeout — before moving to the next device.
+    // 2. One battery-only connection per device, in turn. Native reads the
+    //    battery (the result lands via the app-level onBatteryLevel
+    //    listener in App.tsx) and then drops the link itself, on both
+    //    platforms. Here we wait for that disconnect — or a timeout —
+    //    before moving to the next device, so two links never overlap and
+    //    a capture started right after finds every device free.
     for (const device of found.values()) {
       if (cancelled) return;
+      connectedAny = true;
       await new Promise<void>((resolve) => {
         wake = resolve;
         subs.push(
-          deviceService.onBatteryLevel(({ mac }) => {
-            if (String(mac || "").toUpperCase() === device.mac.toUpperCase()) resolve();
+          deviceService.onConnectionStateChanged((ev) => {
+            if (
+              ev &&
+              ev.connected === false &&
+              String(ev.mac || "").toUpperCase() === device.mac.toUpperCase()
+            ) {
+              resolve();
+            }
           })
         );
         timers.push(setTimeout(resolve, PER_DEVICE_TIMEOUT_MS));
-        deviceService.connectForBattery(device.mac, device.model as string).catch(() => resolve());
+        deviceService.connectForBattery(device.mac, device.model as string).then(
+          (accepted) => {
+            if (!accepted) resolve();
+          },
+          () => resolve()
+        );
       });
       cleanup();
       if (cancelled) return;
-      // iOS drops a battery-only link itself; Android leaves it up until the
-      // device sleeps, which could confuse a capture started right after.
-      // Drop it explicitly, then let the SDK settle before the next connect.
-      await deviceService.disconnectAll().catch(() => {});
-      await waitOrCancel(800);
+      // Let the SDK settle before the next connect.
+      await waitOrCancel(500);
       cleanup();
     }
   } catch (e) {
     console.warn("[BatteryRefresh] Failed:", e);
   } finally {
     cleanup();
-    if (!cancelled) {
+    if (cancelled) {
+      // A capture or add-device screen took over mid-run. Drop whatever
+      // battery-only link may still be half open so its connect is not
+      // refused by a device that is already connected.
+      if (connectedAny) deviceService.disconnectAll().catch(() => {});
+    } else {
       deviceService.stopScan().catch(() => {});
     }
     running = false;

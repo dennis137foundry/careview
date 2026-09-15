@@ -465,6 +465,10 @@ export default function CaptureScreen({ route, navigation }: any) {
       // Cleanup when LEAVING the screen — this is the safe place for BLE teardown
       return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        // The screen is blurred (isFocused is false by the time the event
+        // lands), but clear busy too so the teardown's DISCONNECTED event
+        // can never be mistaken for a failed capture.
+        busyRef.current = false;
         IHealthDevices?.stopScan?.().catch(() => {});
         IHealthDevices?.disconnectAll?.().catch(() => {});
         // Allow screen to sleep when leaving capture
@@ -1442,6 +1446,11 @@ export default function CaptureScreen({ route, navigation }: any) {
     addLog("Cancelled by user");
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     targetMacRef.current = "";
+    // Cleared directly, before the disconnect below: its DISCONNECTED event
+    // would otherwise be read as the capture failing (busyRef only follows
+    // state after the next render, but the event can arrive first now that
+    // Android disconnects for real).
+    busyRef.current = false;
     try {
       await IHealthDevices?.stopScan?.();
       await IHealthDevices?.disconnectAll?.();

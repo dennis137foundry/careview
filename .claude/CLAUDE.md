@@ -183,7 +183,7 @@ onDebugLog          → { message }
 ```
 
 ### Platform Differences
-- **Android (Kotlin):** Sequential timer-based scanning (3s per device type). Requires Location Services enabled. Uses `iHealthDevicesManager` SDK singleton.
+- **Android (Kotlin):** Sequential timer-based scanning (3s per device type). Requires Location Services enabled. Uses `iHealthDevicesManager` SDK singleton. **The SDK never drops a link on its own** — `disconnectDevice` / `disconnectAll` call each control's `disconnect()` (plus the manager's `disconnectAllDevices(false)` sweep), and a battery-only / setup connect disconnects itself natively after the battery (and clock) step, like iOS. Until 2026-09-14 these were no-ops, so a device stayed connected after every use and could not be connected to again until it powered off or Bluetooth was toggled.
 - **iOS (Objective-C):** Simultaneous SDK + GATT scanning. Uses CoreBluetooth `CBCentralManager` for generic devices. License loaded from app bundle. Includes `keepAwake`/`allowSleep` for screen idle.
 
 ### Data Flow

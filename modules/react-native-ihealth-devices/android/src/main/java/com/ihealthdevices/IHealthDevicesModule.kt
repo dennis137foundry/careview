@@ -51,6 +51,17 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     // Mirrors iOS _setupMAC. Cleared once consumed.
     private var setupMac: String? = null
 
+    // Set by connectForBattery / connectForSetup: this connection exists only
+    // to read the battery (and set the clock). Once that has happened the
+    // link is dropped from here — the SDK never drops it on its own, and a
+    // device left connected cannot be connected to again until it powers
+    // off or Bluetooth is toggled. Mirrors iOS _batteryOnlyMAC. Cleared by a
+    // real connectDevice (which supersedes it) and once consumed.
+    private var batteryOnlyMac: String? = null
+    private val batteryOnlyHandler = Handler(Looper.getMainLooper())
+    private var batteryOnlyFailsafe: Runnable? = null
+    private var batteryOnlyDisconnect: Runnable? = null
+
     // setDeviceClock(purge=true) on an already-connected BG5S: erase memory
     // after the clock is set. Consumed by the ACTION_SET_TIME handler.
     private var bg5sPurgePendingMac: String? = null
@@ -527,6 +538,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         when {
             action.contains("battery", ignoreCase = true) -> {
                 emitBattery(mac, deviceType, json)
+                finishBatteryOnlyIfPending(mac, deviceType)
             }
             action == BpProfile.ACTION_FUNCTION_INFORMATION_BP -> {
                 // getFunctionInfo() doubles as the SDK's "synchronize time".
@@ -575,6 +587,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         when {
             action.contains("battery", ignoreCase = true) -> {
                 emitBattery(mac, deviceType, json)
+                finishBatteryOnlyIfPending(mac, deviceType)
             }
             action.contains("unstable", ignoreCase = true) || action.contains("unsteady", ignoreCase = true) -> {
                 sendDebugLog("HS UNSTABLE: weight=${json.optDouble("weight", 0.0)} kg")
@@ -635,6 +648,12 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             Bg5sProfile.ACTION_GET_STATUS_INFO -> {
                 bg5sOfflineNum = json.optInt(Bg5sProfile.INFO_OFFLINE_DATA_NUM, 0)
                 bg5sDeviceDateBefore = bg5sStatusDeviceDate(json)
+                // The meter's battery rides along with its status — surface it the
+                // same way BP/scale batteries are (iOS does this from stateInfo).
+                val battery = json.optInt(Bg5sProfile.INFO_BATTERY_LEVEL, -1)
+                if (battery in 0..100) {
+                    emitBattery(mac, "BG5S", JSONObject().put("battery", battery))
+                }
                 sendGlucoseMeterEvent(mac, "status",
                     "Status received; offline records=$bg5sOfflineNum; meter clock=${bg5sDeviceDateBefore?.let { java.util.Date(it.toLong()) } ?: "unknown"}")
                 // A setup connect on the BG5S needs nothing extra: this chain sets
@@ -660,6 +679,13 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 }
                 sendGlucoseMeterEvent(mac, "set_time", "Clock set; setting unit to mg/dL")
                 finishBg5sClockSet(mac, purged = false)
+                // A battery-only / setup connect is done once the clock is set
+                // and reported: no record pull (nothing is listening for it),
+                // drop the link so the meter can be connected to again.
+                if (batteryOnlyMac.equals(mac, ignoreCase = true)) {
+                    finishBatteryOnly(mac, "BG5S", 800)
+                    return
+                }
                 // Pull stored readings so offline measurements reach the EMR (iOS
                 // parity). Each carries the meter's timestamp and its time-proof
                 // flag; JS dates the flagged ones by the clock offset. When the
@@ -741,6 +767,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 pendingClockPromise = null
                 pendingDeletePromise?.resolve(false)
                 pendingDeletePromise = null
+                // A battery-only session that hit an error is over too.
+                if (batteryOnlyMac.equals(mac, ignoreCase = true)) finishBatteryOnly(mac, "BG5S", 0)
             }
             else -> sendDebugLog("BG5S: Unhandled action: $action")
         }
@@ -1055,6 +1083,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             }
 
             sendDebugLog("Connecting to $deviceType at $mac")
+            cancelBatteryOnlySession()
             targetMAC = mac
             targetType = deviceType
 
@@ -1181,6 +1210,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         try {
             sendDebugLog("${if (setup) "Setup" else "Battery-only"} connect: $deviceType at $mac")
             setupMac = if (setup) mac else null
+            batteryOnlyMac = mac
             targetMAC = mac
             targetType = deviceType
 
@@ -1191,14 +1221,64 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             iHealthDevicesManager.getInstance().connectDevice("", mac, getDeviceTypeName(deviceType))
             promise.resolve(true)
 
-            // No delayed cleanup here on purpose: the SDK's own
-            // DEVICE_STATE_DISCONNECTED callback maintains connectedDevices.
-            // A blind timed removal raced with a real capture started on the
-            // same device shortly after adding it, making startMeasurement
-            // reject with NOT_CONNECTED while the BLE link was actually up.
+            // Failsafe, as on iOS: if the device dozed off or the battery
+            // round-trip stalls, drop the half-open link so a later real
+            // capture starts clean. Only acts while THIS battery-only session
+            // is still pending — a real connectDevice clears the flag.
+            batteryOnlyFailsafe?.let { batteryOnlyHandler.removeCallbacks(it) }
+            val failsafe = Runnable {
+                if (batteryOnlyMac.equals(mac, ignoreCase = true)) {
+                    sendDebugLog("Battery-only timeout — disconnecting $mac")
+                    finishBatteryOnly(mac, deviceType, 0)
+                }
+            }
+            batteryOnlyFailsafe = failsafe
+            batteryOnlyHandler.postDelayed(failsafe, 15_000)
         } catch (e: Exception) {
+            batteryOnlyMac = null
             promise.reject("CONNECT_ERROR", "Failed battery-only connect: ${e.message}", e)
         }
+    }
+
+    /** The battery (or clock) step of a battery-only session just completed. */
+    private fun finishBatteryOnlyIfPending(mac: String, deviceType: String) {
+        if (!batteryOnlyMac.equals(mac, ignoreCase = true)) return
+        // A BP5S setup connect also asked for function info (its clock
+        // sync); give that reply a moment to land before dropping the link.
+        finishBatteryOnly(mac, deviceType, 1_200)
+    }
+
+    /**
+     * End a battery-only session: drop the link after `delayMs`. The
+     * DISCONNECTED callback then updates connectedDevices and destroys the
+     * BG5S control, exactly as after a capture.
+     */
+    private fun finishBatteryOnly(mac: String, deviceType: String, delayMs: Long) {
+        batteryOnlyMac = null
+        batteryOnlyFailsafe?.let { batteryOnlyHandler.removeCallbacks(it) }
+        batteryOnlyFailsafe = null
+        batteryOnlyDisconnect?.let { batteryOnlyHandler.removeCallbacks(it) }
+        val disconnect = Runnable {
+            batteryOnlyDisconnect = null
+            sendDebugLog("Battery-only done — disconnecting $mac")
+            disconnectSdkDevice(mac, deviceType)
+        }
+        batteryOnlyDisconnect = disconnect
+        batteryOnlyHandler.postDelayed(disconnect, delayMs)
+    }
+
+    /**
+     * A real connect supersedes any battery-only session: clear its intent
+     * and cancel its pending disconnect so the capture's link is never
+     * dropped from under it.
+     */
+    private fun cancelBatteryOnlySession() {
+        batteryOnlyMac = null
+        setupMac = null
+        batteryOnlyFailsafe?.let { batteryOnlyHandler.removeCallbacks(it) }
+        batteryOnlyFailsafe = null
+        batteryOnlyDisconnect?.let { batteryOnlyHandler.removeCallbacks(it) }
+        batteryOnlyDisconnect = null
     }
 
     /**
@@ -1211,9 +1291,9 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
     fun disconnectDevice(mac: String, promise: Promise) {
         try {
             sendDebugLog("Disconnecting: $mac")
+            val type = connectedDevices[mac]?.get("type")
+            disconnectSdkDevice(mac, type)
             connectedDevices.remove(mac)
-            // The Android SDK auto-disconnects when the connection drops.
-            // No explicit disconnect API like iOS commandDisconnectDevice.
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("DISCONNECT_ERROR", e.message, e)
@@ -1225,18 +1305,85 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
      *
      * JS calls: IHealthDevices.disconnectAll()
      * iOS sig:  disconnectAll:resolver:reject:
+     *
+     * Tears down every iHealth link the SDK holds. Until 2026-09-14 this only
+     * cleared the bookkeeping map — the comment claimed the SDK had no
+     * disconnect API — so on Android a device stayed connected after every
+     * reading, battery read or setup connect until it powered itself off,
+     * and the next connect failed until Bluetooth was toggled. iOS always
+     * really disconnected, which is why only Android showed it.
      */
     @ReactMethod
     fun disconnectAll(promise: Promise) {
         try {
             sendDebugLog("Disconnecting all devices")
-            connectedDevices.clear()
+            // Also cancels a battery-only session's pending delayed disconnect,
+            // which would otherwise fire later into a capture's fresh link.
+            cancelBatteryOnlySession()
+            disconnectAllSdkDevices()
             targetMAC = null
             targetType = null
             promise.resolve(null)
         } catch (e: Exception) {
             promise.reject("DISCONNECT_ALL_ERROR", e.message, e)
         }
+    }
+
+    /**
+     * Drop the SDK's link to one device. Each control class exposes
+     * disconnect(); the manager's disconnectDevice(mac, type) is the fallback
+     * when the control is no longer reachable. The SDK answers with
+     * DEVICE_STATE_DISCONNECTED, which is where connectedDevices is updated
+     * and the BG5S control destroyed.
+     */
+    private fun disconnectSdkDevice(mac: String, type: String?) {
+        val mgr = iHealthDevicesManager.getInstance()
+        val normalized = type?.let { getDeviceTypeName(it) }
+        try {
+            val control: Any? = when (normalized) {
+                "BP3L" -> mgr.getBp3lControl(mac)
+                "BP5" -> mgr.getBp5Control(mac)
+                "BP5S" -> mgr.getBp5sControl(mac)
+                "HS2" -> mgr.getHs2Control(mac)
+                "HS2S" -> mgr.getHs2sControl(mac)
+                "HS4S" -> mgr.getHs4sControl(mac)
+                "BG5S" -> bg5sControl ?: mgr.getBg5sControl(mac)
+                else -> null
+            }
+            when (control) {
+                is Bp3lControl -> control.disconnect()
+                is Bp5Control -> control.disconnect()
+                is Bp5sControl -> control.disconnect()
+                is Hs2Control -> control.disconnect()
+                is Hs2sControl -> control.disconnect()
+                is Hs4sControl -> control.disconnect()
+                is Bg5sControl -> control.disconnect()
+                else -> {
+                    if (normalized != null) mgr.disconnectDevice(mac, normalized)
+                    else sendDebugLog("Disconnect: no control and no type for $mac")
+                }
+            }
+            sendDebugLog("SDK disconnect issued for $mac (${normalized ?: "?"})")
+        } catch (e: Exception) {
+            sendDebugLog("SDK disconnect error for $mac: ${e.message}")
+            try { if (normalized != null) mgr.disconnectDevice(mac, normalized) } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Every link the module knows about, plus the SDK's own sweep for any it
+     * holds that the map lost track of (the old no-op disconnects removed
+     * entries without dropping the link).
+     */
+    private fun disconnectAllSdkDevices() {
+        val snapshot = connectedDevices.entries.map { it.key to it.value["type"] }
+        snapshot.forEach { (mac, type) -> disconnectSdkDevice(mac, type) }
+        try {
+            iHealthDevicesManager.getInstance().disconnectAllDevices(false)
+        } catch (e: Exception) {
+            sendDebugLog("SDK disconnectAllDevices error: ${e.message}")
+        }
+        connectedDevices.clear()
     }
 
     /**
