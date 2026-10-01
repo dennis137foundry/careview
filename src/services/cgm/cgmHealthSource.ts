@@ -139,7 +139,14 @@ function healthConnect(): HealthSource {
     },
     requestAccess: async () => {
       if (!(await init())) return false;
-      await HC.requestPermission(READ);
+      // Also "read in the background" (cgmBackground.ts), where Health Connect
+      // supports it; an older Health Connect refuses the whole request, so then
+      // ask for glucose alone (readings then go only while the app is open).
+      try {
+        await HC.requestPermission([...READ, { accessType: "read", recordType: "BackgroundAccessPermission" }]);
+      } catch {
+        await HC.requestPermission(READ);
+      }
       return granted();
     },
     hasAccess: async () => {

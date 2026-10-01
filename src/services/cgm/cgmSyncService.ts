@@ -9,14 +9,16 @@
  * when a different patient signs in (wipeAllPatientData).
  *
  * When it runs: at launch, every return to the foreground, every 15 minutes
- * while the app is open, right after connecting, and on "Send now". It does not
- * run while the app is closed yet (background fetch is a later step).
+ * while the app is open, right after connecting, on "Send now" — and while the
+ * app is not open (cgmBackground.ts: Apple Health background delivery on iPhone,
+ * background fetch on both, Android also after the app is closed).
  */
 import { AppState } from "react-native";
 import { getAppSetting, setAppSetting, getUser } from "../sqliteService";
 import { authedFetch } from "../authToken";
 import { isDemoAccount } from "../seedDemoData";
 import { getHealthSource } from "./cgmHealthSource";
+import { startCgmBackground, stopCgmBackground } from "./cgmBackground";
 import {
   CGM_CONFIG,
   chunk,
@@ -87,6 +89,7 @@ export async function connectCgm(): Promise<boolean> {
     setAppSetting(KEY.lastError, "");
     emit();
     syncCgm("connect");
+    startCgmBackground();
   }
   return ok;
 }
@@ -94,6 +97,7 @@ export async function connectCgm(): Promise<boolean> {
 /** Stop sending. Access in Apple Health / Health Connect stays until the patient removes it there. */
 export function disconnectCgm(): void {
   setAppSetting(KEY.connected, "0");
+  stopCgmBackground();
   emit();
 }
 
@@ -112,12 +116,23 @@ async function post(body: unknown): Promise<Response> {
   }
 }
 
+let inFlight: Promise<void> | null = null;
+
 /**
  * Read the new Dexcom readings and send them. Single-flight: a call while one
- * is running returns at once. Never throws.
+ * is running waits for that one (so a background wake-up only reports "done"
+ * to iOS once the readings are sent). Never throws.
  */
-export async function syncCgm(reason: string = "manual"): Promise<void> {
-  if (syncing || getAppSetting(KEY.connected) !== "1") return;
+export function syncCgm(reason: string = "manual"): Promise<void> {
+  if (inFlight) return inFlight;
+  if (getAppSetting(KEY.connected) !== "1") return Promise.resolve();
+  inFlight = runSync(reason).finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function runSync(reason: string): Promise<void> {
   const source = getHealthSource();
   if (!source) return;
 
@@ -170,6 +185,7 @@ export async function syncCgm(reason: string = "manual"): Promise<void> {
 /** Start the launch / foreground / every-15-minutes runs. Returns cleanup. */
 export function initializeCgmSync(): () => void {
   syncCgm("launch");
+  startCgmBackground();
   let timer: ReturnType<typeof setInterval> | null = setInterval(
     () => syncCgm("timer"),
     CGM_CONFIG.foregroundIntervalMs

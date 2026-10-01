@@ -105,7 +105,7 @@ All sync endpoints use the same API key: `dc9a8e0f685349ab93c0e06f417ff7f8c13fbb
   "vitals": [
     {
       "id": "nanoid",
-      "type": "BP" | "SCALE",
+      "type": "BP" | "SCALE" | "BG" | "CGM",
       "value": 120,
       "value2": 80,
       "heartRate": 72,
@@ -262,6 +262,42 @@ onDebugLog          → { message }
 - Local reminder notifications (Notifee): last result + 72h, then daily for a week, shifted out of 21:00–08:00; rescheduled on every save (`urineReminderService.ts`)
 - 6-level scale: Negative, Trace, +1, +2, +3, +4; +2 and above = alert. Summaries show the HIGHEST result in 24h, never the latest
 - Rules live in `urineProteinLogic.ts` (pure, tested in `__tests__/`); reads/writes go through `urineProteinService.ts`
+
+### Dexcom CGM via Apple Health / Health Connect (2026-10, branch feature/dexcom-cgm)
+- Dexcom declined Trinity production API access (2026-09-30). The Dexcom app writes every sensor
+  reading to Apple Health (iPhone) / Health Connect (Android) about **3 hours late**; CareView reads
+  them there. Not Bluetooth, not the local `readings` table (~288 readings a day would swamp History).
+- `services/cgm/cgmLogic.ts` (pure, tested in `__tests__/cgmLogic.test.ts`): only Dexcom-written
+  samples (`com.dexcom.*` / name Dexcom or Stelo), plausible 20–600 mg/dL, one per sample id; window =
+  30-day backfill on the first sync, then 6 h before the newest reading already sent (late /
+  out-of-order readings); batches of 250.
+- `services/cgm/cgmHealthSource.ts`: iOS `react-native-health` (HealthKit — iOS never reveals whether
+  READ was granted; a denied read returns nothing), Android `react-native-health-connect` (Android 8+;
+  Health Connect app from Play on Android 8–13, built in from 14). Connect also asks Health Connect for
+  "read in background" where supported.
+- `services/cgm/cgmSyncService.ts`: posts `{type:"CGM", id, value, unit:"mg/dL", ts}` to
+  `vitals_sync.php` (EMR stores Dexcom glucose, de-duplicates on the sample id, alerts once per day per
+  direction, shows a Continuous Glucose card). Single-flight (a second call waits for the running one).
+  Foreground: launch, every return to the foreground, every 15 min while open, after Connect, "Send now".
+  State in `app_settings` (`cgm_connected`, `cgm_last_sent_ts`, …), wiped with other patient data;
+  demo account never sends.
+- **Background** (`services/cgm/cgmBackground.ts`), only while connected:
+  - iPhone: local native module `modules/react-native-cgm-background` (ObjC, Podfile) — an
+    HKObserverQuery with **HealthKit background delivery** for blood glucose, set up at every launch
+    (UIApplicationDidFinishLaunchingNotification, once enabled), so iOS launches/resumes the app when the
+    Dexcom app saves readings; it emits `CgmNewData`, JS syncs and calls `finished()` (auto after 25 s).
+    Plus `react-native-background-fetch` (iOS decides when; never after a force-quit).
+  - Android: `react-native-background-fetch` every ≥15 min, `stopOnTerminate:false` + HeadlessJS
+    (`registerCgmHeadlessTask` in `index.js` opens the DB and loads the token itself) + `startOnBoot`.
+  - Not connected (or another patient's phone now): native observer disabled, background fetch stopped.
+- UI: `components/DexcomConnectCard.tsx` at the bottom of the Devices screen (setup steps → Connect →
+  status, Send now, Stop). Hidden where the phone cannot do it.
+- Native: Android `READ_BLOOD_GLUCOSE` + `READ_HEALTH_DATA_IN_BACKGROUND`, rationale intent-filter +
+  `ViewPermissionUsageActivity` alias, `HealthConnectPermissionDelegate` in `MainActivity`,
+  **minSdk 26**. iOS `cvdemo.entitlements` (HealthKit + background delivery), `UIBackgroundModes`
+  fetch/processing, `BGTaskSchedulerPermittedIdentifiers` com.transistorsoft.fetch,
+  `NSHealthShare/UpdateUsageDescription`; the App ID needs HealthKit (automatic signing), then
+  `pod install`. Google Play needs the Health Connect permissions declaration.
 
 ### Pregnancy Wellness Tips
 - 280 rotating daily tips (one per day of pregnancy)

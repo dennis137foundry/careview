@@ -23,6 +23,9 @@ target 'cvdemo' do
   # iHealth Devices module
   pod 'react-native-ihealth-devices', :path => '../modules/react-native-ihealth-devices'
 
+  # Dexcom CGM: Apple Health background delivery of glucose (src/services/cgm/cgmBackground.ts)
+  pod 'react-native-cgm-background', :path => '../modules/react-native-cgm-background'
+
   # --- react-native-permissions (v5.4.2) setup ---
   setup_permissions([
     'Camera',

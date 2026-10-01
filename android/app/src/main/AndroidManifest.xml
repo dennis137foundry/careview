@@ -28,6 +28,7 @@
 
   <!-- Dexcom CGM: read the glucose readings the Dexcom app writes to Health Connect -->
   <uses-permission android:name="android.permission.health.READ_BLOOD_GLUCOSE" />
+  <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
   <uses-feature android:name="android.hardware.camera" android:required="false" />
   <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
