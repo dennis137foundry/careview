@@ -37,6 +37,10 @@
 	<string>This app uses Bluetooth to discover and connect to iHealth devices.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app uses Bluetooth to connect to iHealth devices.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>CareView reads the glucose readings your Dexcom app saves to Apple Health and sends them to your care team.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>CareView only reads from Apple Health; it never saves data to it.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>This app uses the camera to scan QR codes or identifiers from iHealth device packaging.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

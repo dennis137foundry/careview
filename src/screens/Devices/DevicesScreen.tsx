@@ -19,6 +19,7 @@ import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { loadDevices, removeDevice, renameDevice } from "../../redux/deviceSlice";
 import { useToast } from "../../components/Toast";
 import RenameDeviceModal from "../../components/RenameDeviceModal";
+import DexcomConnectCard from "../../components/DexcomConnectCard";
 import type { RootState, AppDispatch } from "../../redux/store";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { BTN } from "../../constants/buttons";
@@ -408,6 +409,9 @@ export default function DevicesScreen({ navigation }: any) {
             );
           })
         )}
+
+        {/* Dexcom CGM: read from Apple Health / Health Connect, not paired over Bluetooth */}
+        <DexcomConnectCard />
       </ScrollView>
 
       {/* Rename Modal */}

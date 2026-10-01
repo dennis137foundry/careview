@@ -25,6 +25,9 @@
        treat the CAMERA permission as requiring camera+autofocus hardware and
        filter out camera-less devices. Devices can still be added via BLE scan. -->
   <uses-permission android:name="android.permission.CAMERA" />
+
+  <!-- Dexcom CGM: read the glucose readings the Dexcom app writes to Health Connect -->
+  <uses-permission android:name="android.permission.health.READ_BLOOD_GLUCOSE" />
   <uses-feature android:name="android.hardware.camera" android:required="false" />
   <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
@@ -49,6 +52,22 @@
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
+      <!-- Health Connect (Android 8-13): "why does CareView need this?" link on the permission screen -->
+      <intent-filter>
+        <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+      </intent-filter>
     </activity>
+
+    <!-- Health Connect (Android 14+): the same rationale, reached from system settings -->
+    <activity-alias
+      android:name="ViewPermissionUsageActivity"
+      android:exported="true"
+      android:targetActivity=".MainActivity"
+      android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+        <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+      </intent-filter>
+    </activity-alias>
   </application>
 </manifest>

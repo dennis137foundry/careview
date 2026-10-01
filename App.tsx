@@ -24,6 +24,7 @@ import {
   setDeviceClockOffset,
 } from "./src/redux/deviceSlice";
 import { refreshProfile } from "./src/services/profileRefreshService";
+import { initializeCgmSync } from "./src/services/cgm/cgmSyncService";
 import deviceService from "./src/services/deviceService";
 import { refreshDeviceBatteries } from "./src/services/batteryRefreshService";
 import { initializeVitalsSync } from "./src/hooks/useVitalsSync";
@@ -59,6 +60,7 @@ function RootApp() {
 
   useEffect(() => {
     let cleanupSync: (() => void) | undefined;
+    let cleanupCgm: (() => void) | undefined;
 
     // Registered before any authedFetch can fire so the first rejection
     // from the server routes back to AuthScreen instead of looping.
@@ -95,6 +97,8 @@ function RootApp() {
 
       // Initialize vitals sync service (monitors network, retries failed syncs)
       cleanupSync = initializeVitalsSync();
+      // Dexcom CGM readings from Apple Health / Health Connect (no-op until connected)
+      cleanupCgm = initializeCgmSync();
 
       RNBootSplash.hide({ fade: true });
 
@@ -166,6 +170,9 @@ function RootApp() {
       clockSub.remove();
       if (cleanupSync) {
         cleanupSync();
+      }
+      if (cleanupCgm) {
+        cleanupCgm();
       }
     };
   }, [dispatch, showToast]);
