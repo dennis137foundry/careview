@@ -21,6 +21,7 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { BTN, BTN_SIZE } from "../constants/buttons";
 import {
   getHealthSource,
+  healthSourceProblem,
   HealthAvailability,
   HEALTH_CONNECT_PLAY_URL,
 } from "../services/cgm/cgmHealthSource";
@@ -45,20 +46,25 @@ function when(ts: number): string {
 
 export default function DexcomConnectCard() {
   const source = getHealthSource();
-  const [availability, setAvailability] = useState<HealthAvailability | null>(null);
+  const [availability, setAvailability] = useState<HealthAvailability | "no_answer" | null>(null);
   const [status, setStatus] = useState<CgmStatus>(getCgmStatus());
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    // A health store that cannot even answer hides the card; it never crashes the screen.
+    // Never crashes the screen and never waits forever: no answer in 8 s says so.
+    const timer = setTimeout(() => alive && setAvailability((a) => a ?? "no_answer"), 8000);
     source
       ?.availability()
       .then((a) => alive && setAvailability(a))
-      .catch(() => alive && setAvailability("unsupported"));
+      .catch((e) => {
+        console.warn("[DexcomCard] availability failed:", e?.message ?? e);
+        if (alive) setAvailability("no_answer");
+      });
     const off = onCgmStatus(setStatus);
     return () => {
       alive = false;
+      clearTimeout(timer);
       off();
     };
   }, [source]);
@@ -91,8 +97,43 @@ export default function DexcomConnectCard() {
     );
   }, []);
 
-  if (!source || availability === null || availability === "unsupported") {
+  if (Platform.OS !== "ios" && Platform.OS !== "android") {
     return null;
+  }
+  const storeName = Platform.OS === "ios" ? "Apple Health" : "Health Connect";
+  // Something is in the way: show the card with the reason rather than hiding it,
+  // so a tester (or the care team on the phone) can tell what is wrong.
+  const problem = !source
+    ? healthSourceProblem() ?? `${storeName} is not available in this version of CareView.`
+    : availability === "unsupported"
+    ? Platform.OS === "ios"
+      ? "This device does not support Apple Health."
+      : "This phone does not support Health Connect (Android 8 or newer is needed)."
+    : availability === "no_answer"
+    ? `${storeName} did not respond. Close CareView and open it again.`
+    : null;
+  if (!source || availability === null || problem) {
+    return (
+      <View style={styles.card}>
+        <View style={styles.header}>
+          <View style={styles.icon}>
+            <MaterialIcons name="show-chart" size={26} color={BTN.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>Dexcom Glucose Sensor</Text>
+            <Text style={styles.subtitle}>Continuous glucose monitor</Text>
+          </View>
+        </View>
+        {problem ? (
+          <Text style={styles.hint}>{problem}</Text>
+        ) : (
+          <View style={styles.statusRow}>
+            <ActivityIndicator size="small" color={BTN.primary} />
+            <Text style={styles.statusText}>Checking {storeName}…</Text>
+          </View>
+        )}
+      </View>
+    );
   }
   const store = source.name;
 

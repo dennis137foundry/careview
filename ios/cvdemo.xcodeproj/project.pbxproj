@@ -321,7 +321,7 @@
 				CODE_SIGN_ENTITLEMENTS = cvdemo/cvdemo.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = 3VN4ZKZSLL;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = cvdemo/Info.plist;
@@ -361,7 +361,7 @@
 				CODE_SIGN_ENTITLEMENTS = cvdemo/cvdemo.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = 3VN4ZKZSLL;
 				INFOPLIST_FILE = cvdemo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = CareView;

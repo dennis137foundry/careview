@@ -46,7 +46,8 @@ function appleHealth(): HealthSource {
   const mod = require("react-native-health");
   const AppleHealthKit = mod?.default ?? mod;
   if (!AppleHealthKit || typeof AppleHealthKit.isAvailable !== "function" || !AppleHealthKit.Constants) {
-    throw new Error("Apple Health module is not linked");
+    // NativeModules.AppleHealthKit is missing: the RNAppleHealthKit pod is not in this build
+    throw new Error("Apple Health module not found in this build (run pod install)");
   }
   const permissions = {
     permissions: {
@@ -204,6 +205,12 @@ function healthConnect(): HealthSource {
 }
 
 let source: HealthSource | null = null;
+let sourceProblem: string | null = null;
+
+/** Why getHealthSource() returned null (shown on the Devices card), or null. */
+export function healthSourceProblem(): string | null {
+  return sourceProblem;
+}
 
 /**
  * The phone's health store, or null on a platform without one — or when its
@@ -215,8 +222,9 @@ export function getHealthSource(): HealthSource | null {
   try {
     if (Platform.OS === "ios") source = appleHealth();
     else if (Platform.OS === "android") source = healthConnect();
-  } catch (e) {
-    if (__DEV__) console.log("[CgmHealth] health store unavailable:", e);
+  } catch (e: any) {
+    console.warn("[CgmHealth] health store unavailable:", e?.message ?? e);
+    sourceProblem = String(e?.message ?? e);
     source = null;
   }
   return source;
