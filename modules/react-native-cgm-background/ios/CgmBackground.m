@@ -10,8 +10,8 @@
 //  completes the observer so iOS keeps delivering.
 //
 //  Apple requires the observer query to be set up at every launch, as early as
-//  possible: it is started from UIApplicationDidFinishLaunchingNotification (no
-//  AppDelegate change needed), but only once the patient has tapped Connect
+//  possible: a constructor function observes UIApplicationDidFinishLaunchingNotification
+//  (no AppDelegate change needed), but only once the patient has tapped Connect
 //  (enable() stores the flag). Background delivery needs the entitlement
 //  com.apple.developer.healthkit.background-delivery.
 //
@@ -31,6 +31,10 @@ static HKObserverQuery *sQuery = nil;
 static NSMutableArray *sPending = nil;      // HKObserverQueryCompletionHandler blocks
 static BOOL sEventWaiting = NO;             // data arrived before JS listened
 static __weak CgmBackground *sInstance = nil;
+
+@interface CgmBackground ()
++ (void)startQuery;
+@end
 
 @implementation CgmBackground
 {
@@ -76,21 +80,6 @@ RCT_EXPORT_MODULE();
 - (BOOL)hasListeners
 {
   return _hasListeners;
-}
-
-#pragma mark - Launch hook
-
-+ (void)load
-{
-  [[NSNotificationCenter defaultCenter]
-      addObserverForName:UIApplicationDidFinishLaunchingNotification
-                  object:nil
-                   queue:nil
-              usingBlock:^(__unused NSNotification *note) {
-                if ([[NSUserDefaults standardUserDefaults] boolForKey:kEnabledKey]) {
-                  [CgmBackground startQuery];
-                }
-              }];
 }
 
 #pragma mark - Observer
@@ -205,3 +194,24 @@ RCT_EXPORT_METHOD(finished)
 }
 
 @end
+
+#pragma mark - Launch hook
+
+// Runs when the app binary loads (before main). Not +load: RCT_EXPORT_MODULE()
+// already defines +load to register the module, and a second one does not compile.
+// Apple wants the observer query set up at every launch, so observe the end of
+// didFinishLaunching and start it then if the patient has connected.
+__attribute__((constructor)) static void CgmBackgroundInstallLaunchHook(void)
+{
+  @autoreleasepool {
+    [[NSNotificationCenter defaultCenter]
+        addObserverForName:UIApplicationDidFinishLaunchingNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(__unused NSNotification *note) {
+                  if ([[NSUserDefaults standardUserDefaults] boolForKey:kEnabledKey]) {
+                    [CgmBackground startQuery];
+                  }
+                }];
+  }
+}
