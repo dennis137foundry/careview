@@ -27,7 +27,7 @@ import type { RootState, AppDispatch } from "../../redux/store";
 import { BTN } from "../../constants/buttons";
 
 const PHOTO_KEY = "careview_profile_photo";
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "2.5";
 
 const formatPhone = (phone: string) => {
   if (!phone) return "Not Available";

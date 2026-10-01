@@ -321,7 +321,7 @@
 				CODE_SIGN_ENTITLEMENTS = cvdemo/cvdemo.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 3VN4ZKZSLL;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = cvdemo/Info.plist;
@@ -331,7 +331,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.5;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
@@ -361,7 +361,7 @@
 				CODE_SIGN_ENTITLEMENTS = cvdemo/cvdemo.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 14;
+				CURRENT_PROJECT_VERSION = 15;
 				DEVELOPMENT_TEAM = 3VN4ZKZSLL;
 				INFOPLIST_FILE = cvdemo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = CareView;
@@ -370,7 +370,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.4;
+				MARKETING_VERSION = 2.5;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-ObjC",
