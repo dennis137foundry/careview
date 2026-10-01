@@ -40,8 +40,14 @@ export interface HealthSource {
 // ---------------------------------------------------------------------------
 
 function appleHealth(): HealthSource {
-  // Required lazily: the module does not exist in the Android build.
-  const AppleHealthKit = require("react-native-health").default;
+  // Required lazily: the module does not exist in the Android build. It is a
+  // CommonJS export (module.exports = HealthKit), so there is no .default —
+  // reading .default crashed the Devices screen in the first 2.5 build.
+  const mod = require("react-native-health");
+  const AppleHealthKit = mod?.default ?? mod;
+  if (!AppleHealthKit || typeof AppleHealthKit.isAvailable !== "function" || !AppleHealthKit.Constants) {
+    throw new Error("Apple Health module is not linked");
+  }
   const permissions = {
     permissions: {
       read: [AppleHealthKit.Constants.Permissions.BloodGlucose],
@@ -199,11 +205,20 @@ function healthConnect(): HealthSource {
 
 let source: HealthSource | null = null;
 
-/** The phone's health store, or null on a platform without one. */
+/**
+ * The phone's health store, or null on a platform without one — or when its
+ * native module is missing or broken. Never throws: the Devices screen and app
+ * launch call it, and a throw there takes the screen down with it.
+ */
 export function getHealthSource(): HealthSource | null {
   if (source) return source;
-  if (Platform.OS === "ios") source = appleHealth();
-  else if (Platform.OS === "android") source = healthConnect();
+  try {
+    if (Platform.OS === "ios") source = appleHealth();
+    else if (Platform.OS === "android") source = healthConnect();
+  } catch (e) {
+    if (__DEV__) console.log("[CgmHealth] health store unavailable:", e);
+    source = null;
+  }
   return source;
 }
 

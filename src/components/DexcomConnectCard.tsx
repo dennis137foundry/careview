@@ -51,7 +51,11 @@ export default function DexcomConnectCard() {
 
   useEffect(() => {
     let alive = true;
-    source?.availability().then((a) => alive && setAvailability(a));
+    // A health store that cannot even answer hides the card; it never crashes the screen.
+    source
+      ?.availability()
+      .then((a) => alive && setAvailability(a))
+      .catch(() => alive && setAvailability("unsupported"));
     const off = onCgmStatus(setStatus);
     return () => {
       alive = false;
