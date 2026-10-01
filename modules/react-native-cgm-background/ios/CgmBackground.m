@@ -1,7 +1,11 @@
 //
 //  CgmBackground.m
 //
-//  HealthKit background delivery for blood glucose (Dexcom CGM, 2026-10).
+//  Apple Health (HealthKit) for Dexcom CGM, 2026-10: everything CareView does
+//  with HealthKit lives here — availability, the read permission, reading blood
+//  glucose samples, and background delivery. (The react-native-health library
+//  was dropped: written for the old React Native architecture, it never answered
+//  in the 2.5 iOS builds, which run the new one.)
 //
 //  The Dexcom app writes every sensor reading to Apple Health (~3 h late). An
 //  HKObserverQuery with background delivery makes iOS launch or resume CareView
@@ -34,6 +38,8 @@ static __weak CgmBackground *sInstance = nil;
 
 @interface CgmBackground ()
 + (void)startQuery;
++ (HKHealthStore *)store;
++ (HKQuantityType *)glucoseType;
 @end
 
 @implementation CgmBackground
@@ -82,6 +88,23 @@ RCT_EXPORT_MODULE();
   return _hasListeners;
 }
 
+#pragma mark - Store
+
++ (HKHealthStore *)store
+{
+  @synchronized ([CgmBackground class]) {
+    if (sStore == nil) {
+      sStore = [[HKHealthStore alloc] init];
+    }
+    return sStore;
+  }
+}
+
++ (HKQuantityType *)glucoseType
+{
+  return [HKObjectType quantityTypeForIdentifier:HKQuantityTypeIdentifierBloodGlucose];
+}
+
 #pragma mark - Observer
 
 + (void)startQuery
@@ -93,9 +116,7 @@ RCT_EXPORT_MODULE();
     if (sQuery != nil) {
       return;
     }
-    if (sStore == nil) {
-      sStore = [[HKHealthStore alloc] init];
-    }
+    [CgmBackground store];
     if (sPending == nil) {
       sPending = [NSMutableArray array];
     }
@@ -171,7 +192,92 @@ RCT_EXPORT_MODULE();
   }
 }
 
-#pragma mark - JS API
+#pragma mark - JS API: Apple Health
+
+/** Can this device use Apple Health at all (not on most iPads)? */
+RCT_EXPORT_METHOD(isAvailable:(RCTPromiseResolveBlock)resolve
+                  reject:(__unused RCTPromiseRejectBlock)reject)
+{
+  resolve(@([HKHealthStore isHealthDataAvailable]));
+}
+
+/**
+ * Show the Apple Health permission sheet for reading Blood Glucose (nothing is
+ * written). Resolves YES once the sheet was answered — iOS never reveals whether
+ * reading was allowed; a refused read simply returns no samples.
+ */
+RCT_EXPORT_METHOD(requestAccess:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+  if (![HKHealthStore isHealthDataAvailable]) {
+    resolve(@NO);
+    return;
+  }
+  [[CgmBackground store] requestAuthorizationToShareTypes:nil
+                                                readTypes:[NSSet setWithObject:[CgmBackground glucoseType]]
+                                               completion:^(BOOL success, NSError *error) {
+                                                 if (error != nil) {
+                                                   reject(@"healthkit_auth", error.localizedDescription, error);
+                                                   return;
+                                                 }
+                                                 resolve(@(success));
+                                               }];
+}
+
+/**
+ * Blood glucose samples between two times (epoch ms), oldest first, in mg/dL:
+ * [{ id, value, ts, sourceId, sourceName }] — the source is the app that wrote
+ * the sample (com.dexcom.* for the Dexcom app); JS keeps only Dexcom's.
+ */
+RCT_EXPORT_METHOD(readGlucose:(double)startMs
+                  endMs:(double)endMs
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+  if (![HKHealthStore isHealthDataAvailable]) {
+    resolve(@[]);
+    return;
+  }
+  NSDate *start = [NSDate dateWithTimeIntervalSince1970:startMs / 1000.0];
+  NSDate *end = [NSDate dateWithTimeIntervalSince1970:endMs / 1000.0];
+  NSPredicate *predicate = [HKQuery predicateForSamplesWithStartDate:start
+                                                             endDate:end
+                                                             options:HKQueryOptionNone];
+  NSSortDescriptor *oldestFirst = [NSSortDescriptor sortDescriptorWithKey:HKSampleSortIdentifierStartDate
+                                                                ascending:YES];
+  HKUnit *mgdl = [HKUnit unitFromString:@"mg/dL"];
+
+  HKSampleQuery *query = [[HKSampleQuery alloc]
+      initWithSampleType:[CgmBackground glucoseType]
+               predicate:predicate
+                   limit:HKObjectQueryNoLimit
+         sortDescriptors:@[ oldestFirst ]
+          resultsHandler:^(__unused HKSampleQuery *q, NSArray<__kindof HKSample *> *results, NSError *error) {
+            if (error != nil) {
+              reject(@"healthkit_read", error.localizedDescription, error);
+              return;
+            }
+            NSMutableArray *out = [NSMutableArray arrayWithCapacity:results.count];
+            for (HKSample *sample in results) {
+              if (![sample isKindOfClass:[HKQuantitySample class]]) {
+                continue;
+              }
+              HKQuantitySample *qs = (HKQuantitySample *)sample;
+              HKSource *source = qs.sourceRevision.source;
+              [out addObject:@{
+                @"id" : qs.UUID.UUIDString,
+                @"value" : @([qs.quantity doubleValueForUnit:mgdl]),
+                @"ts" : @(qs.startDate.timeIntervalSince1970 * 1000.0),
+                @"sourceId" : source.bundleIdentifier ?: @"",
+                @"sourceName" : source.name ?: @"",
+              }];
+            }
+            resolve(out);
+          }];
+  [[CgmBackground store] executeQuery:query];
+}
+
+#pragma mark - JS API: background delivery
 
 /** After Connect: observe from now on and at every future launch. */
 RCT_EXPORT_METHOD(enable)

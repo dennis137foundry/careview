@@ -1,59 +1,56 @@
 /**
- * The 2.5 TestFlight build crashed on the Devices screen: react-native-health is
- * a CommonJS export (module.exports = HealthKit) and the code read `.default`.
- * These load cgmHealthSource with the module shaped as it really ships.
+ * iPhone health source: our own CgmBackground native module (HealthKit).
+ * History: 2.5 build 15 crashed on the Devices screen (react-native-health read
+ * as `.default`); build 16 showed no Dexcom card (that library never answered
+ * under the new architecture). Both libraries' problems are gone; these load
+ * cgmHealthSource against the native module's real method shapes.
  */
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 
-const glucoseSample = {
+const sample = {
   id: "8F2C-UUID",
   value: 131,
+  ts: 1790877900000,
   sourceId: "com.dexcom.G7",
   sourceName: "Dexcom G7",
-  startDate: "2026-10-01T14:05:00.000-0400",
-  endDate: "2026-10-01T14:05:00.000-0400",
 };
 
-function loadWith(healthKitModule: unknown) {
+function loadWith(nativeModule: unknown) {
   jest.resetModules();
-  jest.doMock("react-native-health", () => healthKitModule);
   Object.defineProperty(Platform, "OS", { get: () => "ios", configurable: true });
+  (NativeModules as any).CgmBackground = nativeModule;
   return require("../src/services/cgm/cgmHealthSource") as typeof import("../src/services/cgm/cgmHealthSource");
 }
 
-const realShape = {
-  // module.exports = HealthKit — no `default`
-  Constants: { Permissions: { BloodGlucose: "BloodGlucose" } },
-  isAvailable: (cb: (e: unknown, ok: boolean) => void) => cb(null, true),
-  initHealthKit: (_p: unknown, cb: (e: string | null) => void) => cb(null),
-  getBloodGlucoseSamples: (_o: unknown, cb: (e: string | null, r: unknown[]) => void) => cb(null, [glucoseSample]),
+const native = {
+  isAvailable: jest.fn(async () => true),
+  requestAccess: jest.fn(async () => true),
+  readGlucose: jest.fn(async (_s: number, _e: number) => [sample]),
+  enable: jest.fn(),
+  disable: jest.fn(),
+  finished: jest.fn(),
 };
 
-describe("cgmHealthSource on iPhone", () => {
-  it("works with react-native-health's CommonJS export (the 2.5 crash)", async () => {
-    const { getHealthSource } = loadWith(realShape);
+describe("cgmHealthSource on iPhone (CgmBackground native module)", () => {
+  it("reports Apple Health available, asks for access and reads samples as returned", async () => {
+    const { getHealthSource } = loadWith(native);
     const source = getHealthSource();
     expect(source?.name).toBe("Apple Health");
     await expect(source!.availability()).resolves.toBe("available");
-    await expect(source!.read(0, Date.now())).resolves.toEqual([
-      {
-        id: "8F2C-UUID",
-        value: 131,
-        ts: Date.parse(glucoseSample.startDate),
-        sourceId: "com.dexcom.G7",
-        sourceName: "Dexcom G7",
-      },
-    ]);
+    await expect(source!.requestAccess()).resolves.toBe(true);
+    await expect(source!.read(1000, 2000)).resolves.toEqual([sample]);
+    expect(native.readGlucose).toHaveBeenCalledWith(1000, 2000);
   });
 
-  it("also accepts an ES-module default export", () => {
-    const { getHealthSource } = loadWith({ __esModule: true, default: realShape });
-    expect(getHealthSource()?.name).toBe("Apple Health");
+  it("says unsupported where HealthKit is not available (most iPads)", async () => {
+    const { getHealthSource } = loadWith({ ...native, isAvailable: async () => false });
+    await expect(getHealthSource()!.availability()).resolves.toBe("unsupported");
   });
 
-  it("never throws when the native module is missing — the card just hides", () => {
-    const { getHealthSource } = loadWith({ Constants: undefined });
+  it("never throws when the native module is missing; the card shows the reason", () => {
+    const { getHealthSource, healthSourceProblem } = loadWith(undefined);
     expect(() => getHealthSource()).not.toThrow();
     expect(getHealthSource()).toBeNull();
+    expect(healthSourceProblem()).toMatch(/not found in this build/);
   });
 });

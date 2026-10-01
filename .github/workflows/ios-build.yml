@@ -1,0 +1,61 @@
+# Builds the iOS app from a FRESH checkout on a GitHub macOS runner, exactly as a
+# new clone would: npm ci -> pod install -> xcodebuild Release for a real iPhone
+# (unsigned; nothing is uploaded). Proves the branch compiles and links with no
+# hand edits in Xcode. Runs on every push to feature branches and on demand.
+name: iOS build check
+
+on:
+  push:
+    branches: ["feature/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: npm ci
+        run: npm ci
+
+      - name: JS tests
+        run: npx jest
+
+      - name: pod install
+        working-directory: ios
+        run: pod install
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Build (Release, iPhone, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace ios/cvdemo.xcworkspace \
+            -scheme cvdemo \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > build.log 2>&1 || {
+              echo "::error::xcodebuild failed — errors:";
+              grep -E "error:|Undefined symbol|ld: |\*\* BUILD FAILED" build.log | head -60;
+              tail -80 build.log;
+              exit 1;
+            }
+          grep -E "\*\* BUILD SUCCEEDED" build.log
+
+      - name: Podfile.lock after pod install
+        if: always()
+        run: git diff --stat ios/Podfile.lock || true

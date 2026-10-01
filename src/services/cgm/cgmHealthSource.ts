@@ -1,7 +1,7 @@
 /**
  * cgmHealthSource.ts — reads glucose samples from the phone's health store.
  *
- * iPhone: Apple Health (HealthKit) via react-native-health. iOS never says
+ * iPhone: Apple Health (HealthKit) via our CgmBackground native module. iOS never says
  *   whether READ permission was granted (privacy): a denied read simply returns
  *   no samples. So "connected" is remembered locally once the permission sheet
  *   has been answered, and "no Dexcom readings found" is shown when none arrive.
@@ -12,7 +12,7 @@
  * Every sample is returned with the app that wrote it; cgmLogic keeps only the
  * Dexcom ones.
  */
-import { Linking, Platform } from "react-native";
+import { Linking, NativeModules, Platform } from "react-native";
 import type { CgmSample } from "./cgmLogic";
 
 export type HealthAvailability =
@@ -40,69 +40,34 @@ export interface HealthSource {
 // ---------------------------------------------------------------------------
 
 function appleHealth(): HealthSource {
-  // Required lazily: the module does not exist in the Android build. It is a
-  // CommonJS export (module.exports = HealthKit), so there is no .default —
-  // reading .default crashed the Devices screen in the first 2.5 build.
-  const mod = require("react-native-health");
-  const AppleHealthKit = mod?.default ?? mod;
-  if (!AppleHealthKit || typeof AppleHealthKit.isAvailable !== "function" || !AppleHealthKit.Constants) {
-    // NativeModules.AppleHealthKit is missing: the RNAppleHealthKit pod is not in this build
+  // Our own native module (modules/react-native-cgm-background, CgmBackground.m):
+  // availability, the read permission and the glucose query are a few lines of
+  // HealthKit there. react-native-health was dropped — written for the old React
+  // Native architecture, it never answered in the 2.5 iOS builds (new arch).
+  const native = NativeModules.CgmBackground as
+    | {
+        isAvailable(): Promise<boolean>;
+        requestAccess(): Promise<boolean>;
+        readGlucose(startMs: number, endMs: number): Promise<CgmSample[]>;
+      }
+    | undefined;
+  if (!native || typeof native.readGlucose !== "function") {
     throw new Error("Apple Health module not found in this build (run pod install)");
   }
-  const permissions = {
-    permissions: {
-      read: [AppleHealthKit.Constants.Permissions.BloodGlucose],
-      write: [],
-    },
-  };
 
   return {
     name: "Apple Health",
-    availability: () =>
-      new Promise((resolve) =>
-        AppleHealthKit.isAvailable((_err: unknown, ok: boolean) =>
-          resolve(ok ? "available" : "unsupported")
-        )
-      ),
-    requestAccess: () =>
-      new Promise((resolve) =>
-        AppleHealthKit.initHealthKit(permissions, (err: string) => resolve(!err))
-      ),
+    availability: async () => ((await native.isAvailable()) ? "available" : "unsupported"),
+    requestAccess: async () => !!(await native.requestAccess()),
     hasAccess: async () => null,
-    read: (startMs, endMs) =>
-      new Promise((resolve, reject) => {
-        // initHealthKit is a no-op sheet-wise once answered, but must run in
-        // every app session before a query.
-        AppleHealthKit.initHealthKit(permissions, (initErr: string) => {
-          if (initErr) {
-            reject(new Error(String(initErr)));
-            return;
-          }
-          AppleHealthKit.getBloodGlucoseSamples(
-            {
-              startDate: new Date(startMs).toISOString(),
-              endDate: new Date(endMs).toISOString(),
-              ascending: true,
-              unit: "mgPerdL",
-            },
-            (err: string, results: any[]) => {
-              if (err) {
-                reject(new Error(String(err)));
-                return;
-              }
-              resolve(
-                (results ?? []).map((r) => ({
-                  id: String(r.id ?? ""),
-                  value: Number(r.value),
-                  ts: Date.parse(r.startDate),
-                  sourceId: String(r.sourceId ?? ""),
-                  sourceName: String(r.sourceName ?? ""),
-                }))
-              );
-            }
-          );
-        });
-      }),
+    read: async (startMs, endMs) =>
+      ((await native.readGlucose(startMs, endMs)) ?? []).map((r) => ({
+        id: String(r.id ?? ""),
+        value: Number(r.value),
+        ts: Number(r.ts),
+        sourceId: String(r.sourceId ?? ""),
+        sourceName: String(r.sourceName ?? ""),
+      })),
     openSettings: () => {
       Linking.openURL("x-apple-health://").catch(() => Linking.openSettings());
     },

@@ -1,7 +1,7 @@
 {
   "name": "react-native-cgm-background",
   "version": "1.0.0",
-  "description": "iOS only: HealthKit background delivery of blood glucose (Dexcom CGM) for CareView. Linked from ios/Podfile; JS uses NativeModules.CgmBackground (src/services/cgm/cgmBackground.ts).",
+  "description": "iOS only: CareView's Apple Health (HealthKit) module for Dexcom CGM — availability, read permission, glucose query, background delivery. Linked from ios/Podfile; JS uses NativeModules.CgmBackground (src/services/cgm/cgmBackground.ts).",
   "license": "MIT",
   "private": true
 }
