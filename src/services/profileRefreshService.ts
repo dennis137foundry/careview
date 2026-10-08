@@ -22,7 +22,10 @@
 
 import { authedFetch } from "./authToken";
 import { isDemoAccount } from "./seedDemoData";
-import { setEdd, setThresholds } from "../redux/userSlice";
+import { setEdd, setThresholds, setUrineProteinRequired } from "../redux/userSlice";
+import { urineRequiredFromServer } from "./urineProteinLogic";
+import { getLastScreeningResponse } from "./sqliteService";
+import { cancelUrineReminders, scheduleUrineReminders } from "./urineReminderService";
 import type { AppDispatch, RootState } from "../redux/store";
 import { thresholdsFromServer, type VitalThresholds } from "../utils/thresholdLogic";
 
@@ -33,6 +36,8 @@ export interface ProfileRefreshResult {
   /** "YYYY-MM-DD" or null when the EMR has no pregnancy row / EDD. */
   edd: string | null;
   thresholds: VitalThresholds;
+  /** Whether the EMR asks this patient for urine protein (hypertension only). */
+  urineProteinRequired: boolean;
 }
 
 /**
@@ -46,7 +51,8 @@ export interface ProfileRefreshResult {
  */
 export async function fetchProfile(
   current: VitalThresholds,
-  phone?: string
+  phone?: string,
+  currentUrineRequired: boolean = true
 ): Promise<ProfileRefreshResult | null> {
   try {
     if (phone && isDemoAccount(phone)) {
@@ -72,6 +78,7 @@ export async function fetchProfile(
     return {
       edd: data.edd ?? null,
       thresholds: thresholdsFromServer(data, current),
+      urineProteinRequired: urineRequiredFromServer(data, currentUrineRequired),
     };
   } catch (e) {
     console.warn("[ProfileRefresh] Failed:", e);
@@ -91,11 +98,23 @@ export async function refreshProfile(
   const { user } = getState();
   if (!user.isAuthenticated) return;
 
-  const result = await fetchProfile(user.thresholds, user.phone);
+  const result = await fetchProfile(user.thresholds, user.phone, user.urineProteinRequired);
   if (!result) return;
 
   if (result.edd) {
     dispatch(setEdd({ edd: result.edd, source: "emr" }));
   }
   dispatch(setThresholds(result.thresholds));
+
+  // Urine protein switched on or off in the EMR (e.g. the patient's Type of
+  // Service changed): apply it, and start or stop the reminder series.
+  if (result.urineProteinRequired !== user.urineProteinRequired) {
+    dispatch(setUrineProteinRequired(result.urineProteinRequired));
+    if (result.urineProteinRequired) {
+      const last = getLastScreeningResponse("urine_protein_result");
+      scheduleUrineReminders(last ? last.timestamp : Date.now());
+    } else {
+      cancelUrineReminders();
+    }
+  }
 }

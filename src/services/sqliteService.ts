@@ -79,6 +79,15 @@ export function initDB() {
   } catch (e) {
     // Column already exists
   }
+  // Migration (app 2.5): whether the EMR asks this patient for urine protein
+  // (hypertension patients only). NULL = the EMR has not said yet, which keeps
+  // asking, as every version before 2.5 did. See urineRequiredFromStored().
+  try {
+    db.execute("ALTER TABLE user ADD COLUMN urineProteinRequired INTEGER DEFAULT NULL;");
+    console.log("[DB] Added 'urineProteinRequired' column to user");
+  } catch (e) {
+    // Column already exists
+  }
 
   // Create devices table with all columns including friendlyName, source,
   // EMR inventory-unit IDs, and cuff size (BP only).
@@ -367,6 +376,9 @@ export interface LocalUser {
   // clinician-verified EDD always overwrites a patient-entered one.
   edd?: string | null;
   eddSource?: EddSource | null;
+  // Whether the EMR asks this patient for urine protein (1/0); NULL = not
+  // known yet (asked). Read through urineRequiredFromStored().
+  urineProteinRequired?: number | boolean | null;
 }
 
 export type EddSource = "emr" | "patient";
@@ -378,8 +390,8 @@ export function saveUser(u: LocalUser) {
   db.execute("DELETE FROM user;");
   db.execute(
     `INSERT INTO user
-     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, glucoseHigh, authToken, refreshToken, edd, eddSource)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+     (patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, glucoseHigh, authToken, refreshToken, edd, eddSource, urineProteinRequired)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
     [
       u.patientId,
       u.firstName,
@@ -395,6 +407,9 @@ export function saveUser(u: LocalUser) {
       u.refreshToken ?? null,
       u.edd ?? null,
       u.eddSource ?? null,
+      u.urineProteinRequired === null || u.urineProteinRequired === undefined
+        ? null
+        : u.urineProteinRequired ? 1 : 0,
     ]
   );
   // Patient ID — dev only.
@@ -440,6 +455,29 @@ export function updateUserThresholds(t: VitalThresholds) {
   }
 }
 
+/**
+ * Store whether the EMR asks this patient for urine protein. Targeted UPDATE
+ * so tokens/thresholds/EDD are untouched. Throws on failure.
+ */
+export function updateUserUrineRequired(required: boolean) {
+  db.execute("UPDATE user SET urineProteinRequired = ?;", [required ? 1 : 0]);
+}
+
+/**
+ * The stored urine flag for code outside React (urine snapshot, reminders).
+ * No user row or no answer from the EMR yet = asked (true).
+ */
+export function getStoredUrineRequired(): boolean {
+  try {
+    const res = db.execute("SELECT urineProteinRequired FROM user LIMIT 1;");
+    if (!res.rows || res.rows.length === 0) return true;
+    const v = res.rows.item(0).urineProteinRequired;
+    return v === null || v === undefined ? true : Boolean(Number(v));
+  } catch {
+    return true;
+  }
+}
+
 export function clearUser() {
   try {
     db.execute("DELETE FROM user;");
@@ -452,7 +490,7 @@ export function clearUser() {
 export async function getUser(): Promise<LocalUser | null> {
   try {
     const res = db.execute(
-      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, glucoseHigh, authToken, refreshToken, edd, eddSource FROM user LIMIT 1;"
+      "SELECT patientId, firstName, lastName, phone, providerFirstName, providerLastName, providerPracticeName, systolicHigh, diastolicHigh, glucoseHigh, authToken, refreshToken, edd, eddSource, urineProteinRequired FROM user LIMIT 1;"
     );
     if (!res.rows || res.rows.length === 0) return null;
 

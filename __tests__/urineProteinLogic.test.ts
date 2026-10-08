@@ -8,6 +8,8 @@ import {
   shiftOutOfQuietHours,
   UNABLE_GRACE_MS,
   URINE_INTERVAL_MS,
+  urineRequiredFromServer,
+  urineRequiredFromStored,
 } from "../src/services/urineProteinLogic";
 
 const HOUR = 60 * 60 * 1000;
@@ -168,5 +170,41 @@ describe("describeRelative", () => {
     expect(describeRelative(now - 3 * HOUR, now)).toBe("3 hours ago");
     expect(describeRelative(now - 30 * HOUR, now)).toBe("yesterday");
     expect(describeRelative(now - 3 * 24 * HOUR, now)).toBe("3 days ago");
+  });
+});
+
+describe("urine protein only for patients the EMR asks (hypertension)", () => {
+  const now = Date.UTC(2026, 9, 8, 12, 0, 0);
+
+  it("is never owed or held when not required, even with nothing recorded", () => {
+    const s = computeUrineStatus({
+      lastResultAt: null,
+      lastUnableAt: null,
+      now,
+      loginSession: false,
+      required: false,
+    });
+    expect(s).toEqual({ owed: false, holdActive: false, graceUntil: null, dueAt: null });
+  });
+
+  it("keeps the 72h rule when required, and when the flag is omitted", () => {
+    const base = { lastResultAt: now - 73 * HOUR, lastUnableAt: null, now, loginSession: false };
+    expect(computeUrineStatus({ ...base, required: true }).holdActive).toBe(true);
+    expect(computeUrineStatus(base).holdActive).toBe(true);
+  });
+
+  it("reads the EMR's flag, and keeps the current value when the EMR does not send one", () => {
+    expect(urineRequiredFromServer({ urineProteinRequired: false }, true)).toBe(false);
+    expect(urineRequiredFromServer({ urineProteinRequired: true }, false)).toBe(true);
+    expect(urineRequiredFromServer({}, false)).toBe(false);
+    expect(urineRequiredFromServer({ urineProteinRequired: "no" }, true)).toBe(true);
+    expect(urineRequiredFromServer(null, true)).toBe(true);
+  });
+
+  it("treats a stored NULL (EMR has not answered yet) as asked", () => {
+    expect(urineRequiredFromStored(null)).toBe(true);
+    expect(urineRequiredFromStored(undefined)).toBe(true);
+    expect(urineRequiredFromStored(0)).toBe(false);
+    expect(urineRequiredFromStored(1)).toBe(true);
   });
 });

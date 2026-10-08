@@ -476,7 +476,11 @@ class GenericBleController(
             // is never missed, then the clock, then the identity reads.
             enableIndications(g)
 
-            if (bondingAddress == g.device?.address) {
+            // Pairing AND every capture (armed) connection, 2026-10-08: a battery
+            // change resets the monitor's clock, and readings came in undated until
+            // the next pairing. Stored records keep their own stamps.
+            val addr = g.device?.address
+            if (addr != null && (bondingAddress == addr || armedAddress == addr)) {
                 writeDeviceTime(g)
             }
 
@@ -591,7 +595,7 @@ class GenericBleController(
      * whose clock was never set omits the timestamp from every measurement, and
      * pulse shifts down the packet accordingly. Since CareView collects readings
      * after the fact, an undated reading would be stamped with collection time.
-     * So this is written once, during pairing.
+     * So this is written during pairing and on every capture connection.
      */
     @SuppressLint("MissingPermission")
     private fun writeDeviceTime(g: BluetoothGatt) {

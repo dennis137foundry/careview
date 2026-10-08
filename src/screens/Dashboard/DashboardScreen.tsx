@@ -82,6 +82,8 @@ export default function DashboardScreen() {
   const readings = useSelector((state: RootState) => state.readings.items);
   const user = useSelector((state: RootState) => state.user);
   const thresholds = useSelector((state: RootState) => state.user.thresholds);
+  // Urine protein is asked of hypertension patients only (the EMR decides).
+  const urineRequired = useSelector((state: RootState) => state.user.urineProteinRequired);
 
   const [, setIsFirstLaunch] = useState<boolean>(false);
 
@@ -115,9 +117,11 @@ export default function DashboardScreen() {
     }
   }, []);
 
+  // Re-created when the EMR's urine answer changes, so the tile, bell and
+  // hold follow a change made in the EMR as soon as the profile refresh lands.
   const refreshUrine = useCallback(() => {
     setUrine(getUrineProteinSnapshot());
-  }, []);
+  }, [urineRequired]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!isFocused) return;
@@ -140,6 +144,7 @@ export default function DashboardScreen() {
   // two alerts at once means one of them is lost.
   useEffect(() => {
     if (!isFocused || !urine || urine.status.holdActive) return;
+    if (!urine.required) return; // not asked for urine protein: no reminders to allow
     if (isLoginSession()) return;
     if (permissionPromptShown.current || wasNotificationPermissionAsked()) return;
     permissionPromptShown.current = true;
@@ -410,6 +415,7 @@ export default function DashboardScreen() {
             by the hold) then health events. Full-width cards, stacked; text
             on the left, the action on the right. */}
         <View style={styles.checkinStack}>
+          {(urine ? urine.required : urineRequired) && (
           <View style={[styles.checkinCard, urineOwed && styles.checkinCardDue]}>
             <View style={styles.checkinBody}>
               <View style={styles.checkinHeader}>
@@ -455,6 +461,7 @@ export default function DashboardScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+          )}
 
           <View style={styles.checkinCard}>
             <View style={styles.checkinBody}>

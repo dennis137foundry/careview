@@ -4,6 +4,7 @@ import {
   clearUser,
   updateUserEdd,
   updateUserThresholds,
+  updateUserUrineRequired,
   LocalUser,
   EddSource,
 } from "../services/sqliteService";
@@ -12,6 +13,7 @@ import {
   thresholdsFromStored,
   type VitalThresholds,
 } from "../utils/thresholdLogic";
+import { urineRequiredFromStored } from "../services/urineProteinLogic";
 
 // ----------------------------------
 // State type definition
@@ -39,6 +41,10 @@ interface UserState {
   // her provider's → system default, per number). Written at login and by
   // every profile refresh; mirrored to SQLite. Never edited on the phone.
   thresholds: VitalThresholds;
+
+  // Whether the EMR asks this patient for urine protein (hypertension
+  // patients only). True until the EMR says otherwise. Mirrored to SQLite.
+  urineProteinRequired: boolean;
 }
 
 // ----------------------------------
@@ -50,6 +56,7 @@ const initialState: UserState = {
   // Placeholder until loadUser() restores the stored values; nothing is
   // judged before a user exists.
   thresholds: EMR_DEFAULT_THRESHOLDS,
+  urineProteinRequired: true,
 };
 
 // ----------------------------------
@@ -90,6 +97,7 @@ const userSlice = createSlice({
 
       // Thresholds from the login response (already saved to SQLite by authService)
       state.thresholds = thresholdsFromStored(u);
+      state.urineProteinRequired = urineRequiredFromStored(u.urineProteinRequired);
     },
 
     // --- Manual override if needed ---
@@ -109,6 +117,7 @@ const userSlice = createSlice({
       state.loading = false;
 
       state.thresholds = thresholdsFromStored(u);
+      state.urineProteinRequired = urineRequiredFromStored(u.urineProteinRequired);
     },
 
     // --- Thresholds from a profile refresh (persists to SQLite too).
@@ -135,6 +144,18 @@ const userSlice = createSlice({
       } catch (e) {
         console.error("[User] Failed to persist thresholds:", e);
       }
+    },
+
+    // --- Urine protein asked or not, from a profile refresh (persists too).
+    setUrineProteinRequired: (state, action: PayloadAction<boolean>) => {
+      if (state.urineProteinRequired === action.payload) return;
+      try {
+        updateUserUrineRequired(action.payload);
+      } catch (e) {
+        console.error("[User] Failed to persist urine flag:", e);
+        return; // Don't let Redux and SQLite disagree
+      }
+      state.urineProteinRequired = action.payload;
     },
 
     // --- Set/replace the due date (persists to SQLite too).
@@ -178,6 +199,7 @@ const userSlice = createSlice({
       state.eddSource = null;
       state.loading = false;
       state.thresholds = EMR_DEFAULT_THRESHOLDS;
+      state.urineProteinRequired = true;
     },
   },
 
@@ -201,6 +223,7 @@ const userSlice = createSlice({
         // Restore the last thresholds the EMR sent (a 2.3 row has no
         // glucoseHigh yet; the launch-time refresh fills it in).
         state.thresholds = thresholdsFromStored(u);
+        state.urineProteinRequired = urineRequiredFromStored(u.urineProteinRequired);
       }
 
       state.loading = false;
@@ -217,5 +240,5 @@ const userSlice = createSlice({
 // ----------------------------------
 // Exports
 // ----------------------------------
-export const { login, logout, setUser, setThresholds, setEdd } = userSlice.actions;
+export const { login, logout, setUser, setThresholds, setEdd, setUrineProteinRequired } = userSlice.actions;
 export default userSlice.reducer;

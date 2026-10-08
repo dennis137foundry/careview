@@ -236,6 +236,14 @@ const authService = {
         refreshToken: data.refreshToken ?? null,
         edd: data.patient?.edd ?? null,
         eddSource: data.patient?.edd ? "emr" : null,
+        // Urine protein is asked of hypertension patients only (EMR decides).
+        // The App Review demo account always keeps it. An EMR older than
+        // 2026-10-08 sends nothing: NULL = asked, as before.
+        urineProteinRequired: isDemoAccount(phone)
+          ? true
+          : typeof data.urineProteinRequired === "boolean"
+            ? data.urineProteinRequired
+            : null,
       };
 
       // ---------------------------------------------------------------

@@ -51,7 +51,12 @@ import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { addReadingAndPersist } from "../../redux/readingSlice";
 import { setDeviceBattery } from "../../redux/deviceSlice";
 import { syncPendingReadings } from "../../services/vitalsSyncService";
-import { hasDailyHealthCheckToday, readingExists } from "../../services/sqliteService";
+import {
+  getAppSetting,
+  hasDailyHealthCheckToday,
+  readingExists,
+  setAppSetting,
+} from "../../services/sqliteService";
 import type { DeviceRecord } from "../../services/sqliteService";
 import type { RootState, AppDispatch } from "../../redux/store";
 import { refreshProfile } from "../../services/profileRefreshService";
@@ -105,6 +110,13 @@ function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
  * from the device timestamp means a repeat lands on an id we already hold and
  * is skipped — no duplicate row, no redundant EMR round-trip. Same approach the
  * BG5S path uses for its stored records.
+ *
+ * `deviceId` is the monitor's HARDWARE address (System ID 2A23 → hardwareMac;
+ * see hardwareIdentity). Until 2026-10-08 it was the local device row id,
+ * which on iOS comes from the per-install CoreBluetooth identifier — so after a
+ * reinstall every stored record got a new id and was sent again. The EMR keeps
+ * these ids unique per patient (patient_vitals.app_reading_id), so the same
+ * measurement can never be stored twice, from one phone or after a reinstall.
  */
 function buildBleReadingId(
   deviceId: string,
@@ -129,6 +141,33 @@ function buildBleReadingId(
   // smaller harm than accumulating phantom readings in a chart, and the case is
   // rare — pairing writes the clock, so only records predating it land here.
   return `ble_${device}_nots_${values.systolic}_${values.diastolic}_${values.pulse}`;
+}
+
+/** Hardware identity for reading ids: the real MAC when known, never per-install. */
+function hardwareIdentity(device: { hardwareMac?: string | null; mac?: string } | undefined): string {
+  const raw = device?.hardwareMac || device?.mac || "";
+  return raw.replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+}
+
+/** Undated records the patient already said "No" to (never asked twice). */
+const UNDATED_SKIPPED_KEY = "ble_undated_skipped_ids";
+function undatedSkipped(): string[] {
+  try {
+    const raw = getAppSetting(UNDATED_SKIPPED_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function rememberUndatedSkipped(id: string): void {
+  try {
+    const list = undatedSkipped().filter((x) => x !== id);
+    list.push(id);
+    setAppSetting(UNDATED_SKIPPED_KEY, JSON.stringify(list.slice(-200)));
+  } catch {
+    // Best effort: worst case the patient is asked again next time.
+  }
 }
 
 /**
@@ -172,6 +211,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   // keyed on it would re-run — cleanup first — disarming mid-measurement.
   const deviceDbId = device?.id;
   const deviceMac = device?.mac;
+  const deviceIdentity = hardwareIdentity(device);
   // Both tab stacks can hold a capture screen; only the one in front acts
   // on native events.
   const isFocused = useIsFocused();
@@ -378,6 +418,32 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     }
   }, [log]);
 
+  // One question at a time: a monitor can hand over several undated records in
+  // one batch, and stacked alerts lose answers on Android.
+  const undatedQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const confirmUndated = useCallback(
+    (systolic: number, diastolic: number, pulse: number): Promise<boolean> => {
+      const ask = () =>
+        new Promise<boolean>((resolve) => {
+          Alert.alert(
+            "Reading without a date",
+            `The monitor sent ${systolic}/${diastolic}` +
+              (pulse ? `, pulse ${pulse}` : "") +
+              ", but it has no date (the monitor's clock was not set when it was taken).\n\nDid you take this reading just now?",
+            [
+              { text: "No, skip it", style: "cancel", onPress: () => resolve(false) },
+              { text: "Yes, just now", onPress: () => resolve(true) },
+            ],
+            { cancelable: false }
+          );
+        });
+      const next = undatedQueueRef.current.then(ask, ask);
+      undatedQueueRef.current = next;
+      return next;
+    },
+    []
+  );
+
   const saveReading = useCallback(
     async (data: any) => {
       const systolic = Number(data?.systolic);
@@ -395,15 +461,15 @@ export default function BleCaptureScreen({ route, navigation }: any) {
         return;
       }
 
-      // measuredAt is the monitor's own clock, set during pairing. It is 0 on a
-      // monitor whose clock was never written — including factory-test records
-      // that predate pairing.
+      // measuredAt is the monitor's own clock, written at pairing and on every
+      // capture connection. It is 0 for a record taken while the clock was
+      // unset — factory-test records, or the first reading after a battery
+      // change.
       const hasDeviceTime =
         typeof data?.measuredAt === "number" && data.measuredAt > 0;
-      const measuredAt = hasDeviceTime ? data.measuredAt : Date.now();
 
       const readingId = buildBleReadingId(
-        deviceDbId || "",
+        deviceIdentity || deviceDbId || "",
         hasDeviceTime ? data.measuredAt : null,
         { systolic, diastolic, pulse }
       );
@@ -416,6 +482,27 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
+      }
+
+      // A record with no date is never stamped "now" on its own: that turned an
+      // old stored record into a phantom reading at sync time (A&D, 2026-09).
+      // The patient decides — it may be the reading she just took after a
+      // battery change. "No" is remembered so the same record is not asked
+      // about again when the monitor re-sends its memory.
+      let measuredAt: number = hasDeviceTime ? data.measuredAt : 0;
+      if (!hasDeviceTime) {
+        if (undatedSkipped().includes(readingId)) {
+          log(`Undated record ${readingId} was declined before — skipping`);
+          return;
+        }
+        const tookItNow = await confirmUndated(systolic, diastolic, pulse);
+        if (!tookItNow) {
+          rememberUndatedSkipped(readingId);
+          log(`Undated record ${readingId} declined by the patient`);
+          return;
+        }
+        if (readingExists(readingId)) return; // saved while the question was open
+        measuredAt = Date.now();
       }
 
       const high = isBPHigh(systolic, diastolic);
@@ -464,6 +551,8 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     },
     [
       deviceDbId,
+      deviceIdentity,
+      confirmUndated,
       device,
       dispatch,
       disarm,

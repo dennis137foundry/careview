@@ -1,4 +1,4 @@
-﻿# Trinity CareView - Project Documentation
+# Trinity CareView - Project Documentation
 
 ## Overview
 
@@ -224,7 +224,8 @@ onDebugLog          → { message }
 - Out of the box (and after a dead battery) the meter's clock runs from 2017-01-01. It flags readings taken on the unset clock (`canCorrect=true` on both platforms — Android maps the SDK's DATA_TIME_PROOF straight to it; true = needs correcting, verified against the SDK's own adjustOfflineData); App.tsx stores `clockOffsetMs = phone − meter` whenever the clock is found off, and `datedBGTimestamp` adds it to flagged readings. No pairing order is required of the patient
 - Server backstop: `vitals_sync.php` rejects readings dated before the patient's enrollment or in the future
 - Time frames: the meter reports its status time and its record times as `"yyyy-MM-dd HH:mm:ss"` in **UTC** — Android parses both as GMT (parsing one in local time would shift every corrected reading by the phone's UTC offset). iOS gets `NSDate`s from the SDK and also emits epoch-ms `timestamp`. A reading whose time cannot be read is **undatable**: it is left on the meter, never dated by import time, and the reading id never falls back to `Date.now()`
-- Only the BG5S's memory is ever read. iHealth BP monitors and scales are live and phone-stamped; the A&D GATT cuff writes its clock at pairing and its readings carry that. BP3L/BP5S get an SDK time sync at add-device for hygiene only
+- Only the BG5S's memory is ever read. iHealth BP monitors and scales are live and phone-stamped; the A&D GATT cuff gets its clock written at pairing AND on every capture connection (2026-10-08) and its readings carry that. BP3L/BP5S get an SDK time sync at add-device for hygiene only
+- **A&D cuff duplicates (2026-10-08).** Reading id = `ble_<hardware MAC>_<device time>` (hardwareMac from System ID, not the per-install iOS identifier), so a reinstall re-sending the cuff's memory maps onto the same ids. An undated record (clock unset, e.g. after a battery change) is never stamped "now" silently: the patient is asked "Did you take this reading just now?"; "No" is remembered (`app_settings.ble_undated_skipped_ids`). `syncPendingReadings` is single-flight (a call during a run waits, then one more run). The EMR keeps `patient_vitals.app_reading_id` UNIQUE per patient and reports a duplicate-key hit as a duplicate.
 - Deliberately not used: the SDK's `processData:deviceDate:` / `adjustOfflineData` (same offset arithmetic, done in JS uniformly). Known edge: a meter that resets twice between imports dates the older batch with the newer offset (bounded to [2025, now+15 min])
 - Devices card shows "Clock set <date>" / "Not set up yet — tap Capture to set the meter's clock" for a glucose meter
 
@@ -255,6 +256,7 @@ onDebugLog          → { message }
 - Warning banner if symptoms reported
 
 ### Urine Protein Testing (app 2.3+)
+- **Hypertension patients only (app 2.5).** The EMR decides who is asked and sends `urineProteinRequired` in `verify_code.php` and `patient_profile.php` (Settings → Diagnosis & Service Types, "Urine" switch on a Type of Service or Primary Diagnosis; initially the hypertension ones). Stored in SQLite `user.urineProteinRequired` (NULL = not answered yet = asked, as before 2.5) and Redux `user.urineProteinRequired`. False: no home tile, no hold, no bell dot, no notification pre-prompt, every reminder scheduler cancels instead (`urineReminderService.remindersWanted`). A profile refresh that flips the flag starts or cancels the reminder series. The demo account always keeps it
 - Home-screen tile ("Record result"): patients record a result any time, any number per day (two-minute duplicate confirm, never a block)
 - 72-hour minimum enforced by a HOLD: once 72h pass with no result, the picker renders inline over the home screen (tab bar still works) until a result is saved or the patient sends "I can't test right now" + reason. That report syncs as `urine_protein_unable`, shows on the EMR chart, gives 24h of grace, and does NOT reset the 72h clock
 - Never held during the app session in which the login happened (`urineProteinSession.ts`). The session ends on a cold start or after the app has been away 60s+; a brief background hop for a system permission dialog does not end it. Notification permission is never requested in that session either

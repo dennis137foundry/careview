@@ -104,6 +104,12 @@ export interface UrineStatusInput {
   now: number;
   /** True only during the app session in which the patient logged in. */
   loginSession: boolean;
+  /**
+   * Whether the EMR asks this patient for urine protein at all (hypertension
+   * patients only — Settings → Diagnosis & Service Types in the EMR). Omitted
+   * = true, the behaviour before app 2.5.
+   */
+  required?: boolean;
 }
 
 export interface UrineStatus {
@@ -118,7 +124,12 @@ export interface UrineStatus {
 }
 
 export function computeUrineStatus(input: UrineStatusInput): UrineStatus {
-  const { lastResultAt, lastUnableAt, now, loginSession } = input;
+  const { lastResultAt, lastUnableAt, now, loginSession, required = true } = input;
+
+  // Not asked for urine protein: never owed, never held.
+  if (!required) {
+    return { owed: false, holdActive: false, graceUntil: null, dueAt: null };
+  }
 
   const owed = lastResultAt === null || now - lastResultAt >= URINE_INTERVAL_MS;
   const dueAt = lastResultAt === null ? null : lastResultAt + URINE_INTERVAL_MS;
@@ -137,6 +148,24 @@ export function computeUrineStatus(input: UrineStatusInput): UrineStatus {
   const holdActive = owed && !loginSession && graceUntil === null;
 
   return { owed, holdActive, graceUntil, dueAt };
+}
+
+/**
+ * The EMR's `urineProteinRequired` from a verify_code / patient_profile
+ * response. A response without it (an EMR older than 2026-10-08) keeps what
+ * the phone already has.
+ */
+export function urineRequiredFromServer(data: unknown, current: boolean): boolean {
+  const v = (data as { urineProteinRequired?: unknown } | null)?.urineProteinRequired;
+  return typeof v === "boolean" ? v : current;
+}
+
+/**
+ * The stored flag (SQLite `user.urineProteinRequired`): NULL means the EMR
+ * has not said yet, which keeps asking — the behaviour before app 2.5.
+ */
+export function urineRequiredFromStored(value: unknown): boolean {
+  return value === null || value === undefined ? true : Boolean(Number(value));
 }
 
 export function isDuplicateEntry(lastResultAt: number | null, now: number): boolean {

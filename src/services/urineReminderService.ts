@@ -17,7 +17,7 @@ import notifee, {
   TriggerType,
   type TimestampTrigger,
 } from "@notifee/react-native";
-import { getAppSetting, setAppSetting } from "./sqliteService";
+import { getAppSetting, getStoredUrineRequired, setAppSetting } from "./sqliteService";
 import {
   buildReminderSchedule,
   UNABLE_GRACE_MS,
@@ -117,10 +117,19 @@ async function scheduleAt(times: number[]): Promise<void> {
   }
 }
 
+/**
+ * A patient the EMR does not ask for urine protein (only hypertension patients
+ * are asked) gets no reminders: every scheduler below cancels instead.
+ */
+function remindersWanted(): boolean {
+  return getStoredUrineRequired();
+}
+
 /** Called after a result is saved: series restarts from that moment. */
 export async function scheduleUrineReminders(anchorMs: number): Promise<void> {
   try {
     await cancelUrineReminders();
+    if (!remindersWanted()) return;
     const times = buildReminderSchedule({
       firstAt: anchorMs + URINE_INTERVAL_MS,
       now: Date.now(),
@@ -135,6 +144,7 @@ export async function scheduleUrineReminders(anchorMs: number): Promise<void> {
 export async function scheduleUnableFollowUp(unableAtMs: number): Promise<void> {
   try {
     await cancelUrineReminders();
+    if (!remindersWanted()) return;
     const times = buildReminderSchedule({
       firstAt: unableAtMs + UNABLE_GRACE_MS,
       now: Date.now(),
@@ -154,6 +164,10 @@ export async function ensureUrineRemindersScheduled(
   lastResultAt: number | null
 ): Promise<void> {
   try {
+    if (!remindersWanted()) {
+      await cancelUrineReminders();
+      return;
+    }
     const ids = await notifee.getTriggerNotificationIds();
     if (ids.some((id) => id.startsWith(ID_PREFIX))) return;
     if (lastResultAt === null) return;

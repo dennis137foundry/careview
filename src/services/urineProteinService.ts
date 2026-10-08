@@ -8,6 +8,7 @@
 import {
   getLastScreeningResponse,
   getScreeningResponsesInRange,
+  getStoredUrineRequired,
   saveScreeningResponse,
   type ScreeningResponse,
 } from "./sqliteService";
@@ -36,6 +37,11 @@ export interface UrineSnapshot {
   highestLast24h: ProteinResult | null;
   /** Results recorded since local midnight. */
   countToday: number;
+  /**
+   * Whether the EMR asks this patient for urine protein (hypertension
+   * patients only). False: no tile, no hold, no bell dot, no reminders.
+   */
+  required: boolean;
   status: UrineStatus;
 }
 
@@ -70,6 +76,8 @@ export function getUrineProteinSnapshot(now: number = Date.now()): UrineSnapshot
   const midnight = new Date(now);
   midnight.setHours(0, 0, 0, 0);
 
+  const required = getStoredUrineRequired();
+
   return {
     lastResult,
     lastResultAt,
@@ -78,11 +86,13 @@ export function getUrineProteinSnapshot(now: number = Date.now()): UrineSnapshot
       typeof lastUnableData.reason === "string" ? lastUnableData.reason : null,
     highestLast24h: highestResultSince(dayRows, now - HIGHEST_WINDOW_MS),
     countToday: dayRows.filter((r) => r.timestamp >= midnight.getTime()).length,
+    required,
     status: computeUrineStatus({
       lastResultAt,
       lastUnableAt,
       now,
       loginSession: isLoginSession(),
+      required,
     }),
   };
 }

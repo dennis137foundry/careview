@@ -532,14 +532,41 @@ export async function syncReading(reading: SavedReading): Promise<boolean> {
   }
 }
 
+type PendingSyncResult = { synced: number; failed: number; remaining: number };
+
+let readingsInFlight: Promise<PendingSyncResult> | null = null;
+let readingsRerun = false;
+
 /**
- * Sync all pending (unsynced) vitals readings
+ * Sync all pending (unsynced) vitals readings.
+ *
+ * Single-flight (2026-10-08). It is called from many places at once — every
+ * saved record on a capture screen (a cuff hands over its whole memory in one
+ * batch), the 60 s interval, coming back online, retries — and two overlapping
+ * runs sent the same unsynced rows twice, which the EMR's check-then-insert
+ * stored twice (the A&D duplicate). Now a call made while a run is in progress
+ * waits for it, and one more run follows so a reading saved mid-run is sent.
  */
-export async function syncPendingReadings(): Promise<{
-  synced: number;
-  failed: number;
-  remaining: number;
-}> {
+export function syncPendingReadings(): Promise<PendingSyncResult> {
+  if (readingsInFlight) {
+    readingsRerun = true;
+    return readingsInFlight;
+  }
+  const run = async (): Promise<PendingSyncResult> => {
+    let result: PendingSyncResult;
+    do {
+      readingsRerun = false;
+      result = await runPendingReadingsSync();
+    } while (readingsRerun);
+    return result;
+  };
+  readingsInFlight = run().finally(() => {
+    readingsInFlight = null;
+  });
+  return readingsInFlight;
+}
+
+async function runPendingReadingsSync(): Promise<PendingSyncResult> {
   if (!isOnline) {
     console.log("[VitalsSync] Offline, skipping vitals sync");
     return { synced: 0, failed: 0, remaining: getUnsyncedCount() };

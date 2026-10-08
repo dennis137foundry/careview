@@ -62,7 +62,9 @@ static NSString * const kBLEWeightFeatureCharUUID = @"2A9E";     // Weight Scale
 // bytes are absent and pulse shifts from byte 14 down to byte 7. Because CareView
 // collects readings after the fact (store-and-forward), an undated reading would
 // be stamped with collection time — wrong in the chart and bad for server dedup.
-// So we write it once at pairing.
+// So we write it at pairing AND on every capture connection (2026-10-08): a
+// battery change resets the monitor's clock, and until then every reading came
+// in undated. The write is one 7-byte packet inside the awake window.
 static NSString * const kBLEDateTimeCharUUID = @"2A08";
 
 // Device Information — System ID carries the real 48-bit MAC. iOS never exposes
@@ -749,11 +751,16 @@ RCT_EXPORT_MODULE();
             }
         }
 
-        // Date Time — written during bonding only. Writing it on every capture
-        // would be pointless traffic inside the device's short awake window.
+        // Date Time — written at pairing and on every capture (armed)
+        // connection, after indications are enabled. Records already in the
+        // monitor's memory keep their own stamps; this dates the next ones,
+        // and puts a reset clock (battery change) right on the next connect.
         if ([charUUID containsString:@"2A08"]) {
             NSString *identifier = peripheral.identifier.UUIDString;
-            if ([_bleBondingIdentifiers containsObject:identifier] &&
+            BOOL bonding = [_bleBondingIdentifiers containsObject:identifier];
+            BOOL capturing = _bleArmedPeripherals[identifier] != nil ||
+                             (_targetMAC != nil && [_targetMAC caseInsensitiveCompare:identifier] == NSOrderedSame);
+            if ((bonding || capturing) &&
                 (characteristic.properties & CBCharacteristicPropertyWrite)) {
                 [self sendDebugLog:@"   🕐 Writing current time to Date Time (2A08)"];
                 [peripheral writeValue:[self bleDateTimePayload]
