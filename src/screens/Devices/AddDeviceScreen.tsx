@@ -120,6 +120,17 @@ export default function AddDeviceScreen() {
   // Devices screen handles customization later, so pairing stays quick.
   const [pendingDevice, setPendingDevice] = useState<DiscoveredDevice | null>(null);
 
+  // One add at a time. State alone can't enforce it: the row's `disabled`,
+  // the closing cuff modal and the closing QR camera only take effect once
+  // React re-renders, and taps (or QR frames) that queue while the JS thread
+  // is busy with scan events all run before then — on 2026-10-01 and
+  // 2026-10-08 one scale became ~6 EMR register calls in the same second.
+  // A ref changes immediately, so the first caller claims it and the rest
+  // return.
+  //   "cuff"   — BP monitor chosen, cuff-size modal open
+  //   "adding" — confirmAddDevice running
+  const addStepRef = useRef<"cuff" | "adding" | null>(null);
+
   const subscriptionsRef = useRef<any[]>([]);
   const cameraDevice = useCameraDevice("back");
   const { hasPermission: hasCameraPermission, requestPermission: requestCameraPermission } =
@@ -273,6 +284,10 @@ export default function AddDeviceScreen() {
   // Handle device selection — BP devices get a cuff-size picker first,
   // everything else is added immediately with its default name.
   const handleSelectDevice = (device: DiscoveredDevice) => {
+    // Nothing below awaits, so this check and the claim further down happen
+    // in one step — no queued tap can slip in between.
+    if (addStepRef.current) return;
+
     const category = device.category || deviceService.getCategory(device.type);
 
     // Only this exact monitor being paired twice is a problem. A second monitor
@@ -291,18 +306,25 @@ export default function AddDeviceScreen() {
     if (category === "BP") {
       // Ask the nurse which cuff is on this monitor. The BLE hardware
       // can't self-report this — it's a physical accessory.
+      addStepRef.current = "cuff";
       setShowCuffModal(true);
     } else {
       // No cuff size to pick — add right away. Rename later if desired.
+      addStepRef.current = "adding";
       confirmAddDevice(device, null);
     }
   };
 
   // Nurse picks a cuff size → add immediately with the default name.
   const handleCuffSizeSelected = (size: CuffSize) => {
+    // A second tap on an option before the modal closes must not add again.
+    if (addStepRef.current !== "cuff") return;
     setShowCuffModal(false);
     if (pendingDevice) {
+      addStepRef.current = "adding";
       confirmAddDevice(pendingDevice, size);
+    } else {
+      addStepRef.current = null;
     }
   };
 
@@ -339,6 +361,7 @@ export default function AddDeviceScreen() {
       if (!bleInfo?.ready) {
         setConnecting(null);
         setPendingDevice(null);
+        addStepRef.current = null;
         showPairingResetHelp(bleInfo?.failureReason);
         return;
       }
@@ -466,6 +489,7 @@ export default function AddDeviceScreen() {
     } finally {
       setConnecting(null);
       setPendingDevice(null);
+      addStepRef.current = null;
     }
   };
 
@@ -476,6 +500,10 @@ export default function AddDeviceScreen() {
     if (__DEV__) {
       console.log("[AddDevice] QR Code scanned:", code);
     }
+
+    // The camera keeps reporting the code every frame until the closed
+    // scanner re-renders. Same one-step check-and-claim as handleSelectDevice.
+    if (addStepRef.current) return;
 
     // Expected format: "TYPE:MAC" e.g., "BP3L:A4C1386B2E90"
     const parts = code.split(":");
@@ -520,8 +548,10 @@ export default function AddDeviceScreen() {
     // add immediately with the default name.
     setPendingDevice(device);
     if (category === "BP") {
+      addStepRef.current = "cuff";
       setShowCuffModal(true);
     } else {
+      addStepRef.current = "adding";
       confirmAddDevice(device, null);
     }
   };
@@ -799,6 +829,9 @@ export default function AddDeviceScreen() {
             <TouchableOpacity
               style={[styles.nameModalCancel, { marginTop: 16 }]}
               onPress={() => {
+                // Only releases the cuff step: a Cancel tap queued behind a
+                // cuff choice must not free an add that has already started.
+                if (addStepRef.current === "cuff") addStepRef.current = null;
                 setShowCuffModal(false);
                 setPendingDevice(null);
               }}
