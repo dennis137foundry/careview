@@ -1479,8 +1479,11 @@ RCT_EXPORT_MODULE();
     [self sendDebugLog:[NSString stringWithFormat:@"🔌 SDK disconnect: %@ (%@)", mac, type]];
     
     @try {
-        // Only these three have commandDisconnectDevice in the SDK.
-        // BP5, HS2S, HS4S auto-disconnect when BLE drops — no explicit method.
+        // Every model but the BP5 has commandDisconnectDevice in the SDK.
+        // HS2S and HS4S used to be skipped here ("auto-disconnect"), so a
+        // battery-only / setup connect left the scale linked to the phone —
+        // and a linked scale stops advertising, so the next capture never
+        // found it ("Finding your scale..." until the timeout).
         if ([type isEqualToString:@"BP3L"]) {
             BP3L *device = [self getBP3LWithMac:mac];
             if (device) {
@@ -1500,6 +1503,20 @@ RCT_EXPORT_MODULE();
             if (device) {
                 [device commandDisconnectDevice];
                 [self sendDebugLog:@"🔌 HS2 commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"HS2S"]) {
+            HS2S *device = [self getHS2SWithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 HS2S commandDisconnectDevice called"];
+            }
+        }
+        else if ([type isEqualToString:@"HS4S"]) {
+            HS4 *device = [self getHS4WithMac:mac];
+            if (device) {
+                [device commandDisconnectDevice];
+                [self sendDebugLog:@"🔌 HS4S commandDisconnectDevice called"];
             }
         }
         else {

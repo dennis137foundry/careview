@@ -589,6 +589,9 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 emitBattery(mac, deviceType, json)
                 finishBatteryOnlyIfPending(mac, deviceType)
             }
+            // HS2S answer to specifyTouristUsers(). A refusal (the scale is
+            // already mid-weigh) shows up here in the debug log.
+            action == Hs2sProfile.ACTION_SPECIFY_USERS -> sendDebugLog("HS2S: specify users answered $json")
             action.contains("unstable", ignoreCase = true) || action.contains("unsteady", ignoreCase = true) -> {
                 sendDebugLog("HS UNSTABLE: weight=${json.optDouble("weight", 0.0)} kg")
             }
@@ -1430,8 +1433,18 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                     else promise.reject("NO_CONTROL", "HS2 control not available")
                 }
                 "HS2S" -> {
+                    // The HS2S sends a live weight (action_online_result) only
+                    // after the app tells it who is weighing ("specify users").
+                    // Without that it files the weigh-in in its anonymous
+                    // memory and the app receives nothing. Guest ("tourist")
+                    // mode = weight only, the same guest user iOS passes to
+                    // commandStartHS2SMeasureWithUser.
                     val c = iHealthDevicesManager.getInstance().getHs2sControl(mac)
-                    if (c != null) { sendDebugLog("HS2S: Ready. Step on scale."); promise.resolve(null) }
+                    if (c != null) {
+                        c.specifyTouristUsers()
+                        sendDebugLog("HS2S: Guest measurement started. Step on scale.")
+                        promise.resolve(null)
+                    }
                     else promise.reject("NO_CONTROL", "HS2S control not available")
                 }
                 "HS4S" -> {
