@@ -1328,14 +1328,16 @@ export default function CaptureScreen({ route, navigation }: any) {
       if (device.type === "BG") {
         await deviceService.startBG5SScan();
       } else {
-        await IHealthDevices.startScan([
-          "BP3L",
-          "BP5",
-          "BP5S",
-          "HS2S",
-          "HS2",
-          "HS4S",
-        ]);
+        // Android's iHealth SDK reports one model at a time, so the scan takes
+        // turns. A scale stepped on during the cuffs' turns was reported 9 s
+        // late (2026-10-28 phone log), after the weigh-in was over. Capturing
+        // a known device, Android listens for its model only. iOS listens
+        // for every model at once.
+        const models = ["BP3L", "BP5", "BP5S", "HS2S", "HS2", "HS4S"];
+        const own = Platform.OS === "android" && device.model && models.includes(device.model)
+          ? [device.model]
+          : models;
+        await IHealthDevices.startScan(own);
       }
       addLog("Scan started");
     } catch (e: any) {

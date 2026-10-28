@@ -28,6 +28,10 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         private const val NAME = "IHealthDevices"
         // Seconds each device type gets to be discovered before moving to next
         private const val SCAN_WINDOW_MS = 3000L
+        // One type only (a capture of a known device, the BG5S): no turns to take,
+        // so the discovery is restarted far less often. Android ignores an app that
+        // starts BLE scans more than 5 times in 30 s; every 3 s would trip it.
+        private const val SINGLE_TYPE_WINDOW_MS = 10000L
     }
 
     private var isAuthenticatedFlag = false
@@ -330,7 +334,7 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             sendDebugLog("Scanning for $type (${scanTypesList.size - currentScanIndex} types after this)")
             iHealthDevicesManager.getInstance().startDiscovery(discoveryType)
             // Schedule next type after the scan window
-            scanHandler.postDelayed(scanNextRunnable, SCAN_WINDOW_MS)
+            scanHandler.postDelayed(scanNextRunnable, if (scanTypesList.size == 1) SINGLE_TYPE_WINDOW_MS else SCAN_WINDOW_MS)
         } else {
             sendDebugLog("Skipping unsupported type: $type")
             // Immediately try next type
