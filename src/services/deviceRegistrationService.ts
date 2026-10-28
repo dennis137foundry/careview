@@ -17,6 +17,7 @@
 
 import type { CuffSize, DeviceSource } from "./sqliteService";
 import { authedFetch } from "./authToken";
+import { t } from "../i18n";
 
 const REGISTER_URL =
   "https://trinitycareview.com/api/careviewapp/device_register.php";
@@ -91,7 +92,7 @@ export async function registerDeviceWithEmr(
     if (res.status === 409) {
       return {
         kind: "conflict",
-        message: body?.error ?? "Device is not available for pairing.",
+        message: body?.error ?? t("services.deviceUnavailable"),
       };
     }
 

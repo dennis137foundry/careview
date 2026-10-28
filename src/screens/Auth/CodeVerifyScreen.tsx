@@ -16,6 +16,7 @@ import authService from "../../services/authService";
 import { login } from "../../redux/userSlice";
 import { useToast } from "../../components/Toast";
 import { BTN } from "../../constants/buttons";
+import { useT } from "../../i18n";
 
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RouteProp } from "@react-navigation/native";
@@ -36,6 +37,7 @@ export default function CodeVerifyScreen({
   const { phone } = route.params || {};
   const dispatch = useDispatch<AppDispatch>();
   const { showToast } = useToast();
+  const { t } = useT();
 
   const [values, setValues] = useState<string[]>(Array(DIGITS).fill(""));
   const [busy, setBusy] = useState(false);
@@ -117,7 +119,7 @@ export default function CodeVerifyScreen({
     const code = (valsOverride || values).join("");
 
     if (code.length !== DIGITS) {
-      Alert.alert("Invalid code", "Please enter all 6 digits.");
+      Alert.alert(t("auth.invalidCodeTitle"), t("auth.enterAllDigits"));
       return;
     }
 
@@ -126,7 +128,7 @@ export default function CodeVerifyScreen({
       const user = await authService.verifyCode(phone, code);
 
       if (!user) {
-        Alert.alert("Verification failed", "Invalid or expired code.");
+        Alert.alert(t("auth.verifyFailedTitle"), t("auth.invalidOrExpired"));
         return;
       }
 
@@ -137,8 +139,8 @@ export default function CodeVerifyScreen({
     } catch (e: any) {
       console.error("[CodeVerify] Error:", e);
       Alert.alert(
-        "Verification failed",
-        e?.message || "The code is incorrect or has expired."
+        t("auth.verifyFailedTitle"),
+        e?.message || t("auth.codeIncorrect")
       );
     } finally {
       setBusy(false);
@@ -151,15 +153,15 @@ export default function CodeVerifyScreen({
       await authService.sendCode(phone);
       // Show confirmation as a toast instead of blocking alert
       showToast({
-        message: "A new verification code has been sent.",
+        message: t("auth.codeResent"),
         type: "success",
         duration: 3000,
       });
     } catch (e: any) {
       console.error("[CodeVerify] Resend error:", e);
       Alert.alert(
-        "Error",
-        e?.message || "Unable to resend verification code."
+        t("common.error"),
+        e?.message || t("auth.resendFailed")
       );
     } finally {
       setBusy(false);
@@ -176,9 +178,9 @@ export default function CodeVerifyScreen({
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <View style={styles.card}>
-        <Text style={styles.title}>Enter Verification Code</Text>
+        <Text style={styles.title}>{t("auth.verifyTitle")}</Text>
         <Text style={styles.subtitle}>
-          We sent a 6-digit code to{" "}
+          {t("auth.sentCodeTo")}{" "}
           <Text style={styles.phoneText}>{phone}</Text>
         </Text>
 
@@ -211,21 +213,21 @@ export default function CodeVerifyScreen({
           disabled={busy}
         >
           <Text style={styles.buttonText}>
-            {busy ? "Verifying..." : "Verify"}
+            {busy ? t("auth.verifying") : t("auth.verify")}
           </Text>
         </TouchableOpacity>
 
         <View style={styles.footerRow}>
           <TouchableOpacity onPress={handleEditPhone} disabled={busy}>
-            <Text style={styles.linkText}>Change number</Text>
+            <Text style={styles.linkText}>{t("auth.changeNumber")}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={handleResend} disabled={busy}>
-            <Text style={styles.linkText}>Resend code</Text>
+            <Text style={styles.linkText}>{t("auth.resendCode")}</Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.noteText}>Codes expire after 10 minutes.</Text>
+        <Text style={styles.noteText}>{t("auth.codeExpiry")}</Text>
       </View>
     </KeyboardAvoidingView>
   );

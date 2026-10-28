@@ -43,9 +43,56 @@ import {
 import {
   isProteinAlert,
   highestResultSince,
+  proteinResultLabel,
   unableReasonLabel,
+  unableReasonLabelEnglish,
   HIGHEST_WINDOW_MS,
 } from "../../services/urineProteinLogic";
+import {
+  useT,
+  t,
+  fmtDate,
+  fmtTime,
+  currentLanguage,
+  type TKey,
+} from "../../i18n";
+import { GLUCOSE_TIMING_LABEL_KEYS } from "../../i18n/locales/en/history";
+
+/**
+ * A glucose reading's stored sample window ("before breakfast") in the app's
+ * language. English shows the stored text itself (unchanged); a value the app
+ * does not know is shown as stored. The stored value is never altered.
+ */
+function timingText(stored: string): string {
+  const key = GLUCOSE_TIMING_LABEL_KEYS[stored.trim().toLowerCase()];
+  return key && currentLanguage() !== "en" ? t(key) : stored;
+}
+
+/**
+ * The app's own fixed default device names, shown in the app's language. A
+ * name the patient or the device chose is shown as is; the stored name is
+ * never changed (it is synced to the EMR).
+ */
+const DEFAULT_DEVICE_NAME_KEYS: { readonly [name: string]: TKey | undefined } = {
+  "BP Monitor": "history.deviceBpMonitor",
+  "Blood Pressure Monitor": "history.deviceBloodPressureMonitor",
+  Scale: "history.deviceScale",
+  "Smart Scale": "history.deviceSmartScale",
+  "Glucose Meter": "history.deviceGlucoseMeter",
+};
+
+function deviceNameText(name: string): string {
+  const key = DEFAULT_DEVICE_NAME_KEYS[name];
+  return key ? t(key) : name;
+}
+
+/** "{date} at {time}" for a list row, in the app's language. */
+function rowDateTime(ts: number): string {
+  return t("history.dateAtTime", {
+    date: fmtDate(ts, { year: "numeric", month: "short", day: "numeric" }),
+    time: fmtTime(ts, { hour: "numeric", minute: "2-digit" }),
+  });
+}
 
 // Single unified chart theme - dark navy with coral/amber lines.
 //
@@ -200,6 +247,7 @@ const segmentStyles = StyleSheet.create({
 
 export default function HistoryScreen() {
   const dispatch = useDispatch<AppDispatch>();
+  const { lang } = useT();
 
   // Navy header → white status-bar glyphs.
   useStatusBarStyle("light-content");
@@ -320,11 +368,11 @@ export default function HistoryScreen() {
           ? resolveDeviceLabel(sortedByTime[0])
           : "";
 
-        let title = deviceName;
+        let title = deviceNameText(deviceName);
         if (!title || title.trim() === "") {
-          if (type === "BP") title = "Blood Pressure";
-          else if (type === "SCALE") title = "Weight";
-          else if (type === "BG") title = "Glucose";
+          if (type === "BP") title = t("history.tabBloodPressure");
+          else if (type === "SCALE") title = t("history.tabWeight");
+          else if (type === "BG") title = t("history.tabGlucose");
           else title = type;
         }
 
@@ -335,7 +383,7 @@ export default function HistoryScreen() {
     if (dailyHealthChecks.length > 0) {
       newRoutes.push({
         key: "daily_health_check",
-        title: "Daily Health",
+        title: t("history.tabDailyHealth"),
         kind: "screening",
       });
     }
@@ -343,7 +391,7 @@ export default function HistoryScreen() {
     if (urineProteinResponses.length > 0) {
       newRoutes.push({
         key: "urine_protein_result",
-        title: "Urine Protein",
+        title: t("history.tabUrineProtein"),
         kind: "screening",
       });
     }
@@ -351,7 +399,7 @@ export default function HistoryScreen() {
     setRoutes(
       newRoutes.length > 0
         ? newRoutes
-        : [{ key: "empty", title: "No History", kind: "empty" }]
+        : [{ key: "empty", title: t("history.tabNoHistory"), kind: "empty" }]
     );
 
     // Reset index if out of bounds
@@ -360,10 +408,12 @@ export default function HistoryScreen() {
     }
     // resolveDeviceLabel is a dependency on purpose: it changes identity when the
     // devices list does, which is what re-titles the tab right after a rename.
+    // lang re-titles the tabs when the app's language changes.
   }, [
     dailyHealthChecks.length,
     grouped,
     index,
+    lang,
     resolveDeviceLabel,
     urineProteinResponses.length,
   ]);
@@ -383,17 +433,27 @@ export default function HistoryScreen() {
 
       if (result.synced > 0) {
         Alert.alert(
-          "Sync Complete",
-          `${result.synced} item${result.synced !== 1 ? "s" : ""} synced to EMR.`
+          t("history.syncCompleteTitle"),
+          t(
+            result.synced !== 1
+              ? "history.syncCompleteOther"
+              : "history.syncCompleteOne",
+            { count: result.synced }
+          )
         );
       } else if (result.remaining > 0) {
         Alert.alert(
-          "Sync Incomplete",
-          `${result.remaining} item${result.remaining !== 1 ? "s" : ""} still pending. Will retry automatically.`
+          t("history.syncIncompleteTitle"),
+          t(
+            result.remaining !== 1
+              ? "history.syncIncompleteOther"
+              : "history.syncIncompleteOne",
+            { count: result.remaining }
+          )
         );
       }
     } catch (error) {
-      Alert.alert("Sync Error", "Unable to sync readings. Please try again.");
+      Alert.alert(t("history.syncErrorTitle"), t("history.syncErrorMessage"));
     }
   }, [dispatch, loadScreeningHistory]);
 
@@ -407,9 +467,12 @@ export default function HistoryScreen() {
       );
 
       if (readings.length === 0 && screenings.length === 0) {
-        Alert.alert("No data", "There is no history to export.");
+        Alert.alert(t("history.noDataTitle"), t("history.noDataMessage"));
         return;
       }
+
+      // Everything below that goes INTO the file stays English (a data file
+      // handed to clinicians); only the alerts around it are translated.
 
       const header = [
         "Device Name",
@@ -454,7 +517,7 @@ export default function HistoryScreen() {
           } else if (s.type === "urine_protein_unable") {
             typeLabel = "Urine Protein";
             value = "Couldn't test";
-            notes = unableReasonLabel(d.reason);
+            notes = unableReasonLabelEnglish(d.reason);
           } else if (s.type === "daily_health_check") {
             typeLabel = "Daily Health Check";
             value = `Headaches: ${yesNoLabel(
@@ -508,9 +571,9 @@ export default function HistoryScreen() {
       });
     } catch (err: unknown) {
       const message =
-        err instanceof Error ? err.message : "Unable to export readings.";
+        err instanceof Error ? err.message : t("history.exportFailedMessage");
       if (!message.includes("User did not share")) {
-        Alert.alert("Export failed", message);
+        Alert.alert(t("history.exportFailedTitle"), message);
       }
     }
   };
@@ -565,8 +628,13 @@ export default function HistoryScreen() {
                 isOffline && styles.syncBannerTextOffline,
               ]}
             >
-              {pendingCount} item{pendingCount !== 1 ? "s" : ""} pending
-              {isOffline ? " • Offline" : ""}
+              {t(
+                pendingCount !== 1
+                  ? "history.itemsPendingOther"
+                  : "history.itemsPendingOne",
+                { count: pendingCount }
+              )}
+              {isOffline ? ` • ${t("history.offline")}` : ""}
             </Text>
           </View>
           <TouchableOpacity
@@ -588,7 +656,7 @@ export default function HistoryScreen() {
               />
             )}
             <Text style={styles.syncBannerButtonText}>
-              {isSyncing ? "Syncing..." : "Sync Now"}
+              {isSyncing ? t("history.syncing") : t("history.syncNow")}
             </Text>
           </TouchableOpacity>
         </View>
@@ -596,14 +664,14 @@ export default function HistoryScreen() {
 
       {/* Header */}
       <View style={styles.headerRow}>
-        <Text style={styles.title}>History</Text>
+        <Text style={styles.title}>{t("history.title")}</Text>
         <TouchableOpacity style={styles.exportButton} onPress={handleExport}>
           <MaterialCommunityIcons
             name="file-export-outline"
             size={20}
             color="#fff"
           />
-          <Text style={styles.exportText}>Export</Text>
+          <Text style={styles.exportText}>{t("history.export")}</Text>
         </TouchableOpacity>
       </View>
 
@@ -628,9 +696,9 @@ export default function HistoryScreen() {
         {currentKey === "empty" ? (
           <View style={styles.emptyContainer}>
             <MaterialIcons name="show-chart" size={64} color="#ccc" />
-            <Text style={styles.emptyTitle}>No Readings Yet</Text>
+            <Text style={styles.emptyTitle}>{t("history.emptyTitle")}</Text>
             <Text style={styles.emptySubtitle}>
-              Take a measurement or answer a health check to see history here
+              {t("history.emptySubtitle")}
             </Text>
           </View>
         ) : currentRoute?.kind === "screening" ? (
@@ -717,21 +785,21 @@ function SummaryStats({
     <View style={styles.statsContainer}>
       <View style={styles.statItem}>
         <MaterialIcons name="trending-up" size={16} color="#e53935" />
-        <Text style={styles.statLabel}>High</Text>
+        <Text style={styles.statLabel}>{t("history.statHigh")}</Text>
         <Text style={styles.statValue}>
           {type === "BP" ? `${stats.high}/${stats.high2}` : stats.high}
         </Text>
       </View>
       <View style={styles.statItem}>
         <MaterialIcons name="show-chart" size={16} color="#00acc1" />
-        <Text style={styles.statLabel}>Avg</Text>
+        <Text style={styles.statLabel}>{t("history.statAvg")}</Text>
         <Text style={styles.statValue}>
           {type === "BP" ? `${stats.avg}/${stats.avg2}` : stats.avg}
         </Text>
       </View>
       <View style={styles.statItem}>
         <MaterialIcons name="trending-down" size={16} color="#43a047" />
-        <Text style={styles.statLabel}>Low</Text>
+        <Text style={styles.statLabel}>{t("history.statLow")}</Text>
         <Text style={styles.statValue}>
           {type === "BP" ? `${stats.low}/${stats.low2}` : stats.low}
         </Text>
@@ -743,14 +811,14 @@ function SummaryStats({
             size={16}
             color="#e53935"
           />
-          <Text style={styles.statLabel}>Avg HR</Text>
+          <Text style={styles.statLabel}>{t("history.statAvgHr")}</Text>
           <Text style={styles.statValue}>{stats.avgHR}</Text>
         </View>
       )}
       {(type === "BP" || type === "BG") && stats.highCount != null && stats.highCount > 0 && (
         <View style={styles.statItem}>
           <MaterialIcons name="warning" size={16} color="#c62828" />
-          <Text style={styles.statLabel}>Elevated</Text>
+          <Text style={styles.statLabel}>{t("history.statElevated")}</Text>
           <Text style={[styles.statValue, { color: "#c62828" }]}>
             {stats.highCount}
           </Text>
@@ -776,6 +844,8 @@ function DeviceHistoryTab({
   onRefresh: () => void;
   thresholds: VitalThresholds;
 }) {
+  const { lang } = useT();
+
   // Sort chronologically for numbering
   const chronological = useMemo(() => {
     if (!data || data.length === 0) return [];
@@ -878,7 +948,7 @@ function DeviceHistoryTab({
                   </Text>
                   {isHigh && (
                     <View style={styles.highBadge}>
-                      <Text style={styles.highBadgeText}>HIGH</Text>
+                      <Text style={styles.highBadgeText}>{t("history.badgeHigh")}</Text>
                     </View>
                   )}
                 </View>
@@ -902,24 +972,13 @@ function DeviceHistoryTab({
                       color="#43a047"
                     />
                     <Text style={styles.heartRateText}>
-                      {item.measurementCondition}
+                      {timingText(item.measurementCondition)}
                     </Text>
                   </View>
                 ) : null}
               </View>
             </View>
-            <Text style={styles.timeText}>
-              {new Date(item.ts).toLocaleDateString([], {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-              })}{" "}
-              at{" "}
-              {new Date(item.ts).toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-              })}
-            </Text>
+            <Text style={styles.timeText}>{rowDateTime(item.ts)}</Text>
           </View>
           <View style={styles.statusContainer}>
             {item.synced ? (
@@ -953,7 +1012,9 @@ function DeviceHistoryTab({
         </View>
       );
     },
-    [isReadingHigh]
+    // lang: rows hold translated text, so a language change redraws them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isReadingHigh, lang]
   );
 
   return (
@@ -1019,7 +1080,7 @@ function DeviceHistoryTab({
                             { backgroundColor: CHART_THEME.primaryLine },
                           ]}
                         />
-                        <Text style={styles.legendText}>Systolic</Text>
+                        <Text style={styles.legendText}>{t("history.systolic")}</Text>
                       </View>
                       <View style={styles.legendItem}>
                         <View
@@ -1028,7 +1089,7 @@ function DeviceHistoryTab({
                             { backgroundColor: CHART_THEME.secondaryLine },
                           ]}
                         />
-                        <Text style={styles.legendText}>Diastolic</Text>
+                        <Text style={styles.legendText}>{t("history.diastolic")}</Text>
                       </View>
                     </View>
                   )}
@@ -1039,7 +1100,12 @@ function DeviceHistoryTab({
             <View style={styles.metaRow}>
               <View style={styles.countRow}>
                 <Text style={styles.countText}>
-                  {numbered.length} reading{numbered.length !== 1 ? "s" : ""}
+                  {t(
+                    numbered.length !== 1
+                      ? "history.readingsOther"
+                      : "history.readingsOne",
+                    { count: numbered.length }
+                  )}
                 </Text>
                 {unsyncedCount > 0 && (
                   <View style={styles.unsyncedPill}>
@@ -1049,7 +1115,7 @@ function DeviceHistoryTab({
                       color="#ff9800"
                     />
                     <Text style={styles.unsyncedPillText}>
-                      {unsyncedCount} pending
+                      {t("history.pendingCount", { count: unsyncedCount })}
                     </Text>
                   </View>
                 )}
@@ -1065,7 +1131,7 @@ function DeviceHistoryTab({
                   color="#002040"
                 />
                 <Text style={styles.sortText}>
-                  {sortAsc ? "Oldest first" : "Newest first"}
+                  {sortAsc ? t("history.oldestFirst") : t("history.newestFirst")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1073,7 +1139,7 @@ function DeviceHistoryTab({
         }
         ListEmptyComponent={
           <View style={styles.listEmpty}>
-            <Text style={styles.listEmptyText}>No readings for this device</Text>
+            <Text style={styles.listEmptyText}>{t("history.noReadingsForDevice")}</Text>
           </View>
         }
       />
@@ -1089,10 +1155,18 @@ function parseScreeningData(response: ScreeningResponse): Record<string, unknown
   }
 }
 
+// English: used for the CSV export, which stays English.
 function yesNoLabel(value: unknown): string {
   if (value === true) return "Yes";
   if (value === false) return "No";
   return "Not answered";
+}
+
+/** The same answer on screen, in the app's language. */
+function yesNoText(value: unknown): string {
+  if (value === true) return t("common.yes");
+  if (value === false) return t("common.no");
+  return t("history.notAnswered");
 }
 
 function proteinTextColor(result: unknown): string {
@@ -1109,6 +1183,7 @@ function ScreeningSummary({
   data: ScreeningResponse[];
   type: string;
 }) {
+  const { lang } = useT();
   const summary = useMemo(() => {
     if (type === "daily_health_check") {
       const symptomCount = data.filter((response) => {
@@ -1116,11 +1191,11 @@ function ScreeningSummary({
         return parsed.hasHeadaches === true || parsed.hasVisualDisturbances === true;
       }).length;
       return {
-        firstLabel: "Total",
+        firstLabel: t("history.statTotal"),
         firstValue: String(data.length),
-        secondLabel: "Symptoms",
+        secondLabel: t("history.statSymptoms"),
         secondValue: String(symptomCount),
-        thirdLabel: "Clear",
+        thirdLabel: t("history.statClear"),
         thirdValue: String(data.length - symptomCount),
       };
     }
@@ -1140,15 +1215,18 @@ function ScreeningSummary({
       Date.now() - HIGHEST_WINDOW_MS
     );
 
+    // secondValue stays the stored result (it picks the colour); it is
+    // shown through proteinResultLabel below.
     return {
-      firstLabel: "Results",
+      firstLabel: t("history.statResults"),
       firstValue: String(results.length),
-      secondLabel: "Highest 24h",
+      secondLabel: t("history.statHighest24h"),
       secondValue: highest ?? "--",
-      thirdLabel: "Alerts",
+      thirdLabel: t("history.statAlerts"),
       thirdValue: String(alertCount),
     };
-  }, [data, type]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, type, lang]);
 
   if (!data.length) return null;
 
@@ -1170,7 +1248,9 @@ function ScreeningSummary({
             },
           ]}
         >
-          {summary.secondValue}
+          {type === "urine_protein_result"
+            ? proteinResultLabel(summary.secondValue)
+            : summary.secondValue}
         </Text>
       </View>
       <View style={styles.statItem}>
@@ -1197,6 +1277,8 @@ function ScreeningHistoryTab({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
+  const { lang } = useT();
+
   const chronological = useMemo(() => {
     if (!data || data.length === 0) return [];
     return [...data].sort((a, b) => a.timestamp - b.timestamp);
@@ -1264,16 +1346,23 @@ function ScreeningHistoryTab({
                   >
                     {isDailyHealth
                       ? abnormal
-                        ? "Symptoms Reported"
-                        : "No Symptoms"
+                        ? t("history.symptomsReported")
+                        : t("history.noSymptoms")
                       : isUnable
-                        ? "Couldn't test"
-                        : `Urine Protein: ${typeof result === "string" ? result : "--"}`}
+                        ? t("urine.couldntTest")
+                        : t("history.urineProteinValue", {
+                            result:
+                              typeof result === "string"
+                                ? proteinResultLabel(result)
+                                : "--",
+                          })}
                   </Text>
                   {abnormal && (
                     <View style={styles.highBadge}>
                       <Text style={styles.highBadgeText}>
-                        {isDailyHealth ? "YES" : "ALERT"}
+                        {isDailyHealth
+                          ? t("history.badgeYes")
+                          : t("history.badgeAlert")}
                       </Text>
                     </View>
                   )}
@@ -1295,7 +1384,9 @@ function ScreeningHistoryTab({
                             : styles.answerPillTextNo,
                         ]}
                       >
-                        Headache: {yesNoLabel(parsed.hasHeadaches)}
+                        {t("history.headacheAnswer", {
+                          answer: yesNoText(parsed.hasHeadaches),
+                        })}
                       </Text>
                     </View>
                     <View
@@ -1312,7 +1403,9 @@ function ScreeningHistoryTab({
                             : styles.answerPillTextNo,
                         ]}
                       >
-                        Vision: {yesNoLabel(parsed.hasVisualDisturbances)}
+                        {t("history.visionAnswer", {
+                          answer: yesNoText(parsed.hasVisualDisturbances),
+                        })}
                       </Text>
                     </View>
                   </View>
@@ -1323,18 +1416,7 @@ function ScreeningHistoryTab({
                 ) : null}
               </View>
             </View>
-            <Text style={styles.timeText}>
-              {new Date(item.timestamp).toLocaleDateString([], {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-              })}{" "}
-              at{" "}
-              {new Date(item.timestamp).toLocaleTimeString([], {
-                hour: "numeric",
-                minute: "2-digit",
-              })}
-            </Text>
+            <Text style={styles.timeText}>{rowDateTime(item.timestamp)}</Text>
           </View>
           <View style={styles.statusContainer}>
             {item.synced ? (
@@ -1358,7 +1440,9 @@ function ScreeningHistoryTab({
         </View>
       );
     },
-    [type]
+    // lang: rows hold translated text, so a language change redraws them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [type, lang]
   );
 
   return (
@@ -1381,9 +1465,16 @@ function ScreeningHistoryTab({
             <View style={styles.metaRow}>
               <View style={styles.countRow}>
                 <Text style={styles.countText}>
-                  {numbered.length}{" "}
-                  {type === "daily_health_check" ? "check" : "record"}
-                  {numbered.length !== 1 ? "s" : ""}
+                  {t(
+                    type === "daily_health_check"
+                      ? numbered.length !== 1
+                        ? "history.checksOther"
+                        : "history.checksOne"
+                      : numbered.length !== 1
+                        ? "history.recordsOther"
+                        : "history.recordsOne",
+                    { count: numbered.length }
+                  )}
                 </Text>
                 {unsyncedCount > 0 && (
                   <View style={styles.unsyncedPill}>
@@ -1393,7 +1484,7 @@ function ScreeningHistoryTab({
                       color="#ff9800"
                     />
                     <Text style={styles.unsyncedPillText}>
-                      {unsyncedCount} pending
+                      {t("history.pendingCount", { count: unsyncedCount })}
                     </Text>
                   </View>
                 )}
@@ -1409,7 +1500,7 @@ function ScreeningHistoryTab({
                   color="#002040"
                 />
                 <Text style={styles.sortText}>
-                  {sortAsc ? "Oldest first" : "Newest first"}
+                  {sortAsc ? t("history.oldestFirst") : t("history.newestFirst")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1417,7 +1508,7 @@ function ScreeningHistoryTab({
         }
         ListEmptyComponent={
           <View style={styles.listEmpty}>
-            <Text style={styles.listEmptyText}>No answers yet</Text>
+            <Text style={styles.listEmptyText}>{t("history.noAnswersYet")}</Text>
           </View>
         }
       />

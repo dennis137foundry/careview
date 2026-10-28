@@ -43,6 +43,7 @@ import {
 import { authedFetch } from "./authToken";
 import { isDemoAccount } from "./seedDemoData";
 import { syncPendingHospitalReports } from "./hospitalReportService";
+import { t } from "../i18n";
 
 // ============================================================================
 // Configuration
@@ -252,7 +253,7 @@ function fetchWithTimeout(
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort();
-      reject(new Error("Request timed out"));
+      reject(new Error(t("services.requestTimedOut")));
     }, timeout);
 
     authedFetch(url, { ...options, signal: controller.signal })
@@ -940,7 +941,9 @@ export async function syncAllPending(): Promise<{
     status: totalRemaining > 0 ? "error" : "idle",
     lastSuccessfulSync: anySuccess ? new Date() : syncState.lastSuccessfulSync,
     lastError: anyFailed
-      ? `${vitalsResult.failed + screeningResult.failed} items failed to sync`
+      ? t("services.syncItemsFailed", {
+          count: vitalsResult.failed + screeningResult.failed,
+        })
       : null,
     retryCount: totalRemaining > 0 ? syncState.retryCount : 0,
   });
@@ -983,7 +986,7 @@ function scheduleRetry(): void {
   if (syncState.retryCount >= CONFIG.maxRetries) {
     updateState({
       status: "error",
-      lastError: "Sync paused after repeated failures. Tap to retry.",
+      lastError: t("services.syncPaused"),
     });
     return;
   }

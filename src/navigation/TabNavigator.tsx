@@ -9,6 +9,7 @@ import DashboardNavigator from "./DashboardNavigator";
 import DevicesNavigator from "./DevicesNavigator";
 import HistoryNavigator from "./HistoryNavigator";
 import ProfileNavigator from "./ProfileNavigator";
+import { useT, type TKey } from "../i18n";
 
 export type TabParamList = {
   Dashboard: undefined;
@@ -19,13 +20,24 @@ export type TabParamList = {
 
 const Tab = createBottomTabNavigator<TabParamList>();
 
+// Tab labels. Without one the tab shows its route name, which is the English
+// text; set from render so a language change relabels the tabs.
+const TAB_LABEL_KEYS: Record<keyof TabParamList, TKey> = {
+  Dashboard: "nav.dashboard",
+  Devices: "nav.devices",
+  History: "nav.history",
+  Profile: "nav.profile",
+};
+
 export default function TabNavigator() {
   const insets = useSafeAreaInsets();
+  const { t } = useT();
 
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
+        tabBarLabel: t(TAB_LABEL_KEYS[route.name]),
         // Leaving a tab collapses its stack. The Home and Devices stacks each
         // hold a Capture screen; with the inactive stack kept mounted, a
         // Capture screen left open on one tab stayed alive behind the other,

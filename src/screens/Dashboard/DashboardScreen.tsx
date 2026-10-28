@@ -34,6 +34,7 @@ import {
 import {
   describeRelative,
   isProteinAlert,
+  proteinResultLabel,
   type ProteinResult,
   type UnableReasonCode,
 } from "../../services/urineProteinLogic";
@@ -47,6 +48,9 @@ import HospitalReportModal from "../../components/HospitalReportModal";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { useToast } from "../../components/Toast";
 import { BTN } from "../../constants/buttons";
+import { useT, t, fmtDate, fmtTime, currentLanguage } from "../../i18n";
+// The glucose sample-window labels live with History, which shows them too.
+import { GLUCOSE_TIMING_LABEL_KEYS } from "../../i18n/locales/en/history";
 
 const NAVY = "#002040";
 const BLUE = "#00509f";
@@ -56,17 +60,27 @@ const ALERT = "#c62828";
 
 function greetingForNow(): string {
   const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
+  if (hour < 12) return t("dashboard.goodMorning");
+  if (hour < 18) return t("dashboard.goodAfternoon");
+  return t("dashboard.goodEvening");
 }
 
 function formatWhen(ts: number): string {
   const d = new Date(ts);
-  return `${d.toLocaleDateString([], {
+  return `${fmtDate(d, {
     month: "short",
     day: "numeric",
-  })} ${d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  })} ${fmtTime(d, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+/**
+ * A glucose reading's stored sample window ("before breakfast") in the app's
+ * language. English shows the stored text itself (unchanged); a value the app
+ * does not know is shown as stored. The stored value is never altered.
+ */
+function timingText(stored: string): string {
+  const key = GLUCOSE_TIMING_LABEL_KEYS[stored.trim().toLowerCase()];
+  return key && currentLanguage() !== "en" ? t(key) : stored;
 }
 
 export default function DashboardScreen() {
@@ -74,6 +88,7 @@ export default function DashboardScreen() {
   const navigation = useNavigation<any>();
   const isFocused = useIsFocused();
   const { showToast } = useToast();
+  const { lang } = useT();
 
   // The navy CareView header (AppNavigator) sits behind the status bar on
   // this screen — white glyphs, or the clock/signal disappear into it.
@@ -88,12 +103,13 @@ export default function DashboardScreen() {
   const [, setIsFirstLaunch] = useState<boolean>(false);
 
   // Daily fact aligned to the pregnancy. Recomputed on focus so the fact
-  // rolls over at midnight without an app restart. Null → no usable EDD →
+  // rolls over at midnight without an app restart, and on a language change
+  // (getDailyFact answers in the app's language). Null → no usable EDD →
   // the hero card shows the due-date form instead.
   const dailyFact = React.useMemo(
     () => (user.edd ? getDailyFact(user.edd) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [user.edd, isFocused]
+    [user.edd, isFocused, lang]
   );
 
   // Urine protein: one snapshot drives the tile, the bell and the hold.
@@ -149,16 +165,16 @@ export default function DashboardScreen() {
     if (permissionPromptShown.current || wasNotificationPermissionAsked()) return;
     permissionPromptShown.current = true;
     Alert.alert(
-      "Reminders",
-      "CareView can remind you when a urine protein result is due. Allow notifications?",
+      t("dashboard.remindersTitle"),
+      t("dashboard.remindersMessage"),
       [
         {
-          text: "Not now",
+          text: t("common.notNow"),
           style: "cancel",
           onPress: () => markNotificationPermissionAsked(),
         },
         {
-          text: "Allow",
+          text: t("dashboard.allow"),
           onPress: () => {
             requestNotificationPermission();
           },
@@ -209,7 +225,7 @@ export default function DashboardScreen() {
     setShowUrinePicker(false);
     refreshUrine();
     showToast({
-      message: "Urine protein result saved",
+      message: t("dashboard.urineSaved"),
       type: "success",
       duration: 2500,
     });
@@ -219,7 +235,7 @@ export default function DashboardScreen() {
     setShowUrinePicker(false);
     refreshUrine();
     showToast({
-      message: "Sent to your care team. We'll check back tomorrow.",
+      message: t("dashboard.urineUnableSent"),
       type: "info",
       duration: 3000,
     });
@@ -231,7 +247,7 @@ export default function DashboardScreen() {
     if (urine?.status.owed) {
       setShowUrinePicker(true);
     } else {
-      showToast({ message: "You're all caught up", type: "info", duration: 2000 });
+      showToast({ message: t("dashboard.allCaughtUp"), type: "info", duration: 2000 });
     }
   };
 
@@ -241,15 +257,21 @@ export default function DashboardScreen() {
   const urineStatusLine = (() => {
     if (!urine) return "";
     if (urine.lastResultAt === null) {
-      return urineOwed ? "Result needed" : "No result recorded yet";
+      return urineOwed
+        ? t("dashboard.urineResultNeeded")
+        : t("dashboard.urineNoResultYet");
     }
     const when = describeRelative(urine.lastResultAt, now);
     return urineOwed
-      ? `Overdue · last result ${when}`
-      : `Last: ${urine.lastResult ?? "—"} · ${when}`;
+      ? t("dashboard.urineOverdue", { when })
+      : t("dashboard.urineLast", {
+          result:
+            urine.lastResult !== null ? proteinResultLabel(urine.lastResult) : "—",
+          when,
+        });
   })();
 
-  const firstName = user.firstName || "there";
+  const firstName = user.firstName || t("dashboard.nameFallback");
 
   // One slide per reading in the 48h window. BP and glucose slides carry
   // the threshold colouring (the EMR-resolved thresholds, same test as the
@@ -266,7 +288,11 @@ export default function DashboardScreen() {
     const iconName = isBP ? "favorite" : isBG ? "opacity" : "monitor-weight";
     const iconColor = isBP ? (high ? ALERT : "#c62828") : isBG ? (high ? ALERT : "#e65100") : BLUE;
     const iconBg = isBP ? (high ? "#f7d6d6" : "#fdecec") : isBG ? (high ? "#f7d6d6" : "#fff3e0") : "#e6f1fb";
-    const label = isBP ? "Blood pressure" : isBG ? "Blood glucose" : "Weight";
+    const label = isBP
+      ? t("dashboard.bloodPressure")
+      : isBG
+        ? t("dashboard.bloodGlucose")
+        : t("dashboard.weight");
 
     return (
       <View style={[styles.readSlide, { width: slideWidth }, high && styles.statCardAlert]}>
@@ -286,16 +312,22 @@ export default function DashboardScreen() {
         </Text>
         {isBP ? (
           <Text style={[styles.statTrend, { color: high ? ALERT : OK }]}>
-            {high ? "Above range" : "In range"}
-            {item.heartRate ? ` · HR ${item.heartRate}` : ""}
+            {high ? t("dashboard.aboveRange") : t("dashboard.inRange")}
+            {item.heartRate
+              ? ` · ${t("dashboard.heartRate", { hr: item.heartRate })}`
+              : ""}
           </Text>
         ) : isBG ? (
           <Text style={[styles.statTrend, { color: high ? ALERT : OK }]}>
-            {high ? "Above range" : "In range"}
-            {item.measurementCondition ? ` · ${item.measurementCondition}` : ""}
+            {high ? t("dashboard.aboveRange") : t("dashboard.inRange")}
+            {item.measurementCondition
+              ? ` · ${timingText(item.measurementCondition)}`
+              : ""}
           </Text>
         ) : (
-          <Text style={[styles.statTrend, { color: OK }]}>Recorded</Text>
+          <Text style={[styles.statTrend, { color: OK }]}>
+            {t("dashboard.recorded")}
+          </Text>
         )}
       </View>
     );
@@ -322,7 +354,9 @@ export default function DashboardScreen() {
             activeOpacity={0.7}
             onPress={handleBellTap}
             accessibilityLabel={
-              urineOwed ? "Urine protein result due" : "Notifications"
+              urineOwed
+                ? t("dashboard.bellDue")
+                : t("dashboard.bellNotifications")
             }
           >
             <MaterialIcons
@@ -360,7 +394,7 @@ export default function DashboardScreen() {
                   numberOfLines={1}
                   allowFontScaling={false}
                 >
-                  Maternal Wellness Daily
+                  {t("dashboard.wellnessTitle")}
                 </Text>
                 <Text
                   style={[styles.heroTip, { width: heroInnerWidth }]}
@@ -375,8 +409,11 @@ export default function DashboardScreen() {
                     allowFontScaling={false}
                   >
                     {dailyFact.isPostpartum
-                      ? "After Delivery"
-                      : `Week ${dailyFact.week} • Day ${dailyFact.dayOfWeek}`}
+                      ? t("dashboard.afterDelivery")
+                      : t("dashboard.weekDay", {
+                          week: dailyFact.week,
+                          day: dailyFact.dayOfWeek,
+                        })}
                   </Text>
                 </View>
                 <Text
@@ -384,7 +421,7 @@ export default function DashboardScreen() {
                   numberOfLines={1}
                   allowFontScaling={false}
                 >
-                  Earlier facts ›
+                  {t("dashboard.earlierFacts")}
                 </Text>
               </>
             ) : (
@@ -394,13 +431,13 @@ export default function DashboardScreen() {
                   numberOfLines={1}
                   allowFontScaling={false}
                 >
-                  Maternal Wellness Daily
+                  {t("dashboard.wellnessTitle")}
                 </Text>
                 <DueDateForm
                   onSave={(edd) => {
                     dispatch(setEdd({ edd, source: "patient" }));
                     showToast({
-                      message: "Due date saved",
+                      message: t("dashboard.dueDateSaved"),
                       type: "success",
                       duration: 2500,
                     });
@@ -423,7 +460,7 @@ export default function DashboardScreen() {
                   <MaterialIcons name="science" size={17} color={TEAL} />
                 </View>
                 <Text style={styles.checkinTitle} numberOfLines={1}>
-                  Urine protein
+                  {t("dashboard.urineProtein")}
                 </Text>
               </View>
               <Text
@@ -437,14 +474,18 @@ export default function DashboardScreen() {
                   {urineAlertRecent && (
                     <View style={[styles.checkinChip, styles.checkinChipAlert]}>
                       <Text style={[styles.checkinChipText, styles.checkinChipAlertText]}>
-                        ALERT {urine?.highestLast24h}
+                        {t("dashboard.urineAlertChip", {
+                          result: proteinResultLabel(urine?.highestLast24h),
+                        })}
                       </Text>
                     </View>
                   )}
                   {(urine?.countToday ?? 0) > 1 && (
                     <View style={styles.checkinChip}>
                       <Text style={styles.checkinChipText}>
-                        {urine?.countToday} TODAY
+                        {t("dashboard.todayCount", {
+                          count: urine?.countToday ?? 0,
+                        })}
                       </Text>
                     </View>
                   )}
@@ -457,7 +498,7 @@ export default function DashboardScreen() {
               onPress={() => setShowUrinePicker(true)}
             >
               <Text style={styles.checkinButtonText} maxFontSizeMultiplier={1.2}>
-                Record result
+                {t("dashboard.recordResult")}
               </Text>
             </TouchableOpacity>
           </View>
@@ -470,11 +511,11 @@ export default function DashboardScreen() {
                   <MaterialIcons name="local-hospital" size={17} color={TEAL} />
                 </View>
                 <Text style={styles.checkinTitle} numberOfLines={1}>
-                  Health events
+                  {t("dashboard.healthEvents")}
                 </Text>
               </View>
               <Text style={styles.checkinStatus} maxFontSizeMultiplier={1.2}>
-                Received care outside the home? Tell your care team right away.
+                {t("dashboard.healthEventsPrompt")}
               </Text>
             </View>
             <TouchableOpacity
@@ -483,7 +524,7 @@ export default function DashboardScreen() {
               onPress={() => setShowHospitalModal(true)}
             >
               <Text style={styles.checkinButtonText} maxFontSizeMultiplier={1.2}>
-                I went to the hospital
+                {t("dashboard.wentToHospital")}
               </Text>
             </TouchableOpacity>
           </View>
@@ -491,9 +532,9 @@ export default function DashboardScreen() {
 
         {/* Latest Readings */}
         <View style={styles.sectionRow}>
-          <Text style={styles.sectionTitle}>Latest readings</Text>
+          <Text style={styles.sectionTitle}>{t("dashboard.latestReadings")}</Text>
           <TouchableOpacity onPress={() => navigation.navigate("History")}>
-            <Text style={styles.sectionLink}>History</Text>
+            <Text style={styles.sectionLink}>{t("dashboard.historyLink")}</Text>
           </TouchableOpacity>
         </View>
 
@@ -501,7 +542,7 @@ export default function DashboardScreen() {
           <View style={styles.emptyReadingsCard}>
             <Text style={styles.statValue}>—</Text>
             <Text style={styles.statTrendMuted}>
-              No readings in the last 48 hours
+              {t("dashboard.noRecentReadings")}
             </Text>
           </View>
         ) : (
@@ -534,8 +575,10 @@ export default function DashboardScreen() {
                     ))}
                 </View>
                 <Text style={styles.sliderCount}>
-                  {readingSlide + 1} of {recentReadings.length} · swipe · last
-                  48 hrs
+                  {t("dashboard.slideCount", {
+                    current: readingSlide + 1,
+                    total: recentReadings.length,
+                  })}
                 </Text>
               </View>
             )}
@@ -563,7 +606,7 @@ export default function DashboardScreen() {
         >
           <MaterialIcons name="add-circle-outline" size={22} color="#fff" />
           <Text style={styles.newReadingText} maxFontSizeMultiplier={1.2}>
-            New Reading
+            {t("dashboard.newReading")}
           </Text>
         </TouchableOpacity>
       </View>

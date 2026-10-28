@@ -5,6 +5,7 @@ import DashboardScreen from "../screens/Dashboard/DashboardScreen";
 // BleCaptureScreen. See CaptureRouter for why the flows are kept separate.
 import CaptureScreen from "../screens/Capture/CaptureRouter";
 import WellnessHistoryScreen from "../screens/Dashboard/WellnessHistoryScreen";
+import { useT } from "../i18n";
 
 export type DashboardStackParamList = {
   DashboardMain: undefined;
@@ -15,22 +16,23 @@ export type DashboardStackParamList = {
 const Stack = createNativeStackNavigator<DashboardStackParamList>();
 
 export default function DashboardNavigator() {
+  const { t } = useT();
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen
         name="DashboardMain"
         component={DashboardScreen}
-        options={{ title: "Dashboard" }}
+        options={{ title: t("nav.dashboard") }}
       />
       <Stack.Screen
         name="Capture"
         component={CaptureScreen}
-        options={{ title: "Capture" }} // can override styles here if needed
+        options={{ title: t("nav.capture") }} // can override styles here if needed
       />
       <Stack.Screen
         name="WellnessHistory"
         component={WellnessHistoryScreen}
-        options={{ title: "Maternal Wellness" }}
+        options={{ title: t("nav.maternalWellness") }}
       />
     </Stack.Navigator>
   );

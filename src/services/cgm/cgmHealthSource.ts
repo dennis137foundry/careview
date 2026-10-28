@@ -14,6 +14,7 @@
  */
 import { Linking, NativeModules, Platform } from "react-native";
 import type { CgmSample } from "./cgmLogic";
+import { t } from "../../i18n";
 
 export type HealthAvailability =
   | "available"
@@ -130,7 +131,7 @@ function healthConnect(): HealthSource {
     },
     read: async (startMs, endMs) => {
       if (!(await init())) {
-        throw new Error("Health Connect is not available");
+        throw new Error(t("services.cgmHealthConnectUnavailable"));
       }
       const out: CgmSample[] = [];
       let pageToken: string | undefined;

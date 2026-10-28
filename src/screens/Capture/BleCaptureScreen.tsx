@@ -71,6 +71,7 @@ import {
   CAPTURE_ACCENT_SOFT,
   CAPTURE_GRADIENT,
 } from "./captureTheme";
+import { t, useT } from "../../i18n";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -93,12 +94,10 @@ const ARMED_TIMEOUT_MS = 5 * 60 * 1000;
 type Phase = "idle" | "armed" | "receiving" | "success";
 
 function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
-  const message =
-    status?.message ||
-    "CareView needs Bluetooth to capture readings. Turn Bluetooth on or allow Bluetooth permission, then try again.";
-  Alert.alert("Bluetooth Needed", message, [
-    { text: "Cancel", style: "cancel" },
-    { text: "Open Settings", onPress: () => Linking.openSettings() },
+  const message = status?.message || t("capture.bluetoothNeededMsgBle");
+  Alert.alert(t("capture.bluetoothNeededTitle"), message, [
+    { text: t("common.cancel"), style: "cancel" },
+    { text: t("common.openSettings"), onPress: () => Linking.openSettings() },
   ]);
 }
 
@@ -189,6 +188,9 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   const store = useStore<RootState>();
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  // Draw again when the language changes. Text is produced by t() at the
+  // moment it is shown (alerts, toasts, render), so no callback caches it.
+  useT();
   const { deviceId } = route.params ?? {};
 
   const devices = useSelector((state: RootState) => state.devices.devices);
@@ -312,7 +314,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
 
   const arm = useCallback(async () => {
     if (!deviceMac) {
-      Alert.alert("Error", "Device not found");
+      Alert.alert(t("common.error"), t("capture.deviceNotFound"));
       return;
     }
 
@@ -336,8 +338,8 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     setPhase("armed");
     setStatusText(
       resolved
-        ? "Waiting for your monitor…"
-        : "Searching for your monitor…"
+        ? t("capture.waitingForMonitor")
+        : t("capture.searchingForMonitor")
     );
     log(`Armed (peripheral resolved: ${resolved})`);
 
@@ -346,10 +348,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       disarm();
       setPhase("idle");
       setStatusText("");
-      Alert.alert(
-        "No Reading Received",
-        "CareView didn't hear from your monitor. Your reading is still saved on the device — start capture again and it will be picked up."
-      );
+      Alert.alert(t("capture.noReadingReceivedTitle"), t("capture.noReadingReceivedMsg"));
     }, ARMED_TIMEOUT_MS);
   }, [deviceMac, disarm, log, successScale]);
 
@@ -370,13 +369,13 @@ export default function BleCaptureScreen({ route, navigation }: any) {
 
     const batt = device?.lastBattery;
     if (typeof batt === "number" && batt >= 0 && batt < LOW_BATTERY_THRESHOLD) {
-      const label = device?.friendlyName || device?.name || "device";
+      const label = device?.friendlyName || device?.name || t("capture.deviceFallback");
       Alert.alert(
-        "Charge Your Device",
-        `Your ${label} battery is low (${batt}%). Charge it soon for reliable readings. You can still try now.`,
+        t("capture.chargeTitle"),
+        t("capture.chargeMsg", { device: label, level: batt }),
         [
-          { text: "Cancel", style: "cancel" },
-          { text: "Try Anyway", onPress: proceed },
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("capture.tryAnyway"), onPress: proceed },
         ]
       );
       return;
@@ -389,7 +388,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     (data: any) => {
       setShowHealthCheckModal(false);
       setHealthCheckCompleted(true);
-      showToast({ message: "Daily health check saved", type: "success", duration: 2500 });
+      showToast({ message: t("capture.healthCheckSaved"), type: "success", duration: 2500 });
       if (data.hasHeadaches || data.hasVisualDisturbances) {
         log("Symptoms reported - care team will be notified");
       }
@@ -426,13 +425,13 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       const ask = () =>
         new Promise<boolean>((resolve) => {
           Alert.alert(
-            "Reading without a date",
-            `The monitor sent ${systolic}/${diastolic}` +
-              (pulse ? `, pulse ${pulse}` : "") +
-              ", but it has no date (the monitor's clock was not set when it was taken).\n\nDid you take this reading just now?",
+            t("capture.undatedTitle"),
+            pulse
+              ? t("capture.undatedMsgPulse", { systolic, diastolic, pulse })
+              : t("capture.undatedMsg", { systolic, diastolic }),
             [
-              { text: "No, skip it", style: "cancel", onPress: () => resolve(false) },
-              { text: "Yes, just now", onPress: () => resolve(true) },
+              { text: t("capture.undatedNo"), style: "cancel", onPress: () => resolve(false) },
+              { text: t("capture.undatedYes"), onPress: () => resolve(true) },
             ],
             { cancelable: false }
           );
@@ -528,7 +527,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       } catch (err) {
         console.error("[BleCapture] Failed to save reading:", err);
         showToast({
-          message: "Couldn't save your reading. Please try again.",
+          message: t("capture.saveFailed"),
           type: "error",
           duration: 4000,
         });
@@ -595,7 +594,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       emitter.addListener("onConnectionStateChanged", (data: any) => {
         if (data?.connected && armedRef.current && isFocused) {
           setPhase("receiving");
-          setStatusText("Monitor found. Collecting your reading…");
+          setStatusText(t("capture.monitorFound"));
         }
       }),
       emitter.addListener("onBatteryLevel", (data: any) => {
@@ -709,12 +708,12 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   if (!device) {
     return (
       <View style={[styles.container, styles.errorContainer]}>
-        <Text style={styles.errorText}>Device not found</Text>
+        <Text style={styles.errorText}>{t("capture.deviceNotFound")}</Text>
         <TouchableOpacity
           style={styles.backButtonAlt}
           onPress={() => navigation.goBack()}
         >
-          <Text style={styles.backButtonText}>Go Back</Text>
+          <Text style={styles.backButtonText}>{t("capture.goBack")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -731,24 +730,24 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   const getPhaseMessage = () => {
     switch (phase) {
       case "armed":
-        return "Take your reading now";
+        return t("capture.takeReadingNow");
       case "receiving":
-        return "Getting your reading...";
+        return t("capture.gettingReading");
       case "success":
-        return "Reading saved!";
+        return t("capture.readingSaved");
       default:
-        return "Ready to measure";
+        return t("capture.readyToMeasure");
     }
   };
 
   const getSyncStatusText = () => {
     switch (syncStatus) {
       case "syncing":
-        return "Syncing to care team...";
+        return t("capture.syncing");
       case "synced":
-        return "✓ Sent to care team";
+        return t("capture.synced");
       case "pending":
-        return "Will send when online";
+        return t("capture.pending");
       default:
         return "";
     }
@@ -758,7 +757,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     ? Math.max(insets.bottom + 12, 20)
     : Math.max(insets.bottom + 24, 40);
 
-  const deviceTypeLabel = deviceService.getFriendlyTypeName(
+  const deviceTypeLabel = deviceService.getFriendlyTypeLabel(
     device.model || "GATT_BP"
   );
 
@@ -798,8 +797,10 @@ export default function BleCaptureScreen({ route, navigation }: any) {
           <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
             <MaterialIcons name="warning" size={18} color="#FF5252" />
             <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
-              Above threshold ({thresholds.systolicHigh}/
-              {thresholds.diastolicHigh})
+              {t("capture.aboveThresholdBP", {
+                systolic: thresholds.systolicHigh,
+                diastolic: thresholds.diastolicHigh,
+              })}
             </Text>
           </View>
         )}
@@ -849,7 +850,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
         >
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Capture Reading</Text>
+        <Text style={styles.headerTitle}>{t("capture.captureReading")}</Text>
         <View style={styles.headerBtnSpacer} />
       </Animated.View>
 
@@ -962,9 +963,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
                 {getPhaseMessage()}
               </Text>
               <Text style={styles.statusSubtext}>
-                {isWaiting
-                  ? "Press START on your monitor and take your blood pressure as normal. The reading arrives on its own."
-                  : "Tap below, then take your blood pressure. You do not need to touch your phone again."}
+                {isWaiting ? t("capture.bleWaitingHint") : t("capture.bleIdleHint")}
               </Text>
               {isWaiting && statusText !== "" && (
                 <Text style={styles.statusSubtext}>{statusText}</Text>
@@ -980,7 +979,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
                 activeOpacity={0.8}
                 style={styles.primaryButton}
               >
-                <Text style={styles.primaryButtonText}>Capture Reading</Text>
+                <Text style={styles.primaryButtonText}>{t("capture.captureReading")}</Text>
               </TouchableOpacity>
             )}
 
@@ -994,7 +993,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
                 }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
             )}
 
@@ -1005,7 +1004,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
                   activeOpacity={0.8}
                   style={[styles.primaryButton, isSuccess && styles.primaryButtonSuccess]}
                 >
-                  <Text style={styles.primaryButtonText}>Done</Text>
+                  <Text style={styles.primaryButtonText}>{t("common.done")}</Text>
                 </TouchableOpacity>
               </Animated.View>
             )}

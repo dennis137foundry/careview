@@ -13,6 +13,9 @@ import {
 } from "react-native";
 import authService from "../../services/authService";
 import { BTN } from "../../constants/buttons";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { LANGUAGE_NAMES, useT } from "../../i18n";
+import LanguagePicker from "../../components/LanguagePicker";
 
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../navigation/AppNavigator";
@@ -24,11 +27,13 @@ type AuthScreenProps = {
 export default function AuthScreen({ navigation }: AuthScreenProps) {
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
+  const { t } = useT();
+  const [showLanguage, setShowLanguage] = useState(false);
 
   const handleSendCode = async () => {
     const trimmed = phone.trim();
     if (!trimmed) {
-      Alert.alert("Phone required", "Please enter your mobile number.");
+      Alert.alert(t("auth.phoneRequiredTitle"), t("auth.phoneRequiredBody"));
       return;
     }
 
@@ -37,14 +42,14 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
       const success = await authService.sendCode(trimmed);
 
       if (!success) {
-        Alert.alert("Error", "Could not send verification code.");
+        Alert.alert(t("common.error"), t("auth.sendFailed"));
         return;
       }
 
       navigation.navigate("AuthCode", { phone: trimmed });
     } catch (e: any) {
       console.error("[AuthScreen] Error:", e);
-      Alert.alert("Error", e?.message || "Failed to send code. Please try again.");
+      Alert.alert(t("common.error"), e?.message || t("auth.sendFailedRetry"));
     } finally {
       setBusy(false);
     }
@@ -65,13 +70,13 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
       {/* Title */}
       <Text style={styles.title}>Trinity CareView</Text>
       <Text style={styles.subtitle}>
-        Enter your mobile number to sign in.
+        {t("auth.subtitle")}
       </Text>
 
       {/* Input */}
       <TextInput
         style={styles.input}
-        placeholder="Mobile number"
+        placeholder={t("auth.phonePlaceholder")}
         placeholderTextColor="#888"
         keyboardType="phone-pad"
         value={phone}
@@ -87,13 +92,27 @@ export default function AuthScreen({ navigation }: AuthScreenProps) {
         disabled={busy}
       >
         <Text style={styles.buttonText}>
-          {busy ? "Please Wait..." : "Request Code"}
+          {busy ? t("auth.pleaseWait") : t("auth.requestCode")}
         </Text>
       </TouchableOpacity>
 
       <Text style={styles.demoNote}>
-        We’ll send a 6-digit code to verify you.
+        {t("auth.codeNote")}
       </Text>
+
+      {/* Language: all three names, so a patient who reads none of the
+          others still finds hers (her phone may not offer Creole). */}
+      <TouchableOpacity
+        style={styles.languageLink}
+        onPress={() => setShowLanguage(true)}
+        accessibilityLabel={t("language.choose")}
+      >
+        <MaterialIcons name="translate" size={18} color="#aabbcc" />
+        <Text style={styles.languageText}>
+          {[LANGUAGE_NAMES.en, LANGUAGE_NAMES.es, LANGUAGE_NAMES.ht].join("  ·  ")}
+        </Text>
+      </TouchableOpacity>
+      <LanguagePicker visible={showLanguage} onClose={() => setShowLanguage(false)} />
     </KeyboardAvoidingView>
   );
 }
@@ -148,6 +167,18 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 18,
     fontWeight: "700",
+  },
+  languageLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  languageText: {
+    color: "#aabbcc",
+    fontSize: 14,
+    marginLeft: 8,
   },
   demoNote: {
     fontSize: 13,

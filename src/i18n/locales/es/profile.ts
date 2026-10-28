@@ -1,0 +1,40 @@
+import type en from "../en/profile";
+
+const es: Record<keyof typeof en, string> = {
+  "profile.title": "Perfil",
+  "profile.notAvailable": "No disponible",
+  "profile.na": "N/D",
+  "profile.patientId": "ID: {id}",
+  "profile.photoTitle": "Foto de perfil",
+  "profile.chooseLibrary": "Elegir de la galería",
+  "profile.takePhoto": "Tomar foto",
+  "profile.removePhoto": "Quitar foto",
+  "profile.aboutBody": "Versión {version}\n\nMonitoreo remoto de pacientes de Trinity Health & Home Services.",
+  "profile.logoutTitle": "Cerrar sesión",
+  "profile.logoutConfirm": "¿Seguro que quiere cerrar sesión?",
+  "profile.sendMessage": "Envíenos un mensaje",
+  "profile.phone": "Teléfono",
+  "profile.provider": "Médico",
+  "profile.providerName": "Dr. {first} {last}",
+  "profile.notAssigned": "Sin asignar",
+  "profile.practice": "Consultorio",
+  "profile.about": "Acerca de",
+  "profile.signOut": "Cerrar sesión",
+  "profile.signOutWipe": "Cerrar sesión y borrar datos",
+
+  "profile.wipeFinalTitle": "Confirmación final",
+  "profile.wipeFinalBody": "Esto borrará para siempre todos los datos guardados en este teléfono y cerrará su sesión. ¿Desea continuar?",
+  "profile.wipeConfirmButton": "Borrar y cerrar sesión",
+  "profile.wipeFailed": "No se pudieron borrar los datos. Inténtelo de nuevo.",
+  "profile.wipeBeforeTitle": "Antes de continuar",
+  "profile.wipeSynced": "Las mediciones y lecturas que toma esta aplicación se sincronizan con el EMR de Trinity CareView, donde se guardan para informes.",
+  "profile.wipeLocalOnly": "Esta opción solo borra las mediciones y lecturas guardadas en este teléfono — no las del EMR.",
+  "profile.wipeUnsyncedLost": "Se perderán las lecturas que todavía no se hayan sincronizado.",
+  "profile.wipePermanent": "Los datos borrados no se pueden recuperar.",
+  "profile.wipeContact": "Para más información, comuníquese con Trinity Home Health Services.",
+  "profile.wipeCheckbox": "Entiendo que los datos de este teléfono se borrarán para siempre",
+  "profile.wiping": "Borrando datos...",
+  "profile.wipeButton": "Borrar datos y cerrar sesión",
+};
+
+export default es;

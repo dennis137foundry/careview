@@ -1,0 +1,40 @@
+import type en from "../en/profile";
+
+const ht: Record<keyof typeof en, string> = {
+  "profile.title": "Pwofil",
+  "profile.notAvailable": "Pa disponib",
+  "profile.na": "Pa genyen",
+  "profile.patientId": "ID: {id}",
+  "profile.photoTitle": "Foto pwofil",
+  "profile.chooseLibrary": "Chwazi nan foto yo",
+  "profile.takePhoto": "Pran yon foto",
+  "profile.removePhoto": "Retire foto a",
+  "profile.aboutBody": "Vèsyon {version}\n\nSwivi pasyan a distans pa Trinity Health & Home Services.",
+  "profile.logoutTitle": "Dekonekte",
+  "profile.logoutConfirm": "Èske ou sèten ou vle dekonekte?",
+  "profile.sendMessage": "Voye yon mesaj ban nou",
+  "profile.phone": "Telefòn",
+  "profile.provider": "Doktè",
+  "profile.providerName": "Dr. {first} {last}",
+  "profile.notAssigned": "Poko gen doktè",
+  "profile.practice": "Klinik",
+  "profile.about": "Konsènan",
+  "profile.signOut": "Dekonekte",
+  "profile.signOutWipe": "Dekonekte epi efase done",
+
+  "profile.wipeFinalTitle": "Dènye konfimasyon",
+  "profile.wipeFinalBody": "Sa ap efase tout done ki sou telefòn sa a pou toujou, epi l ap dekonekte ou. Ou vle kontinye?",
+  "profile.wipeConfirmButton": "Efase epi dekonekte",
+  "profile.wipeFailed": "Nou pa t ka efase done yo. Tanpri eseye ankò.",
+  "profile.wipeBeforeTitle": "Anvan ou kontinye",
+  "profile.wipeSynced": "Tout mezi aplikasyon sa a pran yo senkronize ak EMR Trinity CareView, kote yo kenbe yo pou fè rapò.",
+  "profile.wipeLocalOnly": "Opsyon sa a efase sèlman mezi ki sou telefòn sa a — li pa efase anyen nan EMR a.",
+  "profile.wipeUnsyncedLost": "Mezi ki poko senkronize yo ap pèdi.",
+  "profile.wipePermanent": "Done ou efase yo pa ka retounen.",
+  "profile.wipeContact": "Pou plis enfòmasyon, kontakte Trinity Home Health Services.",
+  "profile.wipeCheckbox": "Mwen konprann done ki sou telefòn sa a ap efase pou toujou",
+  "profile.wiping": "N ap efase done yo...",
+  "profile.wipeButton": "Efase done epi dekonekte",
+};
+
+export default ht;

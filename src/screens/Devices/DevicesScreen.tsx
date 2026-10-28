@@ -23,6 +23,7 @@ import DexcomConnectCard from "../../components/DexcomConnectCard";
 import type { RootState, AppDispatch } from "../../redux/store";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { BTN } from "../../constants/buttons";
+import { currentLanguage, fmtDate, t, useT, type TKey } from "../../i18n";
 
 const deviceImages: Record<string, any> = {
   BP: require("../../assets/bp3l.png"),
@@ -30,11 +31,30 @@ const deviceImages: Record<string, any> = {
   BG: require("../../assets/bg5.png"),
 };
 
-const deviceTypeLabels: Record<string, string> = {
-  BP: "Blood Pressure",
-  SCALE: "Smart Scale",
-  BG: "Glucose Meter",
+const deviceTypeLabelKeys: Record<string, TKey> = {
+  BP: "devices.typeBP",
+  SCALE: "devices.typeScale",
+  BG: "devices.typeBG",
 };
+
+// A glucose reading's sample window is stored (and synced to the EMR) as the
+// English value ("before breakfast"); that value is never changed. Other
+// languages show a label for it; English shows the stored value as before.
+const GLUCOSE_TIMING_KEYS: Record<string, TKey> = {
+  overnight: "devices.timingOvernight",
+  "before breakfast": "devices.timingBeforeBreakfast",
+  "after breakfast": "devices.timingAfterBreakfast",
+  "before lunch": "devices.timingBeforeLunch",
+  "after lunch": "devices.timingAfterLunch",
+  "before dinner": "devices.timingBeforeDinner",
+  "after dinner": "devices.timingAfterDinner",
+  bedtime: "devices.timingBedtime",
+};
+
+function glucoseTimingLabel(stored: string): string {
+  const key = GLUCOSE_TIMING_KEYS[String(stored).toLowerCase()];
+  return key && currentLanguage() !== "en" ? t(key) : stored;
+}
 
 function batteryColor(level: number): string {
   if (level < 20) return "#c62828"; // red
@@ -80,6 +100,7 @@ function SwipeableDeviceCard({
 }) {
   const [translateX] = useState(new Animated.Value(0));
   const [isOpen, setIsOpen] = useState(false);
+  useT(); // redraw on a language change
 
   const panResponder = PanResponder.create({
     onMoveShouldSetPanResponder: (_, gestureState) => {
@@ -127,26 +148,26 @@ function SwipeableDeviceCard({
     const promptToForgetPairing = () => {
       const where =
         Platform.OS === "ios"
-          ? "Settings > Bluetooth, tap the (i) next to it, then Forget This Device."
-          : "Settings > Connected devices, tap the gear next to it, then Forget.";
+          ? t("devices.forgetWhereIos")
+          : t("devices.forgetWhereAndroid");
 
       Alert.alert(
-        "One More Step",
-        `"${device.name}" was removed from CareView, but your phone still remembers its Bluetooth pairing.\n\nTo be able to pair it again later, also remove it in ${where}`,
+        t("devices.oneMoreStepTitle"),
+        t("devices.oneMoreStepBody", { name: device.name, where }),
         [
-          { text: "Later", style: "cancel" },
-          { text: "Open Settings", onPress: () => Linking.openSettings() },
+          { text: t("devices.later"), style: "cancel" },
+          { text: t("common.openSettings"), onPress: () => Linking.openSettings() },
         ]
       );
     };
 
     Alert.alert(
-      "Delete Device",
-      `Are you sure you want to remove "${device.name}"?\n\nThis will not delete any saved readings.`,
+      t("devices.deleteDevice"),
+      t("devices.deleteConfirm", { name: device.name }),
       [
-        { text: "Cancel", style: "cancel", onPress: resetSwipe },
+        { text: t("common.cancel"), style: "cancel", onPress: resetSwipe },
         {
-          text: "Delete",
+          text: t("common.delete"),
           style: "destructive",
           onPress: () => {
             resetSwipe();
@@ -162,19 +183,21 @@ function SwipeableDeviceCard({
   };
 
   const handleMenuPress = () => {
-    const typeLabel = deviceTypeLabels[device.type] || device.type;
+    const typeLabel = deviceTypeLabelKeys[device.type]
+      ? t(deviceTypeLabelKeys[device.type])
+      : device.type;
     
     Alert.alert(
       device.name,
-      `Type: ${typeLabel}\nMAC: ${device.mac || device.id}`,
+      t("devices.menuDetails", { type: typeLabel, mac: device.mac || device.id }),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("common.cancel"), style: "cancel" },
         {
-          text: "Rename",
+          text: t("devices.rename"),
           onPress: onRename,
         },
         {
-          text: "Delete Device",
+          text: t("devices.deleteDevice"),
           style: "destructive",
           onPress: onDelete,
         },
@@ -183,7 +206,9 @@ function SwipeableDeviceCard({
   };
 
   const image = deviceImages[device.type] || deviceImages.BP;
-  const typeLabel = deviceTypeLabels[device.type] || device.type;
+  const typeLabel = deviceTypeLabelKeys[device.type]
+    ? t(deviceTypeLabelKeys[device.type])
+    : device.type;
 
   return (
     <View style={styles.cardContainer}>
@@ -195,7 +220,7 @@ function SwipeableDeviceCard({
           activeOpacity={0.8}
         >
           <MaterialIcons name="delete" size={24} color="#fff" />
-          <Text style={styles.deleteButtonText}>Delete</Text>
+          <Text style={styles.deleteButtonText}>{t("common.delete")}</Text>
         </TouchableOpacity>
       </View>
 
@@ -234,8 +259,8 @@ function SwipeableDeviceCard({
               />
               <Text style={device.clockSetAt ? styles.meta : styles.metaWarn}>
                 {device.clockSetAt
-                  ? `Clock set ${new Date(device.clockSetAt).toLocaleDateString()}`
-                  : "Not set up yet — tap Capture to set the meter's clock"}
+                  ? t("devices.clockSet", { date: fmtDate(device.clockSetAt) })
+                  : t("devices.clockNotSet")}
               </Text>
             </View>
           )}
@@ -248,16 +273,16 @@ function SwipeableDeviceCard({
                   ? `${lastReading.value}/${lastReading.value2} ${lastReading.unit}`
                   : `${lastReading.value} ${lastReading.unit}${
                       lastReading.type === "BG" && lastReading.measurementCondition
-                        ? ` - ${lastReading.measurementCondition}`
+                        ? ` - ${glucoseTimingLabel(lastReading.measurementCondition)}`
                         : ""
                     }`}{" "}
-                · {new Date(lastReading.ts).toLocaleDateString()}
+                · {fmtDate(lastReading.ts)}
               </Text>
             </View>
           ) : (
             <View style={styles.lastReadingRow}>
               <MaterialIcons name="info-outline" size={14} color="#aaa" />
-              <Text style={styles.metaEmpty}>No readings yet</Text>
+              <Text style={styles.metaEmpty}>{t("devices.noReadings")}</Text>
             </View>
           )}
 
@@ -268,7 +293,7 @@ function SwipeableDeviceCard({
               activeOpacity={0.8}
             >
               <MaterialIcons name="play-arrow" size={20} color="#fff" />
-              <Text style={styles.primaryText}>Capture</Text>
+              <Text style={styles.primaryText}>{t("devices.capture")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -289,6 +314,7 @@ function SwipeableDeviceCard({
 export default function DevicesScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const { showToast } = useToast();
+  useT(); // redraw on a language change
 
   // Dark blue header → white status-bar glyphs.
   useStatusBarStyle("light-content");
@@ -319,7 +345,7 @@ export default function DevicesScreen({ navigation }: any) {
     if (deviceToRename) {
       dispatch(renameDevice({ deviceId: deviceToRename.id, newName }));
       showToast({
-        message: `Device renamed to "${newName}"`,
+        message: t("devices.renamedToast", { name: newName }),
         type: "success",
         duration: 2500,
       });
@@ -342,7 +368,7 @@ export default function DevicesScreen({ navigation }: any) {
       >
         <View style={styles.center}>
           <ActivityIndicator size="large" color="#00509f" />
-          <Text style={styles.loadingText}>Loading devices…</Text>
+          <Text style={styles.loadingText}>{t("devices.loading")}</Text>
         </View>
       </ImageBackground>
     );
@@ -361,7 +387,7 @@ export default function DevicesScreen({ navigation }: any) {
       >
         {/* Header Row */}
         <View style={styles.headerRow}>
-          <Text style={styles.title}>Your Devices</Text>
+          <Text style={styles.title}>{t("devices.title")}</Text>
           <View style={styles.headerActions}>
             <TouchableOpacity
               style={styles.addButton}
@@ -369,7 +395,7 @@ export default function DevicesScreen({ navigation }: any) {
               activeOpacity={0.8}
             >
               <MaterialIcons name="add" size={20} color="#fff" />
-              <Text style={styles.addButtonText}>Add</Text>
+              <Text style={styles.addButtonText}>{t("devices.add")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -380,9 +406,9 @@ export default function DevicesScreen({ navigation }: any) {
             <View style={styles.emptyIconContainer}>
               <MaterialIcons name="bluetooth-searching" size={48} color="#00509f" />
             </View>
-            <Text style={styles.emptyTitle}>No Devices Yet</Text>
+            <Text style={styles.emptyTitle}>{t("devices.emptyTitle")}</Text>
             <Text style={styles.emptySubtitle}>
-              Add your devices to start tracking your health.
+              {t("devices.emptySubtitle")}
             </Text>
             <TouchableOpacity
               style={styles.emptyAddButton}
@@ -390,7 +416,7 @@ export default function DevicesScreen({ navigation }: any) {
               activeOpacity={0.8}
             >
               <MaterialIcons name="add-circle" size={22} color="#fff" />
-              <Text style={styles.emptyAddButtonText}>Add Your First Device</Text>
+              <Text style={styles.emptyAddButtonText}>{t("devices.addFirst")}</Text>
             </TouchableOpacity>
           </View>
         ) : (

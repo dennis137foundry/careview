@@ -19,6 +19,7 @@ import { authedFetch } from "../authToken";
 import { isDemoAccount } from "../seedDemoData";
 import { getHealthSource } from "./cgmHealthSource";
 import { startCgmBackground, stopCgmBackground } from "./cgmBackground";
+import { t } from "../../i18n";
 import {
   CGM_CONFIG,
   chunk,
@@ -145,7 +146,7 @@ async function runSync(reason: string): Promise<void> {
     if (user.phone && isDemoAccount(user.phone)) return;
 
     if ((await source.hasAccess()) === false) {
-      setAppSetting(KEY.lastError, `${source.name} access was turned off`);
+      setAppSetting(KEY.lastError, t("services.cgmAccessOff", { source: source.name }));
       return;
     }
 
@@ -159,7 +160,7 @@ async function runSync(reason: string): Promise<void> {
       // 200 = all stored or already there; 207 = some refused for good (e.g. a
       // date before her enrollment) — both mean this batch is done.
       if (res.status !== 200 && res.status !== 207) {
-        throw new Error(`EMR returned ${res.status}`);
+        throw new Error(t("services.cgmServerError", { status: res.status }));
       }
       const json = await res.json().catch(() => null);
       sent += Number(json?.summary?.inserted ?? 0);

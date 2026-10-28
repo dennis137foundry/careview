@@ -19,6 +19,20 @@ import { isDemoAccount } from "../services/seedDemoData";
 import { getUser } from "../services/sqliteService";
 import { useToast } from "./Toast";
 import { BTN } from "../constants/buttons";
+import { useT } from "../i18n";
+
+/** "**words**" in a translated string marks the part shown in bold. */
+function withEmphasis(text: string, style: object) {
+  return text.split("**").map((part, i) =>
+    i % 2 === 1 ? (
+      <Text key={i} style={style}>
+        {part}
+      </Text>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    )
+  );
+}
 
 interface SendMessageModalProps {
   visible: boolean;
@@ -110,6 +124,7 @@ export default function SendMessageModal({
 }: SendMessageModalProps) {
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  const { t } = useT();
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
   const inputRef = useRef<TextInput>(null);
@@ -128,7 +143,7 @@ export default function SendMessageModal({
   // in the app (hospital report, urine protein, device add).
   const confirmSent = () => {
     showToast({
-      message: "Message sent — your care team will respond shortly",
+      message: t("modals.msgSent"),
       type: "success",
       duration: 3000,
     });
@@ -138,7 +153,7 @@ export default function SendMessageModal({
   const handleSend = async () => {
     const trimmed = message.trim();
     if (!trimmed) {
-      Alert.alert("Message Required", "Please enter a message before sending.");
+      Alert.alert(t("modals.msgRequiredTitle"), t("modals.msgRequiredBody"));
       return;
     }
 
@@ -177,10 +192,10 @@ export default function SendMessageModal({
       console.error("[SendMessage] Error:", error);
 
       const alertMessage = isNetworkError(error)
-        ? "Unable to reach the server. Please check your internet connection and try again."
-        : "Your message could not be sent. Please try again or contact support directly.";
+        ? t("modals.msgNetworkError")
+        : t("modals.msgSendFailed");
 
-      Alert.alert("Unable to Send", alertMessage);
+      Alert.alert(t("modals.msgUnableTitle"), alertMessage);
     } finally {
       setSending(false);
     }
@@ -215,7 +230,7 @@ export default function SendMessageModal({
           >
             <MaterialIcons name="close" size={24} color="#333" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Send Us A Message</Text>
+          <Text style={styles.headerTitle}>{t("modals.msgTitle")}</Text>
           <View style={styles.headerSpacer} />
         </View>
 
@@ -228,22 +243,19 @@ export default function SendMessageModal({
           <View style={styles.warningBox}>
             <MaterialIcons name="warning" size={24} color="#c62828" />
             <Text style={styles.warningText}>
-              <Text style={styles.warningBold}>
-                If you are experiencing a medical emergency, call 9-1-1.
-              </Text>
-              {" "}This form is not for emergency medical assistance.
+              {withEmphasis(t("modals.msgEmergency"), styles.warningBold)}
             </Text>
           </View>
 
           {/* Message Input */}
-          <Text style={styles.label}>Your Message</Text>
+          <Text style={styles.label}>{t("modals.msgYourMessage")}</Text>
           <TextInput
             ref={inputRef}
             style={[
               styles.textArea,
               isOverLimit && styles.textAreaError,
             ]}
-            placeholder="Type your message here..."
+            placeholder={t("modals.msgPlaceholder")}
             placeholderTextColor="#999"
             multiline
             numberOfLines={6}
@@ -276,20 +288,18 @@ export default function SendMessageModal({
             {sending ? (
               <>
                 <ActivityIndicator color="#fff" size="small" />
-                <Text style={styles.sendButtonText}>Sending...</Text>
+                <Text style={styles.sendButtonText}>{t("modals.msgSending")}</Text>
               </>
             ) : (
               <>
                 <MaterialIcons name="send" size={20} color="#fff" />
-                <Text style={styles.sendButtonText}>Send Message</Text>
+                <Text style={styles.sendButtonText}>{t("modals.msgSend")}</Text>
               </>
             )}
           </TouchableOpacity>
 
           {/* Info Note */}
-          <Text style={styles.infoNote}>
-            Messages are typically responded to within 1 business day.
-          </Text>
+          <Text style={styles.infoNote}>{t("modals.msgResponseTime")}</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </Modal>

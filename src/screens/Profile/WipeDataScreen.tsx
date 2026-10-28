@@ -20,21 +20,23 @@ import { logout } from "../../redux/userSlice";
 import { wipeAllPatientData } from "../../services/sqliteService";
 import type { AppDispatch } from "../../redux/store";
 import { BTN } from "../../constants/buttons";
+import { useT } from "../../i18n";
 
 export default function WipeDataScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
+  const { t } = useT();
   const [confirmed, setConfirmed] = useState(false);
   const [wiping, setWiping] = useState(false);
 
   const handleWipe = () => {
     Alert.alert(
-      "Final Confirmation",
-      "This will permanently delete all local data and sign you out. Continue?",
+      t("profile.wipeFinalTitle"),
+      t("profile.wipeFinalBody"),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("common.cancel"), style: "cancel" },
         {
-          text: "Wipe & Sign Out",
+          text: t("profile.wipeConfirmButton"),
           style: "destructive",
           onPress: performWipe,
         },
@@ -59,7 +61,7 @@ export default function WipeDataScreen({ navigation }: any) {
     } catch (error) {
       console.error("[WipeData] Wipe failed:", error);
       setWiping(false);
-      Alert.alert("Error", "Unable to wipe data. Please try again.");
+      Alert.alert(t("common.error"), t("profile.wipeFailed"));
     }
   };
 
@@ -80,7 +82,7 @@ export default function WipeDataScreen({ navigation }: any) {
         >
           <MaterialIcons name="arrow-back" size={24} color="#00468c" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Sign Out & Wipe Data</Text>
+        <Text style={styles.headerTitle}>{t("profile.signOutWipe")}</Text>
       </View>
 
       <ScrollView
@@ -95,35 +97,33 @@ export default function WipeDataScreen({ navigation }: any) {
 
         {/* Explanation card */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Before You Continue</Text>
+          <Text style={styles.cardTitle}>{t("profile.wipeBeforeTitle")}</Text>
 
           <View style={styles.bulletRow}>
             <MaterialIcons name="cloud-done" size={20} color={BTN.link} />
             <Text style={styles.bulletText}>
-              Measurements and readings collected by this app are synced to
-              Trinity CareView EMR for retention and reporting.
+              {t("profile.wipeSynced")}
             </Text>
           </View>
 
           <View style={styles.bulletRow}>
             <MaterialIcons name="phone-android" size={20} color={BTN.link} />
             <Text style={styles.bulletText}>
-              This feature will only clear measurements and readings collected on
-              the local device — not the EMR.
+              {t("profile.wipeLocalOnly")}
             </Text>
           </View>
 
           <View style={styles.bulletRow}>
             <MaterialIcons name="sync-problem" size={20} color={BTN.destructive} />
             <Text style={[styles.bulletText, styles.warningText]}>
-              Any unsynced readings will be lost.
+              {t("profile.wipeUnsyncedLost")}
             </Text>
           </View>
 
           <View style={styles.bulletRow}>
             <MaterialIcons name="delete-forever" size={20} color={BTN.destructive} />
             <Text style={[styles.bulletText, styles.warningText]}>
-              Wiped data cannot be retrieved.
+              {t("profile.wipePermanent")}
             </Text>
           </View>
 
@@ -132,8 +132,7 @@ export default function WipeDataScreen({ navigation }: any) {
           <View style={styles.bulletRow}>
             <MaterialIcons name="support-agent" size={20} color={BTN.link} />
             <Text style={styles.bulletText}>
-              For more information, contact Trinity Home Health Services for
-              additional guidance.
+              {t("profile.wipeContact")}
             </Text>
           </View>
         </View>
@@ -152,7 +151,7 @@ export default function WipeDataScreen({ navigation }: any) {
             )}
           </View>
           <Text style={styles.checkboxLabel}>
-            I understand that local data will be permanently deleted
+            {t("profile.wipeCheckbox")}
           </Text>
         </TouchableOpacity>
 
@@ -177,7 +176,7 @@ export default function WipeDataScreen({ navigation }: any) {
               (!confirmed || wiping) && styles.wipeButtonTextDisabled,
             ]}
           >
-            {wiping ? "Wiping Data..." : "Wipe Data & Sign Out"}
+            {wiping ? t("profile.wiping") : t("profile.wipeButton")}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -211,6 +210,7 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   headerTitle: {
+    flexShrink: 1, // wrap a longer translated title instead of running off screen
     fontSize: 24,
     fontWeight: "700",
     color: "#00468c",

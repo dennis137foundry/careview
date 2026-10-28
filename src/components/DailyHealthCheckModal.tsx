@@ -16,6 +16,20 @@ import {
 } from "../services/sqliteService";
 import { syncPendingScreening } from "../services/vitalsSyncService";
 import { BTN } from "../constants/buttons";
+import { useT } from "../i18n";
+
+/** "**word**" in a translated string marks the part shown in bold. */
+function withEmphasis(text: string, style: object) {
+  return text.split("**").map((part, i) =>
+    i % 2 === 1 ? (
+      <Text key={i} style={style}>
+        {part}
+      </Text>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    )
+  );
+}
 
 interface DailyHealthCheckModalProps {
   visible: boolean;
@@ -62,6 +76,7 @@ export default function DailyHealthCheckModal({
   visible,
   onComplete,
 }: DailyHealthCheckModalProps) {
+  const { t } = useT();
   const [hasHeadaches, setHasHeadaches] = useState<boolean | null>(null);
   const [hasVisualDisturbances, setHasVisualDisturbances] = useState<boolean | null>(null);
   const [details, setDetails] = useState("");
@@ -127,28 +142,24 @@ export default function DailyHealthCheckModal({
               <View style={styles.iconContainer}>
                 <MaterialIcons name="health-and-safety" size={32} color="#00509f" />
               </View>
-              <Text style={styles.title}>Daily Health Check</Text>
-              <Text style={styles.subtitle}>
-                Please answer these questions before taking your blood pressure
-                reading today.
-              </Text>
+              <Text style={styles.title}>{t("modals.dhcTitle")}</Text>
+              <Text style={styles.subtitle}>{t("modals.dhcSubtitle")}</Text>
             </View>
 
             {/* Question 1: Headaches */}
             <View style={styles.questionBlock}>
               <Text style={styles.questionText}>
-                Are you experiencing any{" "}
-                <Text style={styles.emphasis}>headaches</Text> today?
+                {withEmphasis(t("modals.dhcHeadaches"), styles.emphasis)}
               </Text>
               <View style={styles.radioRow}>
                 <RadioOption
-                  label="No"
+                  label={t("common.no")}
                   selected={hasHeadaches === false}
                   onPress={() => setHasHeadaches(false)}
                   color="#4CAF50"
                 />
                 <RadioOption
-                  label="Yes"
+                  label={t("common.yes")}
                   selected={hasHeadaches === true}
                   onPress={() => setHasHeadaches(true)}
                   color="#c62828"
@@ -159,21 +170,18 @@ export default function DailyHealthCheckModal({
             {/* Question 2: Visual Disturbances */}
             <View style={styles.questionBlock}>
               <Text style={styles.questionText}>
-                Are you experiencing any{" "}
-                <Text style={styles.emphasis}>visual disturbances</Text>?
+                {withEmphasis(t("modals.dhcVisual"), styles.emphasis)}
               </Text>
-              <Text style={styles.questionHint}>
-                (blurry vision, seeing spots, flashing lights, etc.)
-              </Text>
+              <Text style={styles.questionHint}>{t("modals.dhcVisualHint")}</Text>
               <View style={styles.radioRow}>
                 <RadioOption
-                  label="No"
+                  label={t("common.no")}
                   selected={hasVisualDisturbances === false}
                   onPress={() => setHasVisualDisturbances(false)}
                   color="#4CAF50"
                 />
                 <RadioOption
-                  label="Yes"
+                  label={t("common.yes")}
                   selected={hasVisualDisturbances === true}
                   onPress={() => setHasVisualDisturbances(true)}
                   color="#c62828"
@@ -184,12 +192,10 @@ export default function DailyHealthCheckModal({
             {/* Optional Details (shown if any symptom is Yes) */}
             {(hasHeadaches || hasVisualDisturbances) && (
               <View style={styles.detailsBlock}>
-                <Text style={styles.detailsLabel}>
-                  Please describe your symptoms (optional):
-                </Text>
+                <Text style={styles.detailsLabel}>{t("modals.dhcDetailsLabel")}</Text>
                 <TextInput
                   style={styles.detailsInput}
-                  placeholder="e.g., Mild headache started this morning..."
+                  placeholder={t("modals.dhcDetailsPlaceholder")}
                   placeholderTextColor="#999"
                   multiline
                   numberOfLines={3}
@@ -204,9 +210,7 @@ export default function DailyHealthCheckModal({
             {(hasHeadaches || hasVisualDisturbances) && (
               <View style={styles.warningBanner}>
                 <MaterialIcons name="warning" size={20} color="#E65100" />
-                <Text style={styles.warningText}>
-                  Your care team will be notified about these symptoms.
-                </Text>
+                <Text style={styles.warningText}>{t("modals.dhcWarning")}</Text>
               </View>
             )}
 
@@ -224,17 +228,13 @@ export default function DailyHealthCheckModal({
                 <ActivityIndicator color="#fff" />
               ) : (
                 <>
-                  <Text style={styles.submitButtonText}>
-                    Continue to BP Reading
-                  </Text>
+                  <Text style={styles.submitButtonText}>{t("modals.dhcContinue")}</Text>
                   <MaterialIcons name="arrow-forward" size={20} color="#fff" />
                 </>
               )}
             </TouchableOpacity>
 
-            <Text style={styles.requiredNote}>
-              * Both questions must be answered to continue
-            </Text>
+            <Text style={styles.requiredNote}>{t("modals.dhcRequired")}</Text>
           </ScrollView>
         </View>
       </View>

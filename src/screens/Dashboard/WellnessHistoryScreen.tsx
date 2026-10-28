@@ -26,6 +26,7 @@ import {
 } from "../../utils/getDailyFact";
 import { useStatusBarStyle } from "../../hooks/useStatusBarStyle";
 import { BTN } from "../../constants/buttons";
+import { useT, t, fmtDate } from "../../i18n";
 
 const NAVY = "#002040";
 const PAGE_SIZE = 14;
@@ -44,9 +45,9 @@ function startOfToday(): Date {
 }
 
 function dateLabel(date: Date, daysAgo: number): string {
-  if (daysAgo === 0) return "Today";
-  if (daysAgo === 1) return "Yesterday";
-  return date.toLocaleDateString([], {
+  if (daysAgo === 0) return t("common.today");
+  if (daysAgo === 1) return t("common.yesterday");
+  return fmtDate(date, {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -55,14 +56,15 @@ function dateLabel(date: Date, daysAgo: number): string {
 
 function weekLabel(fact: DailyFact): string {
   return fact.isPostpartum
-    ? "After Delivery"
-    : `Week ${fact.week} • Day ${fact.dayOfWeek}`;
+    ? t("dashboard.afterDelivery")
+    : t("dashboard.weekDay", { week: fact.week, day: fact.dayOfWeek });
 }
 
 export default function WellnessHistoryScreen() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const edd = useSelector((state: RootState) => state.user.edd);
+  const { lang } = useT();
   useStatusBarStyle("light-content");
 
   // How many days back the list currently reaches. Grows as the patient
@@ -90,7 +92,9 @@ export default function WellnessHistoryScreen() {
       out.push({ key: String(daysAgo), date, daysAgo, fact });
     }
     return out;
-  }, [edd, visibleDays, maxDays, today]);
+    // lang: getDailyFact answers in the app's language.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edd, visibleDays, maxDays, today, lang]);
 
   const hasMore = items.length < maxDays;
 
@@ -118,7 +122,9 @@ export default function WellnessHistoryScreen() {
         </Text>
       </View>
     );
-  }, []);
+    // lang: the date and week labels are translated text.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lang]);
 
   return (
     <View style={styles.root}>
@@ -130,25 +136,22 @@ export default function WellnessHistoryScreen() {
           onPress={() => navigation.goBack()}
           activeOpacity={0.7}
           accessibilityRole="button"
-          accessibilityLabel="Back to home"
+          accessibilityLabel={t("dashboard.wellnessBackLabel")}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <MaterialIcons name="arrow-back" size={22} color="#fff" />
-          <Text style={styles.backText}>Home</Text>
+          <Text style={styles.backText}>{t("dashboard.wellnessBack")}</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>
-          Maternal Wellness Daily
+          {t("dashboard.wellnessTitle")}
         </Text>
       </View>
 
       {!edd ? (
         <View style={styles.empty}>
           <MaterialIcons name="event-note" size={48} color="#b7c2d0" />
-          <Text style={styles.emptyTitle}>No due date yet</Text>
-          <Text style={styles.emptyText}>
-            Add your due date on the home screen and your daily facts will
-            line up with your pregnancy.
-          </Text>
+          <Text style={styles.emptyTitle}>{t("dashboard.wellnessNoEddTitle")}</Text>
+          <Text style={styles.emptyText}>{t("dashboard.wellnessNoEddText")}</Text>
         </View>
       ) : (
         <FlatList
@@ -164,10 +167,12 @@ export default function WellnessHistoryScreen() {
           showsVerticalScrollIndicator={false}
           ListFooterComponent={
             hasMore ? (
-              <Text style={styles.footerNote}>Loading earlier days…</Text>
+              <Text style={styles.footerNote}>
+                {t("dashboard.wellnessLoadingEarlier")}
+              </Text>
             ) : items.length > 0 ? (
               <Text style={styles.footerNote}>
-                That's the first day of your pregnancy.
+                {t("dashboard.wellnessFirstDay")}
               </Text>
             ) : null
           }

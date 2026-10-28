@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { BTN } from "../constants/buttons";
+import { useT } from "../i18n";
 
 interface RenameDeviceModalProps {
   visible: boolean;
@@ -29,6 +30,7 @@ export default function RenameDeviceModal({
 }: RenameDeviceModalProps) {
   const [name, setName] = useState(currentName);
   const inputRef = useRef<TextInput>(null);
+  const { t } = useT();
 
   // Reset and focus when modal opens
   useEffect(() => {
@@ -102,18 +104,18 @@ export default function RenameDeviceModal({
                 color={getDeviceColor()}
               />
             </View>
-            <Text style={styles.title}>Rename Device</Text>
+            <Text style={styles.title}>{t("devices.renameTitle")}</Text>
           </View>
 
           {/* Input */}
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>Device Name</Text>
+            <Text style={styles.label}>{t("devices.nameLabel")}</Text>
             <TextInput
               ref={inputRef}
               style={styles.input}
               value={name}
               onChangeText={setName}
-              placeholder="Enter device name"
+              placeholder={t("devices.namePlaceholder")}
               placeholderTextColor="#999"
               maxLength={30}
               autoCapitalize="words"
@@ -132,7 +134,7 @@ export default function RenameDeviceModal({
               onPress={onCancel}
               activeOpacity={0.7}
             >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+              <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.saveButton, !isValid && styles.saveButtonDisabled]}
@@ -140,7 +142,7 @@ export default function RenameDeviceModal({
               disabled={!isValid}
               activeOpacity={0.7}
             >
-              <Text style={styles.saveButtonText}>Save</Text>
+              <Text style={styles.saveButtonText}>{t("common.save")}</Text>
             </TouchableOpacity>
           </View>
         </View>

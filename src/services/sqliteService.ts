@@ -1342,7 +1342,8 @@ export function wipeAllPatientData() {
     db.execute("DELETE FROM readings;");
     db.execute("DELETE FROM devices;");
     db.execute("DELETE FROM screening_responses;");
-    db.execute("DELETE FROM app_settings;");
+    // The language choice is the phone's, not the patient's: it stays.
+    db.execute("DELETE FROM app_settings WHERE key <> 'app_language';");
     db.execute("DELETE FROM user;");
   } catch (e) {
     console.error("Failed to wipe patient data:", e);

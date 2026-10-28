@@ -8,7 +8,16 @@
 // Day-of-pregnancy math matches the EMR (PatientController):
 //   LMP = EDD - 280 days, day of pregnancy = days since LMP + 1.
 
-import { dayFacts, postpartumFacts } from "../constants/pregnancyFacts";
+import * as factsEn from "../constants/pregnancyFacts";
+import * as factsEs from "../constants/pregnancyFacts.es";
+import * as factsHt from "../constants/pregnancyFacts.ht";
+import { currentLanguage } from "../i18n";
+
+/** The facts in the app's language; each list has the same days as the English. */
+function facts() {
+  const lang = currentLanguage();
+  return lang === "es" ? factsEs : lang === "ht" ? factsHt : factsEn;
+}
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -77,6 +86,7 @@ export function getRawDayOfPregnancy(edd: string, asOf: Date): number | null {
 export function getDailyFact(edd: string, asOf?: Date): DailyFact | null {
   const day = getDayOfPregnancy(edd, asOf);
   if (day === null) return null;
+  const { dayFacts, postpartumFacts } = facts();
 
   if (day <= dayFacts.length) {
     return {

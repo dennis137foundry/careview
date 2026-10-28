@@ -23,20 +23,21 @@ import {
   UNABLE_GRACE_MS,
   URINE_INTERVAL_MS,
 } from "./urineProteinLogic";
+import { t } from "../i18n";
 
 const CHANNEL_ID = "reminders";
 const ID_PREFIX = "urine-reminder-";
 const PERMISSION_ASKED_KEY = "urine_reminder_permission_asked";
 
 // Lock-screen copy is deliberately generic; the clinical detail stays in the app.
-const TITLE = "Time for your CareView check-in";
-const BODY = "Record your urine protein result in the app.";
+// The text is fixed when the series is scheduled, in the app's language at that
+// moment (urine.reminderTitle / urine.reminderBody); every save reschedules.
 
 async function ensureChannel(): Promise<string> {
   if (Platform.OS !== "android") return CHANNEL_ID;
   await notifee.createChannel({
     id: CHANNEL_ID,
-    name: "Reminders",
+    name: t("urine.reminderChannel"),
     importance: AndroidImportance.HIGH,
   });
   return CHANNEL_ID;
@@ -97,6 +98,8 @@ export async function cancelUrineReminders(): Promise<void> {
 
 async function scheduleAt(times: number[]): Promise<void> {
   const channelId = await ensureChannel();
+  const title = t("urine.reminderTitle");
+  const body = t("urine.reminderBody");
   for (let i = 0; i < times.length; i++) {
     const trigger: TimestampTrigger = {
       type: TriggerType.TIMESTAMP,
@@ -105,8 +108,8 @@ async function scheduleAt(times: number[]): Promise<void> {
     await notifee.createTriggerNotification(
       {
         id: `${ID_PREFIX}${i}`,
-        title: TITLE,
-        body: BODY,
+        title,
+        body,
         android: {
           channelId,
           pressAction: { id: "default" },
@@ -152,6 +155,29 @@ export async function scheduleUnableFollowUp(unableAtMs: number): Promise<void> 
     await scheduleAt(times);
   } catch (e) {
     console.warn("[UrineReminder] Follow-up schedule failed:", e);
+  }
+}
+
+/**
+ * The patient changed the app's language (2026-10-28): reminders already
+ * scheduled carry the old language's text, so the pending series is rebuilt
+ * from the same anchor (the later of the last result and the last can't-test
+ * report). Nothing pending, nothing to rebuild.
+ */
+export async function rescheduleUrineRemindersForLanguage(
+  lastResultAt: number | null,
+  lastUnableAt: number | null
+): Promise<void> {
+  try {
+    const ids = await notifee.getTriggerNotificationIds();
+    if (!ids.some((id) => id.startsWith(ID_PREFIX))) return;
+    if (lastUnableAt !== null && (lastResultAt === null || lastUnableAt > lastResultAt)) {
+      await scheduleUnableFollowUp(lastUnableAt);
+    } else if (lastResultAt !== null) {
+      await scheduleUrineReminders(lastResultAt);
+    }
+  } catch (e) {
+    console.warn("[UrineReminder] Language reschedule failed:", e);
   }
 }
 

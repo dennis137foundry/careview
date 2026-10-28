@@ -21,11 +21,13 @@ import {
   describeRelative,
   isDuplicateEntry,
   PROTEIN_RESULTS,
+  proteinResultLabel,
   UNABLE_REASONS,
   URINE_INTERVAL_HOURS,
   type ProteinResult,
   type UnableReasonCode,
 } from "../services/urineProteinLogic";
+import { useT } from "../i18n";
 
 const RESULT_COLORS: Record<ProteinResult, string> = {
   Negative: "#4CAF50",
@@ -66,6 +68,7 @@ export default function UrineProteinModal({
   onUnable,
   onCancel,
 }: UrineProteinModalProps) {
+  const { t } = useT();
   const [selectedResult, setSelectedResult] = useState<ProteinResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [unableOpen, setUnableOpen] = useState(false);
@@ -90,7 +93,7 @@ export default function UrineProteinModal({
     } catch (err) {
       console.error("[UrineProtein] Failed to save result:", err);
       setSubmitting(false);
-      Alert.alert("Couldn't save", "Your result was not saved. Please try again.");
+      Alert.alert(t("urine.couldntSaveTitle"), t("urine.resultNotSaved"));
       return;
     }
     setSubmitting(false);
@@ -106,14 +109,14 @@ export default function UrineProteinModal({
     const snap = getUrineProteinSnapshot(now);
     if (isDuplicateEntry(snap.lastResultAt, now) && snap.lastResultAt !== null) {
       Alert.alert(
-        "Record another result?",
-        `You recorded ${snap.lastResult ?? "a result"} ${describeRelative(
-          snap.lastResultAt,
-          now
-        )}. Save this one too?`,
+        t("urine.recordAnotherTitle"),
+        t("urine.recordAnotherBody", {
+          result: snap.lastResult ? proteinResultLabel(snap.lastResult) : t("urine.aResult"),
+          when: describeRelative(snap.lastResultAt, now),
+        }),
         [
-          { text: "Cancel", style: "cancel" },
-          { text: "Save", onPress: () => saveResult(selectedResult) },
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("common.save"), onPress: () => saveResult(selectedResult) },
         ]
       );
       return;
@@ -130,7 +133,7 @@ export default function UrineProteinModal({
     } catch (err) {
       console.error("[UrineProtein] Failed to save can't-test report:", err);
       setSubmitting(false);
-      Alert.alert("Couldn't save", "Your report was not saved. Please try again.");
+      Alert.alert(t("urine.couldntSaveTitle"), t("urine.reportNotSaved"));
       return;
     }
     setSubmitting(false);
@@ -151,11 +154,11 @@ export default function UrineProteinModal({
           <View style={styles.iconContainer}>
             <MaterialIcons name="science" size={32} color={BTN.primary} />
           </View>
-          <Text style={styles.title}>Urine Protein Check</Text>
+          <Text style={styles.title}>{t("urine.title")}</Text>
           <Text style={styles.subtitle}>
             {isHold
-              ? `It's been more than ${URINE_INTERVAL_HOURS} hours since your last result. Please record one to continue.`
-              : "Please record your most recent urine protein test result."}
+              ? t("urine.subtitleHold", { hours: URINE_INTERVAL_HOURS })
+              : t("urine.subtitle")}
           </Text>
         </View>
 
@@ -164,10 +167,7 @@ export default function UrineProteinModal({
             {/* Can't-test reasons */}
             <View style={styles.infoBox}>
               <MaterialIcons name="info-outline" size={18} color="#1976D2" />
-              <Text style={styles.infoText}>
-                Let your care team know why. They'll see this on your chart,
-                and we'll check back with you tomorrow.
-              </Text>
+              <Text style={styles.infoText}>{t("urine.unableInfo")}</Text>
             </View>
 
             <View style={styles.reasonList}>
@@ -186,7 +186,7 @@ export default function UrineProteinModal({
                       color={selected ? BTN.primary : "#9aa5b1"}
                     />
                     <Text style={[styles.reasonLabel, selected && styles.reasonLabelSelected]}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -205,7 +205,7 @@ export default function UrineProteinModal({
                 ) : (
                   <>
                     <MaterialIcons name="send" size={18} color="#fff" />
-                    <Text style={styles.submitButtonText}>Send to care team</Text>
+                    <Text style={styles.submitButtonText}>{t("urine.sendToCareTeam")}</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -217,7 +217,7 @@ export default function UrineProteinModal({
                 disabled={submitting}
               >
                 <MaterialIcons name="arrow-back" size={18} color={BTN.quietText} />
-                <Text style={styles.quietButtonText}>Back to results</Text>
+                <Text style={styles.quietButtonText}>{t("urine.backToResults")}</Text>
               </TouchableOpacity>
             </View>
           </>
@@ -226,10 +226,7 @@ export default function UrineProteinModal({
             {/* Info Box */}
             <View style={styles.infoBox}>
               <MaterialIcons name="info-outline" size={18} color="#1976D2" />
-              <Text style={styles.infoText}>
-                This helps your care team monitor for signs of preeclampsia.
-                Test strips are included in your kit.
-              </Text>
+              <Text style={styles.infoText}>{t("urine.info")}</Text>
             </View>
 
             {/* Result Options - 2 column grid */}
@@ -262,7 +259,7 @@ export default function UrineProteinModal({
                         selected && { color, fontWeight: "700" },
                       ]}
                     >
-                      {value}
+                      {proteinResultLabel(value)}
                     </Text>
                     {selected && (
                       <MaterialIcons name="check-circle" size={18} color={color} />
@@ -276,8 +273,8 @@ export default function UrineProteinModal({
             {selectedResult && (
               <View style={styles.selectionSummary}>
                 <Text style={styles.selectionText}>
-                  Selected:{" "}
-                  <Text style={styles.selectionValue}>{selectedResult}</Text>
+                  {t("urine.selected")}{" "}
+                  <Text style={styles.selectionValue}>{proteinResultLabel(selectedResult)}</Text>
                 </Text>
               </View>
             )}
@@ -295,7 +292,7 @@ export default function UrineProteinModal({
                 ) : (
                   <>
                     <MaterialIcons name="check" size={20} color="#fff" />
-                    <Text style={styles.submitButtonText}>Save Result</Text>
+                    <Text style={styles.submitButtonText}>{t("urine.saveResult")}</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -307,7 +304,7 @@ export default function UrineProteinModal({
                   activeOpacity={0.7}
                 >
                   <MaterialIcons name="event-busy" size={18} color={BTN.quietText} />
-                  <Text style={styles.quietButtonText}>I can't test right now</Text>
+                  <Text style={styles.quietButtonText}>{t("urine.cantTestNow")}</Text>
                 </TouchableOpacity>
               ) : (
                 <TouchableOpacity
@@ -315,14 +312,13 @@ export default function UrineProteinModal({
                   onPress={onCancel}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.quietButtonText}>Cancel</Text>
+                  <Text style={styles.quietButtonText}>{t("common.cancel")}</Text>
                 </TouchableOpacity>
               )}
             </View>
 
             <Text style={styles.reminderNote}>
-              You can record a result any time. If {URINE_INTERVAL_HOURS} hours
-              pass without one, we'll ask you to enter it before continuing.
+              {t("urine.reminderNote", { hours: URINE_INTERVAL_HOURS })}
             </Text>
           </>
         )}

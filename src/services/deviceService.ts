@@ -16,6 +16,8 @@ import {
   Platform,
   PermissionsAndroid,
 } from "react-native";
+import { t, type TKey } from "../i18n";
+import en from "../i18n/locales/en";
 
 const { IHealthDevices } = NativeModules;
 const eventEmitter = new NativeEventEmitter(IHealthDevices);
@@ -126,6 +128,34 @@ const IHEALTH_DEVICE_TYPES = ["BP3L", "BP5", "BP5S", "BG5S", "HS2", "HS2S", "HS4
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// The native module describes the Bluetooth state in English (status.message,
+// and the message of its Bluetooth onError events), and the screens show that
+// text in their "Bluetooth Needed" alert. Each key's English is one native
+// sentence exactly; a message that matches is swapped for the app-language
+// text, anything else is passed through as it came. English is unchanged.
+const NATIVE_BLUETOOTH_TEXT: TKey[] = [
+  "services.btUnsupported",
+  "services.btUnauthorizedAndroid",
+  "services.btUnauthorizedIos",
+  "services.btPoweredOff",
+  "services.btLocationDisabled",
+  "services.btReady",
+  "services.btResetting",
+  "services.btGettingReady",
+  "services.btNotReady",
+];
+
+function localizeNativeText(message?: string): string | undefined {
+  if (!message) return message;
+  const key = NATIVE_BLUETOOTH_TEXT.find((k) => en[k] === message);
+  return key ? t(key) : message;
+}
+
+function localizeStatus<T extends { message?: string }>(status: T): T {
+  if (!status || typeof status !== "object" || !status.message) return status;
+  return { ...status, message: localizeNativeText(status.message) };
+}
+
 /**
  * Map device type string to category. Returns "BP" as a safe fallback
  * for unknown types — throwing here crashes the scan-list render and
@@ -186,7 +216,7 @@ const deviceService = {
    */
   getBluetoothStatus: async (): Promise<BluetoothStatus> => {
     try {
-      return await IHealthDevices.getBluetoothStatus();
+      return localizeStatus(await IHealthDevices.getBluetoothStatus());
     } catch (error) {
       console.error("[deviceService] Bluetooth status error:", error);
       return {
@@ -196,7 +226,7 @@ const deviceService = {
         locationServicesEnabled: true,
         ready: true,
         state: "unknown",
-        message: "Bluetooth status is unavailable.",
+        message: t("services.btStatusUnavailable"),
       };
     }
   },
@@ -226,7 +256,7 @@ const deviceService = {
     }
 
     if (!status.ready) {
-      const error: any = new Error(status.message || "Bluetooth is not ready.");
+      const error: any = new Error(status.message || t("services.btNotReady"));
       error.code = status.state;
       error.status = status;
       throw error;
@@ -659,7 +689,9 @@ const deviceService = {
    * Listen for device errors
    */
   onError: (callback: (error: DeviceError) => void): EmitterSubscription => {
-    return eventEmitter.addListener("onError", callback);
+    return eventEmitter.addListener("onError", (error: DeviceError) =>
+      callback(localizeStatus(error))
+    );
   },
 
   /**
@@ -673,7 +705,9 @@ const deviceService = {
    * Listen for native Bluetooth permission/power changes.
    */
   onBluetoothStateChanged: (callback: (status: BluetoothStatus) => void): EmitterSubscription => {
-    return eventEmitter.addListener("onBluetoothStateChanged", callback);
+    return eventEmitter.addListener("onBluetoothStateChanged", (status: BluetoothStatus) =>
+      callback(localizeStatus(status))
+    );
   },
 
   // ============================================================
@@ -727,6 +761,23 @@ const deviceService = {
       GATT_SCALE: "BLE Smart Scale",
     };
     return typeMap[type] || type;
+  },
+
+  /**
+   * The device type as shown on screen, in the app's language. Model names
+   * stay as they are; only the generic descriptions are translated. Use this
+   * for display — getFriendlyTypeName stays English because AddDeviceScreen
+   * can store its result as the device's friendlyName, which is sent to the
+   * EMR as friendly_name.
+   */
+  getFriendlyTypeLabel: (type: string): string => {
+    const labelKeys: Record<string, TKey> = {
+      BG5S: "services.typeBG5S",
+      GATT_BP: "services.typeGattBP",
+      GATT_SCALE: "services.typeGattScale",
+    };
+    const key = labelKeys[type];
+    return key ? t(key) : deviceService.getFriendlyTypeName(type);
   },
 };
 

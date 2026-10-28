@@ -25,12 +25,14 @@ import { cancelUrineReminders } from "../../services/urineReminderService";
 import { clearLoginSession } from "../../services/urineProteinSession";
 import type { RootState, AppDispatch } from "../../redux/store";
 import { BTN } from "../../constants/buttons";
+import { t, useT } from "../../i18n";
+import LanguagePicker, { languageChoiceLabel } from "../../components/LanguagePicker";
 
 const PHOTO_KEY = "careview_profile_photo";
 const APP_VERSION = "2.5";
 
 const formatPhone = (phone: string) => {
-  if (!phone) return "Not Available";
+  if (!phone) return t("profile.notAvailable");
   const cleaned = phone.replace(/\D/g, "");
   if (cleaned.length === 10) {
     return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
@@ -53,7 +55,7 @@ const InfoRow = ({
     </View>
     <View style={styles.infoContent}>
       <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue}>{value || "Not Available"}</Text>
+      <Text style={styles.infoValue}>{value || t("profile.notAvailable")}</Text>
     </View>
   </View>
 );
@@ -62,6 +64,8 @@ export default function ProfileScreen({ navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const user = useSelector((state: RootState) => state.user);
   const insets = useSafeAreaInsets();
+  const { choice: languageChoice } = useT(); // redraw on a language change
+  const [showLanguage, setShowLanguage] = useState(false);
 
   // Light background → dark (black) status-bar glyphs, re-applied on focus.
   // Navy CareView header behind the status bar → white glyphs.
@@ -89,7 +93,7 @@ export default function ProfileScreen({ navigation }: any) {
   const handleAvatarPress = () => {
     const buttons: any[] = [
       {
-        text: "Choose from Library",
+        text: t("profile.chooseLibrary"),
         onPress: () =>
           launchImageLibrary(
             { mediaType: "photo", quality: 0.7, selectionLimit: 1 },
@@ -101,7 +105,7 @@ export default function ProfileScreen({ navigation }: any) {
           ),
       },
       {
-        text: "Take Photo",
+        text: t("profile.takePhoto"),
         onPress: () =>
           launchCamera(
             { mediaType: "photo", quality: 0.7, cameraType: "front" },
@@ -115,28 +119,28 @@ export default function ProfileScreen({ navigation }: any) {
     ];
     if (photoUri) {
       buttons.push({
-        text: "Remove Photo",
+        text: t("profile.removePhoto"),
         style: "destructive",
         onPress: removePhoto,
       });
     }
-    buttons.push({ text: "Cancel", style: "cancel" });
-    Alert.alert("Profile Photo", undefined, buttons);
+    buttons.push({ text: t("common.cancel"), style: "cancel" });
+    Alert.alert(t("profile.photoTitle"), undefined, buttons);
   };
 
   const handleAbout = () => {
     Alert.alert(
       "CareView",
-      `Version ${APP_VERSION}\n\nRemote patient monitoring by Trinity Health & Home Services.`,
-      [{ text: "OK" }]
+      t("profile.aboutBody", { version: APP_VERSION }),
+      [{ text: t("common.ok") }]
     );
   };
 
   const handleLogout = () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("profile.logoutTitle"), t("profile.logoutConfirm"), [
+      { text: t("common.cancel"), style: "cancel" },
       {
-        text: "Log Out",
+        text: t("profile.logoutTitle"),
         style: "destructive",
         onPress: () => {
           cancelUrineReminders();
@@ -164,7 +168,7 @@ export default function ProfileScreen({ navigation }: any) {
         ]}
       >
         {/* Header */}
-        <Text style={styles.headerTitle}>Profile</Text>
+        <Text style={styles.headerTitle}>{t("profile.title")}</Text>
 
         {/* Name Card */}
         <View style={styles.nameCard}>
@@ -190,12 +194,12 @@ export default function ProfileScreen({ navigation }: any) {
 
             <View style={styles.nameContent}>
               <Text style={styles.userName}>
-                {user.firstName || "Unknown"} {user.lastName || ""}
+                {user.firstName || t("common.unknown")} {user.lastName || ""}
               </Text>
               <View style={styles.patientIdRow}>
                 <MaterialIcons name="badge" size={14} color={BTN.link} />
                 <Text style={styles.patientIdText}>
-                  ID: {user.patientId || "N/A"}
+                  {t("profile.patientId", { id: user.patientId || t("profile.na") })}
                 </Text>
               </View>
             </View>
@@ -209,39 +213,53 @@ export default function ProfileScreen({ navigation }: any) {
           activeOpacity={0.8}
         >
           <MaterialIcons name="chat-bubble-outline" size={22} color="#fff" />
-          <Text style={styles.messageButtonText}>Send Us A Message</Text>
+          <Text style={styles.messageButtonText}>{t("profile.sendMessage")}</Text>
         </TouchableOpacity>
 
         {/* Info Card */}
         <View style={styles.infoCard}>
           <InfoRow
             icon="phone"
-            label="Phone"
+            label={t("profile.phone")}
             value={formatPhone(user.phone || "")}
           />
           <View style={styles.divider} />
           <InfoRow
             icon="person"
-            label="Provider"
+            label={t("profile.provider")}
             value={
               user.providerFirstName
-                ? `Dr. ${user.providerFirstName} ${user.providerLastName}`
-                : "Not Assigned"
+                ? t("profile.providerName", {
+                    first: user.providerFirstName,
+                    last: String(user.providerLastName),
+                  })
+                : t("profile.notAssigned")
             }
           />
           <View style={styles.divider} />
           <InfoRow
             icon="local-hospital"
-            label="Practice"
-            value={user.providerPracticeName || "N/A"}
+            label={t("profile.practice")}
+            value={user.providerPracticeName || t("profile.na")}
           />
         </View>
 
         {/* Action Buttons */}
         <View style={styles.actionsContainer}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => setShowLanguage(true)}
+            accessibilityLabel={t("language.title")}
+          >
+            <MaterialIcons name="translate" size={20} color={BTN.link} />
+            <Text style={styles.actionButtonText}>{t("language.title")}</Text>
+            <Text style={styles.languageValue}>{languageChoiceLabel(languageChoice, t)}</Text>
+            <MaterialIcons name="chevron-right" size={20} color="#ccc" />
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.actionButton} onPress={handleAbout}>
             <MaterialIcons name="info-outline" size={20} color={BTN.link} />
-            <Text style={styles.actionButtonText}>About</Text>
+            <Text style={styles.actionButtonText}>{t("profile.about")}</Text>
             <MaterialIcons name="chevron-right" size={20} color="#ccc" />
           </TouchableOpacity>
 
@@ -251,7 +269,7 @@ export default function ProfileScreen({ navigation }: any) {
           >
             <MaterialIcons name="logout" size={20} color={BTN.destructive} />
             <Text style={[styles.actionButtonText, styles.logoutText]}>
-              Sign Out
+              {t("profile.signOut")}
             </Text>
             <MaterialIcons name="chevron-right" size={20} color="#ccc" />
           </TouchableOpacity>
@@ -262,7 +280,7 @@ export default function ProfileScreen({ navigation }: any) {
           >
             <MaterialIcons name="delete-forever" size={20} color={BTN.destructive} />
             <Text style={[styles.actionButtonText, styles.logoutText]}>
-              Sign Out & Wipe Data
+              {t("profile.signOutWipe")}
             </Text>
             <MaterialIcons name="chevron-right" size={20} color="#ccc" />
           </TouchableOpacity>
@@ -273,6 +291,8 @@ export default function ProfileScreen({ navigation }: any) {
           <Text style={styles.versionText}>CareView v{APP_VERSION}</Text>
         </View>
       </View>
+
+      <LanguagePicker visible={showLanguage} onClose={() => setShowLanguage(false)} />
 
       {/* Send Message Modal */}
       <SendMessageModal
@@ -460,6 +480,11 @@ const styles = StyleSheet.create({
   },
   actionButtonLast: {
     borderBottomWidth: 0,
+  },
+  languageValue: {
+    fontSize: 14,
+    color: "#5b6b7f",
+    marginRight: 4,
   },
   actionButtonText: {
     flex: 1,

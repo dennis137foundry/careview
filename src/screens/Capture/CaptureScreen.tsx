@@ -34,6 +34,7 @@ import { markDeviceScreenActive } from "../../services/batteryRefreshService";
 import { refreshProfile } from "../../services/profileRefreshService";
 import { isBPHigh as bpIsHigh, isGlucoseHigh } from "../../utils/thresholdLogic";
 import { BTN } from "../../constants/buttons";
+import { t, useT, fmtDate, fmtTime } from "../../i18n";
 
 // Below this last-known battery %, warn the user to charge before a reading.
 const LOW_BATTERY_THRESHOLD = 20;
@@ -56,13 +57,11 @@ const BLUETOOTH_ERROR_CODES = new Set([
 ]);
 
 function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
-  const message =
-    status?.message ||
-    "CareView needs Bluetooth to add devices and capture readings. Turn Bluetooth on or allow Bluetooth permission, then try again.";
+  const message = status?.message || t("capture.bluetoothNeededMsg");
 
-  Alert.alert("Bluetooth Needed", message, [
-    { text: "Cancel", style: "cancel" },
-    { text: "Open Settings", onPress: () => Linking.openSettings() },
+  Alert.alert(t("capture.bluetoothNeededTitle"), message, [
+    { text: t("common.cancel"), style: "cancel" },
+    { text: t("common.openSettings"), onPress: () => Linking.openSettings() },
   ]);
 }
 
@@ -77,15 +76,17 @@ const deviceImages: Record<string, any> = {
 const CAPTURE_ACCENT = BTN.primary;
 const CAPTURE_ACCENT_SOFT = "#7fd6de";
 
+// `value` is what is saved and synced to the EMR (measurement_condition) —
+// never translated. Only the label shown is, through `labelKey`.
 const GLUCOSE_TIMING_OPTIONS = [
-  { label: "Overnight", value: "overnight" },
-  { label: "Before breakfast", value: "before breakfast" },
-  { label: "After breakfast", value: "after breakfast" },
-  { label: "Before lunch", value: "before lunch" },
-  { label: "After lunch", value: "after lunch" },
-  { label: "Before dinner", value: "before dinner" },
-  { label: "After dinner", value: "after dinner" },
-  { label: "Bedtime", value: "bedtime" },
+  { labelKey: "capture.timingOvernight", value: "overnight" },
+  { labelKey: "capture.timingBeforeBreakfast", value: "before breakfast" },
+  { labelKey: "capture.timingAfterBreakfast", value: "after breakfast" },
+  { labelKey: "capture.timingBeforeLunch", value: "before lunch" },
+  { labelKey: "capture.timingAfterLunch", value: "after lunch" },
+  { labelKey: "capture.timingBeforeDinner", value: "before dinner" },
+  { labelKey: "capture.timingAfterDinner", value: "after dinner" },
+  { labelKey: "capture.timingBedtime", value: "bedtime" },
 ] as const;
 
 type GlucoseTimingValue = (typeof GLUCOSE_TIMING_OPTIONS)[number]["value"];
@@ -162,24 +163,18 @@ function suggestGlucoseTiming(ts: number): GlucoseTimingValue {
 function formatReadingTime(ts: number): string {
   const d = new Date(ts);
   const today = new Date();
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (d.toDateString() === today.toDateString()) return `Today ${time}`;
+  const time = fmtTime(d, { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === today.toDateString()) return t("capture.todayAt", { time });
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
-  const day = d.toLocaleDateString([], { weekday: "short", month: "numeric", day: "numeric" });
+  if (d.toDateString() === yesterday.toDateString()) return t("capture.yesterdayAt", { time });
+  const day = fmtDate(d, { weekday: "short", month: "numeric", day: "numeric" });
   return `${day} ${time}`;
 }
 
-const METER_CLOCK_UNKNOWN_MSG =
-  "Some readings on the meter were taken before its clock was set, and this app has no record of that clock. They were left on the meter. Take a new reading and import again.";
-
 function getGlucoseTimingLabel(value?: string): string {
-  return (
-    GLUCOSE_TIMING_OPTIONS.find((option) => option.value === value)?.label ||
-    value ||
-    ""
-  );
+  const option = GLUCOSE_TIMING_OPTIONS.find((o) => o.value === value);
+  return (option ? t(option.labelKey) : "") || value || "";
 }
 
 /**
@@ -222,6 +217,9 @@ export default function CaptureScreen({ route, navigation }: any) {
   const dispatch = useDispatch<AppDispatch>();
   const insets = useSafeAreaInsets();
   const { showToast } = useToast();
+  // Draw again when the language changes. Text is produced by t() at the
+  // moment it is shown (alerts, toasts, render), so no callback caches it.
+  useT();
   // Both tab stacks hold a Capture screen; only the one in front owns the
   // native events (see ownsEvent).
   const isFocused = useIsFocused();
@@ -625,7 +623,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       ) {
         addLog("Target device found! Connecting...");
         setPhase("connect");
-        setStatusText("Device found. Connecting...");
+        setStatusText(t("capture.statusDeviceFound"));
 
         try {
           await IHealthDevices.stopScan();
@@ -674,15 +672,15 @@ export default function CaptureScreen({ route, navigation }: any) {
             androidBGBatchRef.current = [];
             glucoseMacRef.current = String(data.mac || "");
             setPhase("measure");
-            setStatusText("Checking stored readings...");
+            setStatusText(t("capture.checkingStoredReadings"));
             return;
           }
 
           setPhase("measure");
           if (device?.type === "SCALE") {
-            setStatusText("Step on the scale and stand still");
+            setStatusText(t("capture.stepOnScale"));
           } else {
-            setStatusText("Measurement started. Keep your arm relaxed");
+            setStatusText(t("capture.bpMeasurementStarted"));
           }
 
           // iOS starts measurement automatically in the native layer when
@@ -709,10 +707,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           setBusy(false);
           setPhase("idle");
           setStatusText("");
-          Alert.alert(
-            "Device Disconnected",
-            "The connection was lost before a reading was received. Make sure your device is nearby and try again."
-          );
+          Alert.alert(t("capture.disconnectedTitle"), t("capture.disconnectedMsg"));
         }
         // If readingReceivedRef.current is true, this is an expected
         // disconnect after a successful save — ignore it.
@@ -783,7 +778,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         setBusy(false);
         setStatusText("");
         showToast({
-          message: "Couldn't save your reading. Please try again.",
+          message: t("capture.saveFailed"),
           type: "error",
           duration: 4000,
         });
@@ -844,7 +839,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         setBusy(false);
         setStatusText("");
         showToast({
-          message: "Couldn't save your reading. Please try again.",
+          message: t("capture.saveFailed"),
           type: "error",
           duration: 4000,
         });
@@ -871,7 +866,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       setShowGlucoseTimingModal(false);
       setPendingGlucoseReading(null);
       glucoseQueueRef.current = [];
-      setStatusText(imported > 0 ? "Finishing import..." : "");
+      setStatusText(imported > 0 ? t("capture.finishingImport") : "");
 
       // Erase the meter only when everything it held is now safely in the
       // app. If anything was skipped or cancelled, leave the memory alone —
@@ -912,7 +907,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         playSuccessAnimation();
         if (imported > 1) {
           showToast({
-            message: `${imported} readings imported from your meter.`,
+            message: t("capture.readingsImported", { count: imported }),
             type: "success",
             duration: 3000,
           });
@@ -934,7 +929,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     if (!next) return;
     setPendingGlucoseReading(next);
     setBusy(false);
-    setStatusText("Select sample window");
+    setStatusText(t("capture.selectSampleWindow"));
     setShowGlucoseTimingModal(true);
   }, []);
 
@@ -988,16 +983,16 @@ export default function CaptureScreen({ route, navigation }: any) {
         glucoseImportedRef.current = 0;
         glucoseLeftOnMeterRef.current = undatable;
         if (undatable > 0) {
-          endCaptureWithAlert("Readings Could Not Be Dated", METER_CLOCK_UNKNOWN_MSG);
-        } else if (alreadyCaptured > 0) {
           endCaptureWithAlert(
-            "No New Readings",
-            "Every reading stored on your meter has already been captured. Take a new reading on the meter, then capture again."
+            t("capture.meterClockUnknownTitle"),
+            t("capture.meterClockUnknownMsg")
           );
+        } else if (alreadyCaptured > 0) {
+          endCaptureWithAlert(t("capture.noNewReadingsTitle"), t("capture.noNewReadingsMsg"));
         } else {
           endCaptureWithAlert(
-            "No Glucose Reading",
-            "The meter connected, but no stored glucose reading was found. Take a reading on the meter, then try capture again."
+            t("capture.noGlucoseReadingTitle"),
+            t("capture.noGlucoseReadingMsg")
           );
         }
         return;
@@ -1040,7 +1035,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         console.error("[Capture] Failed to save glucose reading:", err);
         glucoseSavingRef.current = false;
         showToast({
-          message: "Couldn't save your glucose reading. Please try again.",
+          message: t("capture.saveGlucoseFailed"),
           type: "error",
           duration: 4000,
         });
@@ -1125,7 +1120,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       }
 
       setPhase("measure");
-      setStatusText("Checking stored readings...");
+      setStatusText(t("capture.checkingStoredReadings"));
       addLog("BG5S connected; reading its clock, setting it, then pulling stored records");
 
       try {
@@ -1154,10 +1149,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         setBusy(false);
         setPhase("idle");
         setStatusText("");
-        Alert.alert(
-          "Glucose Read Error",
-          "The meter connected, but the app could not read its stored glucose data. Keep the meter nearby and try again."
-        );
+        Alert.alert(t("capture.glucoseReadErrorTitle"), t("capture.glucoseReadErrorMsg"));
       }
     });
 
@@ -1224,9 +1216,10 @@ export default function CaptureScreen({ route, navigation }: any) {
           // stale: say so now, without interrupting the measurement.
           if (ownsEvent(data.mac) && data.level < LOW_BATTERY_THRESHOLD) {
             showToast({
-              message: `Battery is low (${data.level}%). Charge your ${
-                device?.friendlyName || device?.name || "device"
-              } soon for reliable readings.`,
+              message: t("capture.batteryLowToast", {
+                level: data.level,
+                device: device?.friendlyName || device?.name || t("capture.deviceFallback"),
+              }),
               type: "info",
               duration: 5000,
             });
@@ -1255,10 +1248,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           if (BLUETOOTH_ERROR_CODES.has(code)) {
             showBluetoothAlert(data);
           } else {
-            Alert.alert(
-              "Device Error",
-              "Something went wrong during the reading. Please try again."
-            );
+            Alert.alert(t("capture.deviceErrorTitle"), t("capture.deviceErrorMsg"));
           }
         }
       }),
@@ -1272,11 +1262,11 @@ export default function CaptureScreen({ route, navigation }: any) {
   // ============================================================================
   const startCapture = useCallback(async () => {
     if (!device) {
-      Alert.alert("Error", "Device not found");
+      Alert.alert(t("common.error"), t("capture.deviceNotFound"));
       return;
     }
     if (!IHealthDevices || !emitter) {
-      Alert.alert("Error", "Native module not available");
+      Alert.alert(t("common.error"), t("capture.nativeModuleMissing"));
       return;
     }
 
@@ -1305,7 +1295,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     addLog(`Starting for ${device.name}, MAC: ${mac}, Model: ${device.model}`);
 
     setPhase("auth");
-    setStatusText("Initializing...");
+    setStatusText(t("capture.initializing"));
 
     try {
       await IHealthDevices.authenticate("license.pem");
@@ -1316,11 +1306,11 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     setPhase("scan");
     if (device.type === "SCALE") {
-      setStatusText("Finding your scale...");
+      setStatusText(t("capture.findScale"));
     } else if (device.type === "BG") {
-      setStatusText("Finding your glucose meter...");
+      setStatusText(t("capture.findGlucoseMeter"));
     } else {
-      setStatusText("Finding your blood pressure monitor...");
+      setStatusText(t("capture.findBPMonitor"));
     }
 
     try {
@@ -1342,7 +1332,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       addLog("Scan started");
     } catch (e: any) {
       addLog(`Scan error: ${e.message}`);
-      Alert.alert("Scan Error", e.message);
+      Alert.alert(t("capture.scanErrorTitle"), e.message);
       IHealthDevices?.allowSleep?.();
       setBusy(false);
       setPhase("idle");
@@ -1356,10 +1346,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       setBusy(false);
       setPhase("idle");
       setStatusText("");
-      Alert.alert(
-        "Timeout",
-        "No reading was received. Keep the device nearby, make sure it has battery, and try again."
-      );
+      Alert.alert(t("capture.timeoutTitle"), t("capture.timeoutMsg"));
     }, 90000);
   }, [device, addLog, successScale]);
 
@@ -1375,7 +1362,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       // Uniform confirmation: same toast pattern as every other data
       // entry in the app.
       showToast({
-        message: "Daily health check saved",
+        message: t("capture.healthCheckSaved"),
         type: "success",
         duration: 2500,
       });
@@ -1431,14 +1418,14 @@ export default function CaptureScreen({ route, navigation }: any) {
       batt >= 0 &&
       batt < LOW_BATTERY_THRESHOLD
     ) {
-      const label = device?.friendlyName || device?.name || "device";
+      const label = device?.friendlyName || device?.name || t("capture.deviceFallback");
       addLog(`Low battery (${batt}%) — prompting to charge`);
       Alert.alert(
-        "Charge Your Device",
-        `Your ${label} battery is low (${batt}%). Charge it soon for reliable readings. You can still try now.`,
+        t("capture.chargeTitle"),
+        t("capture.chargeMsg", { device: label, level: batt }),
         [
-          { text: "Cancel", style: "cancel" },
-          { text: "Try Anyway", onPress: proceed },
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("capture.tryAnyway"), onPress: proceed },
         ]
       );
       return;
@@ -1494,12 +1481,12 @@ export default function CaptureScreen({ route, navigation }: any) {
           style={StyleSheet.absoluteFill}
         />
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Device not found</Text>
+          <Text style={styles.errorText}>{t("capture.deviceNotFound")}</Text>
           <TouchableOpacity
             style={styles.backButtonAlt}
             onPress={() => navigation.goBack()}
           >
-            <Text style={styles.backButtonText}>Go Back</Text>
+            <Text style={styles.backButtonText}>{t("capture.goBack")}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1514,32 +1501,32 @@ export default function CaptureScreen({ route, navigation }: any) {
   const getPhaseMessage = () => {
     switch (phase) {
       case "auth":
-        return "Initializing...";
+        return t("capture.initializing");
       case "scan":
-        if (device.type === "SCALE") return "Finding your scale...";
-        if (device.type === "BG") return "Finding your glucose meter...";
-        return "Finding your monitor...";
+        if (device.type === "SCALE") return t("capture.findScale");
+        if (device.type === "BG") return t("capture.findGlucoseMeter");
+        return t("capture.findMonitor");
       case "connect":
-        return "Connecting...";
+        return t("capture.connecting");
       case "measure":
-        if (device.type === "SCALE") return "Stand still...";
-        if (device.type === "BG") return "Checking stored readings...";
-        return "Keep your arm relaxed...";
+        if (device.type === "SCALE") return t("capture.standStill");
+        if (device.type === "BG") return t("capture.checkingStoredReadings");
+        return t("capture.keepArmRelaxed");
       case "success":
-        return "Reading saved!";
+        return t("capture.readingSaved");
       default:
-        return "Ready to measure";
+        return t("capture.readyToMeasure");
     }
   };
 
   const getSyncStatusText = () => {
     switch (syncStatus) {
       case "syncing":
-        return "Syncing to care team...";
+        return t("capture.syncing");
       case "synced":
-        return "✓ Sent to care team";
+        return t("capture.synced");
       case "pending":
-        return "Will send when online";
+        return t("capture.pending");
       default:
         return "";
     }
@@ -1584,8 +1571,10 @@ export default function CaptureScreen({ route, navigation }: any) {
               <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
                 <MaterialIcons name="warning" size={18} color="#FF5252" />
                 <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
-                  Above threshold ({thresholds.systolicHigh}/
-                  {thresholds.diastolicHigh})
+                  {t("capture.aboveThresholdBP", {
+                    systolic: thresholds.systolicHigh,
+                    diastolic: thresholds.diastolicHigh,
+                  })}
                 </Text>
               </View>
             )}
@@ -1660,13 +1649,13 @@ export default function CaptureScreen({ route, navigation }: any) {
               <View style={[styles.highBPBadge, isSuccess && styles.highBPBadgeSuccess]}>
                 <MaterialIcons name="warning" size={18} color="#FF5252" />
                 <Text style={[styles.highBPText, isSuccess && styles.highBPTextSuccess]}>
-                  Above threshold ({thresholds.glucoseHigh})
+                  {t("capture.aboveThresholdGlucose", { high: thresholds.glucoseHigh })}
                 </Text>
               </View>
             )}
             {lastReading.timingLabel ? (
               <Text style={[styles.subReading, isSuccess && styles.subReadingSuccess]}>
-                {lastReading.timingLabel}
+                {getGlucoseTimingLabel(lastReading.timing)}
                 {typeof lastReading.takenAt === "number"
                   ? ` · ${formatReadingTime(lastReading.takenAt)}`
                   : ""}
@@ -1696,10 +1685,10 @@ export default function CaptureScreen({ route, navigation }: any) {
     : Math.max(insets.bottom + 72, 96);
   const deviceTypeLabel =
     device.type === "BP"
-      ? "Blood Pressure Monitor"
+      ? t("capture.typeBPMonitor")
       : device.type === "SCALE"
-        ? "Smart Scale"
-        : "Glucose Meter";
+        ? t("capture.typeSmartScale")
+        : t("capture.typeGlucoseMeter");
 
   return (
     <View style={styles.container}>
@@ -1722,7 +1711,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         >
           <MaterialIcons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Capture Reading</Text>
+        <Text style={styles.headerTitle}>{t("capture.captureReading")}</Text>
         <View style={styles.headerBtnSpacer} />
       </Animated.View>
 
@@ -1865,7 +1854,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                 activeOpacity={0.8}
                 style={styles.primaryButton}
               >
-                <Text style={styles.primaryButtonText}>Capture Reading</Text>
+                <Text style={styles.primaryButtonText}>{t("capture.captureReading")}</Text>
               </TouchableOpacity>
             )}
 
@@ -1875,7 +1864,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                 onPress={cancel}
                 activeOpacity={0.8}
               >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
             )}
 
@@ -1886,7 +1875,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                   activeOpacity={0.8}
                   style={[styles.primaryButton, isSuccess && styles.primaryButtonSuccess]}
                 >
-                  <Text style={styles.primaryButtonText}>Done</Text>
+                  <Text style={styles.primaryButtonText}>{t("common.done")}</Text>
                 </TouchableOpacity>
               </Animated.View>
             )}
@@ -1910,8 +1899,11 @@ export default function CaptureScreen({ route, navigation }: any) {
           <View style={styles.glucoseTimingModal}>
             <Text style={styles.glucoseTimingTitle}>
               {glucoseTotalRef.current > 1
-                ? `Reading ${glucoseTotalRef.current - glucoseQueueRef.current.length + 1} of ${glucoseTotalRef.current} — when was it taken?`
-                : "When was this reading taken?"}
+                ? t("capture.glucoseWhenNofM", {
+                    n: glucoseTotalRef.current - glucoseQueueRef.current.length + 1,
+                    total: glucoseTotalRef.current,
+                  })
+                : t("capture.glucoseWhenOne")}
             </Text>
             <Text style={styles.glucoseTimingValue}>
               {pendingGlucoseReading?.value} {pendingGlucoseReading?.unit || "mg/dL"}
@@ -1939,7 +1931,7 @@ export default function CaptureScreen({ route, navigation }: any) {
                     activeOpacity={0.8}
                   >
                     <Text style={styles.glucoseTimingOptionText}>
-                      {option.label}
+                      {t(option.labelKey)}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -1951,14 +1943,14 @@ export default function CaptureScreen({ route, navigation }: any) {
                 onPress={skipGlucoseReading}
                 activeOpacity={0.8}
               >
-                <Text style={styles.glucoseTimingCancelText}>Skip this one</Text>
+                <Text style={styles.glucoseTimingCancelText}>{t("capture.skipThisOne")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.glucoseTimingCancel}
                 onPress={cancelGlucoseTiming}
                 activeOpacity={0.8}
               >
-                <Text style={styles.glucoseTimingCancelText}>Stop</Text>
+                <Text style={styles.glucoseTimingCancelText}>{t("capture.stop")}</Text>
               </TouchableOpacity>
             </View>
           </View>

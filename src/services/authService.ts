@@ -15,6 +15,7 @@ import { markLoginSession } from "./urineProteinSession";
 import { scheduleUrineReminders } from "./urineReminderService";
 import { isDemoAccount, seedDemoData } from "./seedDemoData";
 import { EMR_DEFAULT_THRESHOLDS, thresholdsFromServer } from "../utils/thresholdLogic";
+import { currentLanguage, t } from "../i18n";
 import {
   setAuthTokens,
   clearAuthTokens,
@@ -124,7 +125,8 @@ const authService = {
       const response = await fetchWithRetry(`${API_BASE}/send_code.php`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
+        // The code text comes back in the app's language (EMR send_code.php).
+        body: JSON.stringify({ phone, lang: currentLanguage() }),
       });
 
       const data = await response.json();
@@ -138,29 +140,25 @@ const authService = {
       }
 
       if (data.error === "not_found") {
-        throw new Error("Phone number not registered. Please contact your provider.");
+        throw new Error(t("services.authNotRegistered"));
       }
       if (data.error === "app_login_disabled") {
         // The number is on file but the EMR has turned app access off.
-        throw new Error(
-          "CareView access for this number has been turned off by your care team. Please contact your provider."
-        );
+        throw new Error(t("services.authAccessOff"));
       }
       if (data.error === "sms_failed") {
-        throw new Error("Failed to send SMS. Please try again.");
+        throw new Error(t("services.authSmsFailed"));
       }
       if (data.error === "too_many_codes") {
-        throw new Error("Too many code requests. Please wait a bit and try again.");
+        throw new Error(t("services.authTooManyCodes"));
       }
 
-      throw new Error(data.error || "Failed to send code");
+      throw new Error(data.error || t("services.authSendFailed"));
     } catch (e: any) {
       console.error("[Auth] sendCode error:", e);
 
       if (isNetworkError(e)) {
-        throw new Error(
-          "Unable to reach the server. Please check your internet connection and try again."
-        );
+        throw new Error(t("services.authNoConnection"));
       }
 
       throw e;
@@ -193,18 +191,16 @@ const authService = {
 
       if (!data.success) {
         if (data.error === "invalid_or_expired_code") {
-          throw new Error("Invalid or expired code. Please try again.");
+          throw new Error(t("services.authInvalidCode"));
         }
         if (data.error === "patient_not_found") {
-          throw new Error("Patient record not found.");
+          throw new Error(t("services.authPatientNotFound"));
         }
         if (data.error === "app_login_disabled") {
           // Access was turned off between the code being sent and entered.
-          throw new Error(
-            "CareView access for this number has been turned off by your care team. Please contact your provider."
-          );
+          throw new Error(t("services.authAccessOff"));
         }
-        throw new Error(data.error || "Verification failed");
+        throw new Error(data.error || t("services.authVerifyFailed"));
       }
 
       // The thresholds the EMR resolved for this patient (her own → her
@@ -314,27 +310,25 @@ const authService = {
         }
       } catch (dbError: any) {
         console.error("[Auth] Failed to persist user or wipe prior data:", dbError);
-        throw new Error(
-          "Unable to complete sign-in due to a local storage error. Please try again, and contact support if the problem persists."
-        );
+        throw new Error(t("services.authStorageError"));
       }
 
       // Demo account: prompt user to seed sample data
       if (isDemoAccount(phone)) {
         console.log("[Auth] Demo account detected — prompting for seed...");
         Alert.alert(
-          "Demo Account Detected",
-          "Would you like to seed the app with sample data?",
+          t("services.demoTitle"),
+          t("services.demoMessage"),
           [
             {
-              text: "No",
+              text: t("common.no"),
               style: "cancel",
               onPress: () => {
                 console.log("[Auth] Demo seed declined by user");
               },
             },
             {
-              text: "Yes",
+              text: t("common.yes"),
               onPress: () => {
                 console.log("[Auth] Seeding demo data...");
                 seedDemoData();
@@ -350,9 +344,7 @@ const authService = {
       console.error("[Auth] verifyCode error:", e);
 
       if (isNetworkError(e)) {
-        throw new Error(
-          "Unable to reach the server. Please check your internet connection and try again."
-        );
+        throw new Error(t("services.authNoConnection"));
       }
 
       throw e;

@@ -1,7 +1,8 @@
 // src/services/urineProteinLogic.ts
 //
-// Pure rules for the urine protein check. No React Native or SQLite imports,
-// so every rule here is unit-testable (see __tests__/urineProteinLogic.test.ts).
+// Pure rules for the urine protein check. No SQLite or device imports (only
+// the i18n module, which has none either), so every rule here is unit-testable
+// (see __tests__/urineProteinLogic.test.ts).
 //
 // The clinical contract, as agreed 2026-09-05:
 //   - Patients may record a result whenever they want, as often as they want.
@@ -13,6 +14,13 @@
 //   - The session in which the patient logged in never shows the hold: the
 //     phone has no local history right after login, so "owed" would be true
 //     for everyone. From the next app open onward the normal rule applies.
+//
+// Text the patient reads comes from the i18n module (urine.* keys), looked up
+// when it is produced. The result values and reason codes are saved and
+// synced to the EMR and are never translated; they are shown through labels.
+
+import { fmtDate, t, type TKey } from "../i18n";
+import enUrine from "../i18n/locales/en/urine";
 
 export const URINE_INTERVAL_HOURS = 72;
 export const URINE_INTERVAL_MS = URINE_INTERVAL_HOURS * 60 * 60 * 1000;
@@ -39,16 +47,34 @@ export type ProteinResult = (typeof PROTEIN_RESULTS)[number];
 /** Levels the EMR flags as an alert (mirrors ALERT_URINE_LEVELS in screening_sync.php). */
 export const ALERT_RESULTS: ReadonlySet<string> = new Set(["+2", "+3", "+4"]);
 
+/** The on-screen name of a result; the value itself is what is saved. */
+export function proteinResultLabel(result: unknown): string {
+  if (result === "Negative") return t("urine.resultNegative");
+  if (result === "Trace") return t("urine.resultTrace");
+  return String(result ?? "");
+}
+
+// `code` is saved and synced (screening_sync.php); `labelKey` is what is shown.
 export const UNABLE_REASONS = [
-  { code: "out_of_strips", label: "I'm out of test strips" },
-  { code: "no_kit", label: "I don't have my kit with me" },
-  { code: "other", label: "Another reason" },
-] as const;
+  { code: "out_of_strips", labelKey: "urine.reasonOutOfStrips" },
+  { code: "no_kit", labelKey: "urine.reasonNoKit" },
+  { code: "other", labelKey: "urine.reasonOther" },
+] as const satisfies readonly { code: string; labelKey: TKey }[];
 export type UnableReasonCode = (typeof UNABLE_REASONS)[number]["code"];
 
-export function unableReasonLabel(code: unknown): string {
+function unableReasonKey(code: unknown): keyof typeof enUrine {
   const hit = UNABLE_REASONS.find((r) => r.code === code);
-  return hit ? hit.label : "Couldn't test";
+  return hit ? hit.labelKey : "urine.couldntTest";
+}
+
+/** The reason in the app's language (screens). */
+export function unableReasonLabel(code: unknown): string {
+  return t(unableReasonKey(code));
+}
+
+/** The reason in English whatever the app's language (the History CSV export). */
+export function unableReasonLabelEnglish(code: unknown): string {
+  return enUrine[unableReasonKey(code)];
 }
 
 export function isProteinResult(value: unknown): value is ProteinResult {
@@ -240,12 +266,12 @@ export function buildReminderSchedule(input: ReminderScheduleInput): number[] {
 export function describeRelative(ms: number, now: number): string {
   const diff = Math.max(0, now - ms);
   const minutes = Math.round(diff / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1) return t("urine.justNow");
+  if (minutes < 60) return t("urine.minAgo", { n: minutes });
   const hours = Math.floor(diff / 3600000);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  if (hours < 24) return t(hours === 1 ? "urine.hoursAgoOne" : "urine.hoursAgoOther", { n: hours });
   const days = Math.floor(diff / DAY_MS);
-  if (days === 1) return "yesterday";
-  if (days < 7) return `${days} days ago`;
-  return new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
+  if (days === 1) return t("urine.yesterday");
+  if (days < 7) return t("urine.daysAgo", { n: days });
+  return fmtDate(ms, { month: "short", day: "numeric" });
 }

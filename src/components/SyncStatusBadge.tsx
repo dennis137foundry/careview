@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useVitalsSync } from '../hooks/useVitalsSync';
+import { useT } from '../i18n';
 
 interface SyncStatusBadgeProps {
   /** Show as a compact badge (just icon + count) or expanded (with text) */
@@ -31,6 +32,7 @@ export function SyncStatusBadge({
   style,
 }: SyncStatusBadgeProps) {
   const { syncState, isSyncing, pendingCount, isOnline, hasError, syncAll } = useVitalsSync();
+  const { t } = useT();
 
   // Don't show anything if synced and no issues
   if (pendingCount === 0 && !hasError && isOnline) {
@@ -49,28 +51,28 @@ export function SyncStatusBadge({
   // Determine icon and color
   let iconName = 'cloud-done';
   let iconColor = '#28a745';
-  let statusText = 'Synced';
+  let statusText = t('modals.syncSynced');
   let bgColor = '#e8f5e9';
 
   if (!isOnline) {
     iconName = 'cloud-off';
     iconColor = '#6c757d';
-    statusText = 'Offline';
+    statusText = t('modals.syncOffline');
     bgColor = '#f5f5f5';
   } else if (isSyncing) {
     iconName = 'cloud-upload';
     iconColor = '#007bff';
-    statusText = 'Syncing...';
+    statusText = t('modals.syncSyncing');
     bgColor = '#e3f2fd';
   } else if (hasError) {
     iconName = 'cloud-off';
     iconColor = '#dc3545';
-    statusText = 'Sync error';
+    statusText = t('modals.syncError');
     bgColor = '#ffebee';
   } else if (pendingCount > 0) {
     iconName = 'cloud-queue';
     iconColor = '#ffc107';
-    statusText = `${pendingCount} pending`;
+    statusText = t('modals.syncPending', { n: pendingCount });
     bgColor = '#fff8e1';
   }
 
@@ -128,6 +130,7 @@ export function SyncStatusBadge({
  */
 export function SyncButton({ style }: { style?: object }) {
   const { isSyncing, pendingCount, isOnline, syncAll } = useVitalsSync();
+  const { t } = useT();
 
   if (pendingCount === 0) {
     return null;
@@ -150,7 +153,11 @@ export function SyncButton({ style }: { style?: object }) {
         <MaterialIcons name="cloud-upload" size={20} color="#fff" />
       )}
       <Text style={styles.syncButtonText}>
-        {isSyncing ? 'Syncing...' : `Sync ${pendingCount} reading${pendingCount !== 1 ? 's' : ''}`}
+        {isSyncing
+          ? t('modals.syncSyncing')
+          : t(pendingCount !== 1 ? 'modals.syncReadingsOther' : 'modals.syncReadingsOne', {
+              n: pendingCount,
+            })}
       </Text>
     </TouchableOpacity>
   );

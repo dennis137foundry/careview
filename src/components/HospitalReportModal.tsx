@@ -12,6 +12,20 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { reportHospitalVisit } from "../services/hospitalReportService";
 import { useToast } from "./Toast/ToastProvider";
 import { BTN } from "../constants/buttons";
+import { fmtDate, useT, type TKey } from "../i18n";
+
+/** "**word**" in a translated string marks the part shown in bold. */
+function withEmphasis(text: string, style: object) {
+  return text.split("**").map((part, i) =>
+    i % 2 === 1 ? (
+      <Text key={i} style={style}>
+        {part}
+      </Text>
+    ) : (
+      <React.Fragment key={i}>{part}</React.Fragment>
+    )
+  );
+}
 
 const TEAL = "#0e7c86";
 
@@ -40,7 +54,7 @@ function earlierOptions(): { label: string; value: string }[] {
   for (let i = 2; i < EARLIER_DAYS + 2; i++) {
     const d = dayStart(i);
     out.push({
-      label: d.toLocaleDateString(undefined, {
+      label: fmtDate(d, {
         weekday: "short",
         month: "short",
         day: "numeric",
@@ -73,6 +87,7 @@ export default function HospitalReportModal({
   const [visitChoice, setVisitChoice] = useState<VisitChoice>("today");
   const [earlierDate, setEarlierDate] = useState<string | null>(null);
   const { showToast } = useToast();
+  const { t } = useT();
 
   const visitDate =
     visitChoice === "today"
@@ -90,7 +105,7 @@ export default function HospitalReportModal({
   const handleConfirm = () => {
     if (!visitDate) {
       // "Earlier" chosen but no date picked yet.
-      showToast({ message: "Please pick the day you went.", type: "warning" });
+      showToast({ message: t("modals.hospitalPickDay"), type: "warning" });
       return;
     }
 
@@ -101,14 +116,14 @@ export default function HospitalReportModal({
       console.error("[HospitalReport] Failed to save report:", err);
       setSubmitting(false);
       showToast({
-        message: "Couldn't save your report. Please try again.",
+        message: t("modals.hospitalSaveFailed"),
         type: "error",
       });
       return;
     }
 
     showToast({
-      message: "Your care team has been notified.",
+      message: t("modals.hospitalNotified"),
       type: "success",
     });
     resetState();
@@ -121,10 +136,10 @@ export default function HospitalReportModal({
     onClose();
   };
 
-  const choices: { key: VisitChoice; label: string }[] = [
-    { key: "today", label: "Today" },
-    { key: "yesterday", label: "Yesterday" },
-    { key: "earlier", label: "Earlier" },
+  const choices: { key: VisitChoice; labelKey: TKey }[] = [
+    { key: "today", labelKey: "common.today" },
+    { key: "yesterday", labelKey: "common.yesterday" },
+    { key: "earlier", labelKey: "modals.hospitalEarlier" },
   ];
 
   return (
@@ -141,18 +156,16 @@ export default function HospitalReportModal({
             <View style={styles.iconContainer}>
               <MaterialIcons name="local-hospital" size={32} color={TEAL} />
             </View>
-            <Text style={styles.title}>Report a hospital visit</Text>
+            <Text style={styles.title}>{t("modals.hospitalTitle")}</Text>
           </View>
 
           {/* Confirmation message */}
           <Text style={styles.body}>
-            You are reporting to{" "}
-            <Text style={styles.bodyStrong}>Trinity Home Health Services</Text>{" "}
-            that you have been to a hospital for medical care.
+            {withEmphasis(t("modals.hospitalBody"), styles.bodyStrong)}
           </Text>
 
           {/* When did you go? */}
-          <Text style={styles.whenLabel}>When did you go?</Text>
+          <Text style={styles.whenLabel}>{t("modals.hospitalWhen")}</Text>
           <View style={styles.chipRow}>
             {choices.map((opt) => {
               const active = visitChoice === opt.key;
@@ -166,7 +179,7 @@ export default function HospitalReportModal({
                   <Text
                     style={[styles.chipText, active && styles.chipTextActive]}
                   >
-                    {opt.label}
+                    {t(opt.labelKey)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -224,7 +237,7 @@ export default function HospitalReportModal({
               ) : (
                 <>
                   <MaterialIcons name="check" size={20} color="#fff" />
-                  <Text style={styles.confirmButtonText}>Confirm</Text>
+                  <Text style={styles.confirmButtonText}>{t("modals.hospitalConfirm")}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -235,7 +248,7 @@ export default function HospitalReportModal({
               disabled={submitting}
               activeOpacity={0.7}
             >
-              <Text style={styles.cancelButtonText}>Cancel</Text>
+              <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </View>

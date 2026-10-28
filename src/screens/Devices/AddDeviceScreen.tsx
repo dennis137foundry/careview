@@ -38,6 +38,8 @@ import {
   registerDeviceWithEmr,
   normalizeMac,
 } from "../../services/deviceRegistrationService";
+import { t, useT, type TKey } from "../../i18n";
+import en from "../../i18n/locales/en";
 
 // ============================================================================
 // Component
@@ -59,18 +61,31 @@ import {
 function showPairingResetHelp(reason?: string) {
   const where =
     Platform.OS === "ios"
-      ? "Open Settings > Bluetooth, tap the (i) next to your monitor, and choose Forget This Device."
-      : "Open Settings > Connected devices, tap the gear next to your monitor, and choose Forget.";
+      ? t("devices.pairingResetWhereIos")
+      : t("devices.pairingResetWhereAndroid");
 
   Alert.alert(
-    "Pairing Needs Resetting",
-    `Your phone connected to the monitor but pairing did not complete, so it was not added.\n\n${where}\n\nThen put the monitor back into pairing mode (hold START for about 3 seconds until you see "Pr") and add it again.` +
-      (reason ? `\n\nDetails: ${reason}` : ""),
+    t("devices.pairingResetTitle"),
+    t("devices.pairingResetBody", { where }) +
+      (reason ? `\n\n${t("devices.pairingResetDetails", { reason })}` : ""),
     [
-      { text: "Not Now", style: "cancel" },
-      { text: "Open Settings", onPress: () => Linking.openSettings() },
+      { text: t("devices.notNow"), style: "cancel" },
+      { text: t("common.openSettings"), onPress: () => Linking.openSettings() },
     ]
   );
+}
+
+// The EMR refuses a device with an English sentence (device_register.php,
+// 409). The known ones are shown in the app's language — each key's English is
+// the server's text exactly; any other text is shown as it came.
+const SERVER_CONFLICT_TEXT: TKey[] = [
+  "devices.serverCuffMismatch",
+  "devices.serverOutOfService",
+];
+
+function conflictMessage(message: string): string {
+  const key = SERVER_CONFLICT_TEXT.find((k) => en[k] === message);
+  return key ? t(key) : message;
 }
 
 const BLUETOOTH_ERROR_CODES = new Set([
@@ -85,13 +100,12 @@ const BLUETOOTH_ERROR_CODES = new Set([
 ]);
 
 function showBluetoothAlert(status?: Partial<BluetoothStatus> | null) {
-  const message =
-    status?.message ||
-    "CareView needs Bluetooth to add devices. Turn Bluetooth on or allow Bluetooth permission, then try again.";
+  // status.message arrives in the app's language (deviceService).
+  const message = status?.message || t("devices.btNeededMessage");
 
-  Alert.alert("Bluetooth Needed", message, [
-    { text: "Cancel", style: "cancel" },
-    { text: "Open Settings", onPress: () => Linking.openSettings() },
+  Alert.alert(t("devices.btNeededTitle"), message, [
+    { text: t("common.cancel"), style: "cancel" },
+    { text: t("common.openSettings"), onPress: () => Linking.openSettings() },
   ]);
 }
 
@@ -99,6 +113,7 @@ export default function AddDeviceScreen() {
   const dispatch = useDispatch<AppDispatch>();
   const navigation = useNavigation<any>();
   const { showToast } = useToast();
+  useT(); // redraw on a language change
   const existingDevices = useSelector((state: RootState) => state.devices.devices);
 
   const [scanning, setScanning] = useState(false);
@@ -247,7 +262,7 @@ export default function AddDeviceScreen() {
       }, 30000);
     } catch (error: any) {
       console.error("[AddDevice] Scan error:", error);
-      Alert.alert("Scan Error", error.message || "Failed to start scanning");
+      Alert.alert(t("devices.scanErrorTitle"), error.message || t("devices.scanErrorMessage"));
       setScanning(false);
     }
   };
@@ -294,9 +309,9 @@ export default function AddDeviceScreen() {
     // of the same category is allowed — patients keep a backup.
     if (isAlreadyPaired(device)) {
       Alert.alert(
-        "Already Paired",
-        "This monitor is already on your device list.",
-        [{ text: "OK" }]
+        t("devices.alreadyPairedTitle"),
+        t("devices.alreadyPairedBody"),
+        [{ text: t("common.ok") }]
       );
       return;
     }
@@ -459,7 +474,7 @@ export default function AddDeviceScreen() {
         } else if (result.kind === "conflict") {
           // Roll back local save. Device isn't available for this patient.
           dispatch(removeDeviceAction(localId));
-          Alert.alert("Device Not Available", result.message);
+          Alert.alert(t("devices.notAvailableTitle"), conflictMessage(result.message));
           return;
         } else if (result.kind === "fatal") {
           // Bad payload or bad auth. Leave paired locally but log.
@@ -472,8 +487,12 @@ export default function AddDeviceScreen() {
 
       dispatch(loadDevices());
 
+      // finalFriendlyName is stored and sent to the EMR in English; the
+      // toast names the device in the app's language instead.
       showToast({
-        message: `${finalFriendlyName} added successfully`,
+        message: t("devices.addedToast", {
+          name: device.name || deviceService.getFriendlyTypeLabel(model) || model,
+        }),
         type: "success",
         duration: 2500,
       });
@@ -485,7 +504,7 @@ export default function AddDeviceScreen() {
       console.error("[AddDevice] Add error:", error);
       // Roll back the local save on unexpected errors in the local path.
       dispatch(removeDeviceAction(localId));
-      Alert.alert("Error", "Failed to add device. Please try again.");
+      Alert.alert(t("common.error"), t("devices.addFailed"));
     } finally {
       setConnecting(null);
       setPendingDevice(null);
@@ -508,7 +527,7 @@ export default function AddDeviceScreen() {
     // Expected format: "TYPE:MAC" e.g., "BP3L:A4C1386B2E90"
     const parts = code.split(":");
     if (parts.length !== 2) {
-      Alert.alert("Invalid QR Code", "The QR code format is not recognized.");
+      Alert.alert(t("devices.invalidQrTitle"), t("devices.invalidQrBody"));
       return;
     }
 
@@ -524,7 +543,7 @@ export default function AddDeviceScreen() {
     } else if (upperType.includes("HS")) {
       category = "SCALE";
     } else {
-      Alert.alert("Unknown Device", `Device type "${type}" is not supported.`);
+      Alert.alert(t("devices.unknownDeviceTitle"), t("devices.unknownDeviceBody", { type }));
       return;
     }
 
@@ -540,7 +559,7 @@ export default function AddDeviceScreen() {
     // Duplicate check happens on the built device so it compares MACs, not
     // categories — a second monitor of the same kind is allowed.
     if (isAlreadyPaired(device)) {
-      Alert.alert("Already Paired", "This monitor is already on your device list.");
+      Alert.alert(t("devices.alreadyPairedTitle"), t("devices.alreadyPairedBody"));
       return;
     }
 
@@ -614,9 +633,9 @@ export default function AddDeviceScreen() {
               </View>
             )}
           </View>
-          <Text style={styles.deviceMac}>Serial: {item.mac}</Text>
+          <Text style={styles.deviceMac}>{t("devices.serial", { mac: item.mac })}</Text>
           <Text style={styles.deviceType}>
-            {deviceService.getFriendlyTypeName(item.type)}
+            {deviceService.getFriendlyTypeLabel(item.type)}
           </Text>
         </View>
 
@@ -624,7 +643,7 @@ export default function AddDeviceScreen() {
           <ActivityIndicator color="#00509f" />
         ) : alreadyExists ? (
           <View style={styles.existsBadge}>
-            <Text style={styles.existsBadgeText}>Added</Text>
+            <Text style={styles.existsBadgeText}>{t("devices.added")}</Text>
           </View>
         ) : (
           <MaterialIcons name="add-circle" size={28} color="#00509f" />
@@ -646,18 +665,18 @@ export default function AddDeviceScreen() {
         >
           <MaterialIcons name="arrow-back" size={24} color="#002040" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Add Device</Text>
+        <Text style={styles.headerTitle}>{t("devices.addDeviceTitle")}</Text>
         <TouchableOpacity
           onPress={async () => {
             if (!hasCameraPermission) {
               const granted = await requestCameraPermission();
               if (!granted) {
                 Alert.alert(
-                  "Camera Permission Needed",
-                  "Camera access is required to scan a device QR code. Please enable it in Settings.",
+                  t("devices.cameraPermissionTitle"),
+                  t("devices.cameraPermissionBody"),
                   [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Open Settings", onPress: () => Linking.openSettings() },
+                    { text: t("common.cancel"), style: "cancel" },
+                    { text: t("common.openSettings"), onPress: () => Linking.openSettings() },
                   ]
                 );
                 return;
@@ -684,20 +703,20 @@ export default function AddDeviceScreen() {
           {scanning ? (
             <>
               <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />
-              <Text style={styles.scanButtonText}>Scanning...</Text>
+              <Text style={styles.scanButtonText}>{t("devices.scanning")}</Text>
             </>
           ) : (
             <>
               <MaterialIcons name="bluetooth-searching" size={20} color="#fff" />
-              <Text style={styles.scanButtonText}>Scan for Devices</Text>
+              <Text style={styles.scanButtonText}>{t("devices.scanForDevices")}</Text>
             </>
           )}
         </TouchableOpacity>
 
         <Text style={styles.scanHint}>
           {scanning
-            ? "Keep your device nearby. The app will find supported iHealth devices automatically."
-            : "Scan for nearby blood pressure monitors, scales, and glucose meters"}
+            ? t("devices.scanHintActive")
+            : t("devices.scanHintIdle")}
         </Text>
 
         {/* A&D monitors only advertise while in pairing mode, and there is no
@@ -706,9 +725,9 @@ export default function AddDeviceScreen() {
         <View style={styles.pairingHint}>
           <MaterialIcons name="info-outline" size={16} color="#5b6b7f" />
           <Text style={styles.pairingHintText}>
-            Using an A&D monitor? Hold its START button for about 3 seconds first,
-            until the screen shows <Text style={styles.pairingHintBold}>Pr</Text> and
-            a flashing Bluetooth icon. Then scan.
+            {t("devices.adHintBefore")}
+            <Text style={styles.pairingHintBold}>Pr</Text>
+            {t("devices.adHintAfter")}
           </Text>
         </View>
       </View>
@@ -724,14 +743,14 @@ export default function AddDeviceScreen() {
             {scanning ? (
               <>
                 <ActivityIndicator size="large" color="#00509f" />
-                <Text style={styles.emptyText}>Searching for devices...</Text>
+                <Text style={styles.emptyText}>{t("devices.searching")}</Text>
               </>
             ) : (
               <>
                 <MaterialIcons name="bluetooth-searching" size={48} color="#ccc" />
-                <Text style={styles.emptyText}>No devices found</Text>
+                <Text style={styles.emptyText}>{t("devices.noneFound")}</Text>
                 <Text style={styles.emptyHint}>
-                  Scan with your supported iHealth device nearby
+                  {t("devices.noneFoundHint")}
                 </Text>
               </>
             )}
@@ -749,7 +768,7 @@ export default function AddDeviceScreen() {
             >
               <MaterialIcons name="close" size={28} color="#fff" />
             </TouchableOpacity>
-            <Text style={styles.qrTitle}>Scan Device QR Code</Text>
+            <Text style={styles.qrTitle}>{t("devices.qrTitle")}</Text>
           </View>
 
           {cameraDevice && hasCameraPermission ? (
@@ -763,7 +782,7 @@ export default function AddDeviceScreen() {
             <View style={styles.noCameraContainer}>
               <MaterialIcons name="no-photography" size={64} color="#ccc" />
               <Text style={styles.noCameraText}>
-                {hasCameraPermission ? "Camera not available" : "Camera permission denied"}
+                {hasCameraPermission ? t("devices.cameraUnavailable") : t("devices.cameraDenied")}
               </Text>
             </View>
           )}
@@ -773,7 +792,7 @@ export default function AddDeviceScreen() {
           </View>
 
           <Text style={styles.qrHint}>
-            Point at the QR code on your device packaging
+            {t("devices.qrHint")}
           </Text>
         </View>
       </Modal>
@@ -782,9 +801,9 @@ export default function AddDeviceScreen() {
       <Modal visible={showCuffModal} transparent animationType="fade">
         <View style={styles.nameModalOverlay}>
           <View style={styles.nameModalContainer}>
-            <Text style={styles.nameModalTitle}>Select Cuff Size</Text>
+            <Text style={styles.nameModalTitle}>{t("devices.cuffTitle")}</Text>
             <Text style={styles.nameModalSubtitle}>
-              Which cuff is attached to this blood-pressure monitor?
+              {t("devices.cuffSubtitle")}
             </Text>
 
             <TouchableOpacity
@@ -794,8 +813,8 @@ export default function AddDeviceScreen() {
             >
               <MaterialIcons name="radio-button-unchecked" size={22} color="#00509f" />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.cuffOptionTitle}>Standard cuff</Text>
-                <Text style={styles.cuffOptionSub}>Fits most adults</Text>
+                <Text style={styles.cuffOptionTitle}>{t("devices.cuffStandard")}</Text>
+                <Text style={styles.cuffOptionSub}>{t("devices.cuffStandardSub")}</Text>
               </View>
               <MaterialIcons name="chevron-right" size={22} color="#999" />
             </TouchableOpacity>
@@ -807,8 +826,8 @@ export default function AddDeviceScreen() {
             >
               <MaterialIcons name="radio-button-unchecked" size={22} color="#00509f" />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.cuffOptionTitle}>Large cuff</Text>
-                <Text style={styles.cuffOptionSub}>For larger upper arms</Text>
+                <Text style={styles.cuffOptionTitle}>{t("devices.cuffLarge")}</Text>
+                <Text style={styles.cuffOptionSub}>{t("devices.cuffLargeSub")}</Text>
               </View>
               <MaterialIcons name="chevron-right" size={22} color="#999" />
             </TouchableOpacity>
@@ -820,8 +839,8 @@ export default function AddDeviceScreen() {
             >
               <MaterialIcons name="radio-button-unchecked" size={22} color="#00509f" />
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.cuffOptionTitle}>XXL cuff (accessory)</Text>
-                <Text style={styles.cuffOptionSub}>Oversized cuff on a Standard monitor</Text>
+                <Text style={styles.cuffOptionTitle}>{t("devices.cuffXxl")}</Text>
+                <Text style={styles.cuffOptionSub}>{t("devices.cuffXxlSub")}</Text>
               </View>
               <MaterialIcons name="chevron-right" size={22} color="#999" />
             </TouchableOpacity>
@@ -836,7 +855,7 @@ export default function AddDeviceScreen() {
                 setPendingDevice(null);
               }}
             >
-              <Text style={styles.nameModalCancelText}>Cancel</Text>
+              <Text style={styles.nameModalCancelText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </View>

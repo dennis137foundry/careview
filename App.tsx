@@ -7,7 +7,19 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import RNBootSplash from "react-native-bootsplash";
 import { AppState, StatusBar } from "react-native";
 import { store } from "./src/redux/store";
-import { initDB, getLastScreeningResponse } from "./src/services/sqliteService";
+import {
+  initDB,
+  getAppSetting,
+  getLastScreeningResponse,
+  setAppSetting,
+} from "./src/services/sqliteService";
+import {
+  LanguageProvider,
+  loadLanguageChoice,
+  onLanguageChange,
+  setLanguageSaver,
+  t,
+} from "./src/i18n";
 import {
   clearLoginSession,
   noteAppBackgrounded,
@@ -16,6 +28,7 @@ import {
 import {
   cancelUrineReminders,
   ensureUrineRemindersScheduled,
+  rescheduleUrineRemindersForLanguage,
 } from "./src/services/urineReminderService";
 import { loadUser, logout } from "./src/redux/userSlice";
 import {
@@ -38,6 +51,9 @@ import { ToastProvider, useToast } from "./src/components/Toast";
 // A device clock more than this far from the phone's was not set (or was
 // reset) — small drift is normal and is simply corrected by setting it.
 const CLOCK_OFF_THRESHOLD_MS = 10 * 60 * 1000;
+
+/** app_settings key of the language choice; kept when patient data is wiped. */
+const LANGUAGE_SETTING = "app_language";
 
 const MyTheme = {
   ...DefaultTheme,
@@ -71,8 +87,8 @@ function RootApp() {
       showToast({
         message:
           reason === "access_revoked"
-            ? "Your CareView access has been turned off by your care team. Please contact them if you think this is a mistake."
-            : "Your session expired. Please sign in again.",
+            ? t("services.accessRevoked")
+            : t("services.sessionExpired"),
         type: "info",
         duration: reason === "access_revoked" ? 8000 : 4000,
       });
@@ -83,6 +99,10 @@ function RootApp() {
 
     const init = async () => {
       initDB();
+      // The patient's language choice (Profile → Language), before the
+      // splash is hidden so the first screen is already in her language.
+      loadLanguageChoice(getAppSetting(LANGUAGE_SETTING));
+      setLanguageSaver((choice) => setAppSetting(LANGUAGE_SETTING, choice));
       await dispatch(loadUser());
       // Hydrate the in-memory JWT cache from SQLite so the first sync
       // attempt after launch already has a Bearer header available.
@@ -163,8 +183,21 @@ function RootApp() {
       }
     );
 
+    // A language change rewrites the urine reminders already scheduled,
+    // which were written in the old language.
+    const languageSub = onLanguageChange(() => {
+      if (!store.getState().user.isAuthenticated) return;
+      const lastResult = getLastScreeningResponse("urine_protein_result");
+      const lastUnable = getLastScreeningResponse("urine_protein_unable");
+      rescheduleUrineRemindersForLanguage(
+        lastResult ? lastResult.timestamp : null,
+        lastUnable ? lastUnable.timestamp : null
+      );
+    });
+
     // Cleanup on unmount
     return () => {
+      languageSub();
       appStateSub.remove();
       batterySub.remove();
       clockSub.remove();
@@ -188,11 +221,13 @@ function RootApp() {
 export default function App() {
   return (
     <Provider store={store}>
-      <SafeAreaProvider>
-        <ToastProvider>
-          <RootApp />
-        </ToastProvider>
-      </SafeAreaProvider>
+      <LanguageProvider>
+        <SafeAreaProvider>
+          <ToastProvider>
+            <RootApp />
+          </ToastProvider>
+        </SafeAreaProvider>
+      </LanguageProvider>
     </Provider>
   );
 }

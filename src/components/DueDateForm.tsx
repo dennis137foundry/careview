@@ -15,11 +15,15 @@ import {
   FlatList,
 } from "react-native";
 import { BTN } from "../constants/buttons";
+import { fmtDate, useT, type TKey } from "../i18n";
 
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+/** Month names in the app's language ("January".."December" in English). */
+function monthNames(): string[] {
+  return Array.from({ length: 12 }, (_, i) => {
+    const name = fmtDate(new Date(2000, i, 1), { month: "long" });
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  });
+}
 
 // A due date can reasonably be a bit in the past (overdue / postpartum
 // signup) or up to ~10 months out.
@@ -35,6 +39,8 @@ interface Props {
 }
 
 export default function DueDateForm({ onSave }: Props) {
+  const { t } = useT();
+  const MONTHS = monthNames();
   const now = new Date();
   const years = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
 
@@ -42,7 +48,7 @@ export default function DueDateForm({ onSave }: Props) {
   const [day, setDay] = useState<number | null>(null);
   const [year, setYear] = useState<number | null>(null);
   const [openField, setOpenField] = useState<Field>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TKey | null>(null);
 
   const daysInMonth =
     month !== null && year !== null
@@ -55,7 +61,7 @@ export default function DueDateForm({ onSave }: Props) {
 
     // A day picked before the month can exceed that month's length.
     if (day > new Date(year, month + 1, 0).getDate()) {
-      setError("That day doesn't exist in the chosen month.");
+      setError("modals.eddDayNotExist");
       return;
     }
 
@@ -64,7 +70,7 @@ export default function DueDateForm({ onSave }: Props) {
     const diffDays = Math.round((chosen.getTime() - today.getTime()) / MS_PER_DAY);
 
     if (diffDays < -MIN_PAST_DAYS || diffDays > MAX_FUTURE_DAYS) {
-      setError("Please double-check the date — it doesn't look like a due date for this pregnancy.");
+      setError("modals.eddImplausible");
       return;
     }
 
@@ -75,9 +81,9 @@ export default function DueDateForm({ onSave }: Props) {
   };
 
   const fieldLabel = (field: Exclude<Field, null>): string => {
-    if (field === "month") return month !== null ? MONTHS[month] : "Month";
-    if (field === "day") return day !== null ? String(day) : "Day";
-    return year !== null ? String(year) : "Year";
+    if (field === "month") return month !== null ? MONTHS[month] : t("modals.eddMonth");
+    if (field === "day") return day !== null ? String(day) : t("modals.eddDay");
+    return year !== null ? String(year) : t("modals.eddYear");
   };
 
   const options: Array<string | number> =
@@ -95,10 +101,8 @@ export default function DueDateForm({ onSave }: Props) {
 
   return (
     <View>
-      <Text style={styles.title}>To get started, enter your due date</Text>
-      <Text style={styles.subtitle}>
-        Your daily facts will match where you are in your pregnancy.
-      </Text>
+      <Text style={styles.title}>{t("modals.eddTitle")}</Text>
+      <Text style={styles.subtitle}>{t("modals.eddSubtitle")}</Text>
 
       <View style={styles.row}>
         {(["month", "day", "year"] as const).map((field) => (
@@ -123,7 +127,7 @@ export default function DueDateForm({ onSave }: Props) {
         ))}
       </View>
 
-      {error && <Text style={styles.error}>{error}</Text>}
+      {error && <Text style={styles.error}>{t(error)}</Text>}
 
       <TouchableOpacity
         style={[styles.saveBtn, !complete && styles.saveBtnDisabled]}
@@ -131,7 +135,7 @@ export default function DueDateForm({ onSave }: Props) {
         disabled={!complete}
         activeOpacity={0.8}
       >
-        <Text style={styles.saveBtnText}>Show My Daily Facts</Text>
+        <Text style={styles.saveBtnText}>{t("modals.eddShowFacts")}</Text>
       </TouchableOpacity>
 
       <Modal
@@ -148,10 +152,10 @@ export default function DueDateForm({ onSave }: Props) {
           <View style={styles.sheet}>
             <Text style={styles.sheetTitle}>
               {openField === "month"
-                ? "Select month"
+                ? t("modals.eddSelectMonth")
                 : openField === "day"
-                ? "Select day"
-                : "Select year"}
+                ? t("modals.eddSelectDay")
+                : t("modals.eddSelectYear")}
             </Text>
             <FlatList
               data={options}
