@@ -34,7 +34,16 @@ import { markDeviceScreenActive } from "../../services/batteryRefreshService";
 import { refreshProfile } from "../../services/profileRefreshService";
 import { isBPHigh as bpIsHigh, isGlucoseHigh } from "../../utils/thresholdLogic";
 import { BTN } from "../../constants/buttons";
-import { t, useT, fmtDate, fmtTime } from "../../i18n";
+import { t, useT, fmtDate, fmtTime, type TKey } from "../../i18n";
+import GuideStage, { GuideLinkButton, GUIDE_SUCCESS_SIZE } from "../../guided/GuideStage";
+import GuidedAnimation from "../../guided/GuidedAnimation";
+import {
+  captureGuideFor,
+  NOT_FOUND_ANIMATION,
+  TRY_AGAIN_ANIMATION,
+  type GuideStep,
+} from "../../guided/guides";
+import type { AnimationName } from "../../guided/animations";
 
 // Below this last-known battery %, warn the user to charge before a reading.
 const LOW_BATTERY_THRESHOLD = 20;
@@ -279,6 +288,56 @@ export default function CaptureScreen({ route, navigation }: any) {
   const deviceDbId = device?.id;
 
   // ==========================================================================
+  // Guided measurement (src/guided)
+  //
+  // BP3L, HS2S and BG5S get step-by-step animations; every other model gets
+  // null here and this screen behaves exactly as before. Steps never advance
+  // on a timer: preparation steps wait for the patient's tap, capture steps
+  // follow the phase the device events already drive (scan → connect →
+  // measure → success). With a guide, a failed capture is explained in place
+  // (with a Try again) instead of in an alert.
+  // ==========================================================================
+  const deviceModel = device?.model;
+  const deviceName = device?.name;
+  const deviceSource = device?.source;
+  const guide = useMemo(
+    () => captureGuideFor({ model: deviceModel, name: deviceName, source: deviceSource }),
+    [deviceModel, deviceName, deviceSource]
+  );
+  // Native-event listeners and timers read the guide and phase through refs:
+  // their closures outlive a render.
+  const guideRef = useRef(guide);
+  guideRef.current = guide;
+  const phaseRef = useRef(phase);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+  // Preparation steps (before the capture) or the "How to test" walkthrough.
+  const [walkthrough, setWalkthrough] = useState<null | {
+    mode: "prep" | "tutorial";
+    index: number;
+  }>(null);
+  // Why the last capture stopped, shown in place of an alert (guided only).
+  const [failure, setFailure] = useState<null | {
+    anim: AnimationName;
+    titleKey: TKey;
+    messageKey: TKey;
+  }>(null);
+
+  // A capture that went wrong. Guided: say so on the screen with the matching
+  // picture and a Try again. Not guided: the alert this screen always showed.
+  const showCaptureProblem = useCallback(
+    (anim: AnimationName, titleKey: TKey, messageKey: TKey) => {
+      if (guideRef.current) {
+        setFailure({ anim, titleKey, messageKey });
+      } else {
+        Alert.alert(t(titleKey), t(messageKey));
+      }
+    },
+    []
+  );
+
+  // ==========================================================================
   // Glucose import (see "Glucose meter time" above)
   //
   // Every connection to the meter is a full sync: native reads the meter's
@@ -384,6 +443,8 @@ export default function CaptureScreen({ route, navigation }: any) {
     setPendingGlucoseReading(null);
     setShowGlucoseTimingModal(false);
     targetMacRef.current = "";
+    setWalkthrough(null);
+    setFailure(null);
 
     setShowHealthCheckModal(false);
 
@@ -707,14 +768,18 @@ export default function CaptureScreen({ route, navigation }: any) {
           setBusy(false);
           setPhase("idle");
           setStatusText("");
-          Alert.alert(t("capture.disconnectedTitle"), t("capture.disconnectedMsg"));
+          showCaptureProblem(
+            TRY_AGAIN_ANIMATION,
+            "capture.disconnectedTitle",
+            "capture.disconnectedMsg"
+          );
         }
         // If readingReceivedRef.current is true, this is an expected
         // disconnect after a successful save — ignore it.
       }
     );
     return () => sub.remove();
-  }, [addLog, device, isFocused]);
+  }, [addLog, device, isFocused, showCaptureProblem]);
 
   // Helper to sync after saving
   const syncToEMR = useCallback(async () => {
@@ -1248,14 +1313,18 @@ export default function CaptureScreen({ route, navigation }: any) {
           if (BLUETOOTH_ERROR_CODES.has(code)) {
             showBluetoothAlert(data);
           } else {
-            Alert.alert(t("capture.deviceErrorTitle"), t("capture.deviceErrorMsg"));
+            showCaptureProblem(
+              TRY_AGAIN_ANIMATION,
+              "capture.deviceErrorTitle",
+              "capture.deviceErrorMsg"
+            );
           }
         }
       }),
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast, ownsEvent, isFocused]);
+  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast, ownsEvent, isFocused, showCaptureProblem]);
 
   // ============================================================================
   // START CAPTURE
@@ -1284,6 +1353,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     // Prevent screen from sleeping during capture
     IHealthDevices.keepAwake?.();
 
+    setFailure(null);
     setBusy(true);
     setLastReading(null);
     setSyncStatus("");
@@ -1341,14 +1411,45 @@ export default function CaptureScreen({ route, navigation }: any) {
 
     timeoutRef.current = setTimeout(() => {
       addLog("Timeout - no reading received");
+      // Never found (still scanning) is a different problem from found but no
+      // reading; the guided screen shows the matching help picture.
+      const neverFound = phaseRef.current === "auth" || phaseRef.current === "scan";
       IHealthDevices.stopScan?.().catch(() => {});
       IHealthDevices?.allowSleep?.();
       setBusy(false);
       setPhase("idle");
       setStatusText("");
-      Alert.alert(t("capture.timeoutTitle"), t("capture.timeoutMsg"));
+      if (guideRef.current) {
+        setFailure(
+          neverFound
+            ? {
+                anim: NOT_FOUND_ANIMATION,
+                titleKey: "guide.notFoundTitle",
+                messageKey: "capture.timeoutMsg",
+              }
+            : {
+                anim: TRY_AGAIN_ANIMATION,
+                titleKey: "guide.noReadingTitle",
+                messageKey: "capture.timeoutMsg",
+              }
+        );
+      } else {
+        Alert.alert(t("capture.timeoutTitle"), t("capture.timeoutMsg"));
+      }
     }, 90000);
   }, [device, addLog, successScale]);
+
+  // After the health check (BP) and battery warning: a guided device first
+  // shows its preparation steps; the last one starts the capture. Otherwise
+  // the capture starts straight away, as it always has.
+  const beginMeasurement = useCallback(() => {
+    if (guideRef.current && guideRef.current.prep.length > 0) {
+      setFailure(null);
+      setWalkthrough({ mode: "prep", index: 0 });
+      return;
+    }
+    startCapture();
+  }, [startCapture]);
 
   // Handle daily health check completion — auto-start capture
   const handleHealthCheckComplete = useCallback(
@@ -1371,12 +1472,13 @@ export default function CaptureScreen({ route, navigation }: any) {
         addLog("Symptoms reported - care team will be notified");
       }
 
-      // Auto-start capture after health check
+      // Auto-start capture after health check (preparation steps first, when
+      // the device has a guide)
       setTimeout(() => {
-        startCapture();
+        beginMeasurement();
       }, 400);
     },
-    [addLog, startCapture, showToast]
+    [addLog, beginMeasurement, showToast]
   );
 
   // ============================================================================
@@ -1398,7 +1500,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         setShowHealthCheckModal(true);
         return;
       }
-      startCapture();
+      beginMeasurement();
     };
 
     // Warn before scanning only when the last-known battery is low AND
@@ -1432,7 +1534,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     }
 
     proceed();
-  }, [device, healthCheckCompleted, addLog, startCapture]);
+  }, [device, healthCheckCompleted, addLog, beginMeasurement]);
 
   const cancel = useCallback(async () => {
     addLog("Cancelled by user");
@@ -1457,6 +1559,66 @@ export default function CaptureScreen({ route, navigation }: any) {
     IHealthDevices?.allowSleep?.();
     navigation.goBack();
   }, [navigation]);
+
+  // ==========================================================================
+  // Guided steps: Next / Skip / Try again
+  //
+  // The handlers read and clear refs before state so a quick double tap can
+  // never start two captures (state only catches up on the next render).
+  // ==========================================================================
+  const walkthroughRef = useRef(walkthrough);
+  walkthroughRef.current = walkthrough;
+  const failureRef = useRef(failure);
+  failureRef.current = failure;
+
+  // Leave the walkthrough: preparation → the capture; "How to test" → the
+  // usual import, through start() so Bluetooth and battery are checked.
+  const finishWalkthrough = useCallback(() => {
+    const w = walkthroughRef.current;
+    if (!w) return;
+    walkthroughRef.current = null;
+    setWalkthrough(null);
+    if (w.mode === "prep") startCapture();
+    else start();
+  }, [startCapture, start]);
+
+  const nextWalkStep = useCallback(() => {
+    const w = walkthroughRef.current;
+    const g = guideRef.current;
+    if (!w || !g) return;
+    const steps = w.mode === "prep" ? g.prep : g.tutorial;
+    if (w.index >= steps.length - 1) {
+      finishWalkthrough();
+      return;
+    }
+    const next = { ...w, index: w.index + 1 };
+    walkthroughRef.current = next;
+    setWalkthrough(next);
+  }, [finishWalkthrough]);
+
+  const closeWalkthrough = useCallback(() => {
+    walkthroughRef.current = null;
+    setWalkthrough(null);
+  }, []);
+
+  const openTutorial = useCallback(() => {
+    if (!guideRef.current?.tutorial.length) return;
+    setFailure(null);
+    setWalkthrough({ mode: "tutorial", index: 0 });
+  }, []);
+
+  // Straight back to the capture: preparation is already done.
+  const retryCapture = useCallback(() => {
+    if (!failureRef.current) return;
+    failureRef.current = null;
+    setFailure(null);
+    startCapture();
+  }, [startCapture]);
+
+  const dismissFailure = useCallback(() => {
+    failureRef.current = null;
+    setFailure(null);
+  }, []);
 
   // Stop the import. Untagged readings stay on the meter (memory is not
   // erased) and are offered again next time; anything already tagged is
@@ -1690,6 +1852,47 @@ export default function CaptureScreen({ route, navigation }: any) {
         ? t("capture.typeSmartScale")
         : t("capture.typeGlucoseMeter");
 
+  // ---- Guided view (src/guided). All null for a device without a guide. ----
+  const walkSteps: GuideStep[] =
+    walkthrough && guide ? (walkthrough.mode === "prep" ? guide.prep : guide.tutorial) : [];
+  const walkStep = walkthrough ? walkSteps[walkthrough.index] : undefined;
+  const walkIsLast = walkthrough ? walkthrough.index >= walkSteps.length - 1 : false;
+  // The capture's own phases pick the picture; the device events drive them.
+  const phaseStep: GuideStep | null =
+    guide && phase !== "idle" && phase !== "success"
+      ? phase === "measure"
+        ? guide.measure
+        : phase === "connect"
+          ? guide.connect
+          : guide.scan
+      : null;
+  const failureShown = guide && phase === "idle" && !walkStep ? failure : null;
+
+  const progressBar =
+    busy && phase !== "success" ? (
+      <View style={styles.progressContainer}>
+        <Animated.View
+          style={[
+            styles.progressBar,
+            {
+              backgroundColor: CAPTURE_ACCENT,
+              width: progressAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: ["0%", "100%"],
+              }),
+            },
+          ]}
+        />
+      </View>
+    ) : null;
+
+  const cancelButton =
+    busy && phase !== "success" ? (
+      <TouchableOpacity style={styles.cancelButton} onPress={cancel} activeOpacity={0.8}>
+        <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
+      </TouchableOpacity>
+    ) : null;
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -1732,7 +1935,79 @@ export default function CaptureScreen({ route, navigation }: any) {
             { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
           ]}
         >
-          {/* Device Visual */}
+          {walkStep && walkthrough ? (
+            // Preparation steps, or the "How to test" walkthrough: the patient
+            // moves on with the buttons.
+            <>
+              <GuideStage
+                anim={walkStep.anim}
+                title={t(walkStep.title)}
+                body={t(walkStep.body)}
+                stepLabel={t("guide.stepOf", {
+                  n: walkthrough.index + 1,
+                  total: walkSteps.length,
+                })}
+              />
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  onPress={nextWalkStep}
+                  activeOpacity={0.8}
+                  style={styles.primaryButton}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {!walkIsLast
+                      ? t("common.next")
+                      : walkthrough.mode === "prep"
+                        ? t("guide.startMeasuring")
+                        : t("guide.importReading")}
+                  </Text>
+                </TouchableOpacity>
+                {walkthrough.mode === "prep" ? (
+                  !walkIsLast ? (
+                    <GuideLinkButton label={t("guide.skipToMeasure")} onPress={finishWalkthrough} />
+                  ) : null
+                ) : (
+                  <GuideLinkButton label={t("common.close")} onPress={closeWalkthrough} />
+                )}
+              </View>
+            </>
+          ) : failureShown ? (
+            // The capture stopped: why, with the matching help picture.
+            <>
+              <GuideStage
+                anim={failureShown.anim}
+                title={t(failureShown.titleKey)}
+                body={t(failureShown.messageKey)}
+              />
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  onPress={retryCapture}
+                  activeOpacity={0.8}
+                  style={styles.primaryButton}
+                >
+                  <Text style={styles.primaryButtonText}>{t("common.retry")}</Text>
+                </TouchableOpacity>
+                <GuideLinkButton label={t("common.cancel")} onPress={dismissFailure} />
+              </View>
+            </>
+          ) : phaseStep ? (
+            // Capturing: the picture for the phase the device is in.
+            <>
+              <GuideStage anim={phaseStep.anim} title={t(phaseStep.title)} body={t(phaseStep.body)} />
+              {progressBar}
+              <View style={styles.buttonContainer}>{cancelButton}</View>
+            </>
+          ) : (
+          <>
+          {/* Device Visual — a guided device shows its finishing animation
+              above the saved reading instead */}
+          {phase === "success" && guide ? (
+            <GuidedAnimation
+              name={guide.success}
+              size={GUIDE_SUCCESS_SIZE}
+              style={styles.guideSuccessCard}
+            />
+          ) : (
           <View style={[styles.deviceSection, isSuccess && styles.deviceSectionSuccess]}>
             <Animated.View
               style={[
@@ -1802,6 +2077,7 @@ export default function CaptureScreen({ route, navigation }: any) {
               )}
             </View>
           </View>
+          )}
 
           {/* Device Info */}
           <Text style={[styles.deviceName, isSuccess && styles.deviceNameSuccess]}>{device.name}</Text>
@@ -1829,22 +2105,7 @@ export default function CaptureScreen({ route, navigation }: any) {
           )}
 
           {/* Progress Bar */}
-          {busy && phase !== "success" && (
-            <View style={styles.progressContainer}>
-              <Animated.View
-                style={[
-                  styles.progressBar,
-                  {
-                    backgroundColor: CAPTURE_ACCENT,
-                    width: progressAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: ["0%", "100%"],
-                    }),
-                  },
-                ]}
-              />
-            </View>
-          )}
+          {progressBar}
 
           {/* Action Buttons */}
           <View style={[styles.buttonContainer, isSuccess && styles.buttonContainerSuccess]}>
@@ -1858,15 +2119,12 @@ export default function CaptureScreen({ route, navigation }: any) {
               </TouchableOpacity>
             )}
 
-            {busy && phase !== "success" && (
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={cancel}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
-              </TouchableOpacity>
-            )}
+            {/* Glucose meter: the optional step-by-step "How to test" */}
+            {phase === "idle" && guide && guide.tutorial.length > 0 ? (
+              <GuideLinkButton label={t("guide.howToTest")} onPress={openTutorial} />
+            ) : null}
+
+            {cancelButton}
 
             {phase === "success" && (
               <Animated.View style={{ transform: [{ translateY: buttonSlide }], opacity: readingFade }}>
@@ -1880,6 +2138,8 @@ export default function CaptureScreen({ route, navigation }: any) {
               </Animated.View>
             )}
           </View>
+          </>
+          )}
         </Animated.View>
       </ScrollView>
 
@@ -2025,6 +2285,10 @@ const styles = StyleSheet.create({
     width: 124,
     height: 124,
     marginBottom: 6,
+  },
+  // Guided devices: the finishing animation above the saved reading.
+  guideSuccessCard: {
+    marginBottom: 10,
   },
   deviceRing: {
     position: "absolute",

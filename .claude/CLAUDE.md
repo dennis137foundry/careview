@@ -62,6 +62,8 @@ src/
     pregnancyFacts.ts  - EDD-aligned daily facts (294 day-keyed + 42 postpartum)
   utils/
     getDailyFact.ts    - Pregnancy-day-aligned fact selector (EDD-based)
+  guided/              - Guided-measurement animations: player, playback plan, per-device steps
+  assets/guided/       - The 25 Lottie files (SOURCES.md = provenance + checksums)
 modules/
   react-native-ihealth-devices/   - Custom native BLE module
     src/                          - TypeScript bridge (manager, hooks, types)
@@ -301,6 +303,33 @@ onDebugLog          → { message }
   fetch/processing, `BGTaskSchedulerPermittedIdentifiers` com.transistorsoft.fetch,
   `NSHealthShare/UpdateUsageDescription`; the App ID needs HealthKit (automatic signing), then
   `pod install`. Google Play needs the Health Connect permissions declaration.
+
+### Guided measurements (branch `feature/guided-measurements`, 2026-11)
+- Step-by-step Lottie animations (`lottie-react-native` 7.3.8 — 7.4+ needs RN 0.84) on the capture
+  screens. 25 vector files in `src/assets/guided/` (provenance + SHA-256 in `SOURCES.md` there;
+  replace a file under the same name and keep its markers). Code in `src/guided/`:
+  `playback.ts` (pure: markers `intro`/`loop`/`outro`, exclusive end, → inclusive frame ranges;
+  holds end on the last DRAWN frame, never `op`), `animations.ts` (lazy loaders),
+  `guides.ts` (which steps per model), `GuidedAnimation.tsx` (player in a clipped light card;
+  reduced motion = one still frame), `GuideStage.tsx` (card + step + title + text).
+- **Nothing advances on a timer.** Preparation steps wait for the patient's tap; capture steps
+  follow the phases the device events already drive.
+  - BP3L: sit → cuff (1–2 cm above elbow, one-finger fit) → arm at heart level → capture
+    (connecting / measuring pictures) → finishing animation over the reading.
+  - HS2S: no preparation (stepping on wakes the scale): "step on" while scanning, "stand still"
+    once found, "step off" over the weight. There is deliberately no "place the scale" step.
+  - BG5S: the meter is NOT live, so the seven steps are an optional "How to test" walkthrough on
+    the start screen, ending in the usual import. The native strip/blood/result events exist but
+    are untested on a real meter; nothing depends on them yet.
+  - A&D UA-651BLE (`BleCaptureScreen`): cuff (two-finger fit) → press START; the phone arms when
+    the patient taps "I pressed START" → "measuring" until "It's done" or the monitor connects →
+    "keep near" until the reading arrives. Add Device has a "Show me how" pairing animation.
+  - Every other model (BP5, BP5S, HS2, HS4S, other generic monitors) has no guide and its screen
+    is unchanged. With a guide, timeouts / disconnects / device errors are shown in place (not
+    found / try again pictures + Try again) instead of an alert.
+- Instruction text is in `src/i18n/locales/*/guide.ts`, taken from the manufacturers' quick start
+  guides; a change there is a change to patient instructions. Never "squeeze" (BG5S: massage).
+- iOS needs `pod install` (lottie-ios 4.6.0).
 
 ### Pregnancy Wellness Tips
 - 280 rotating daily tips (one per day of pregnancy)

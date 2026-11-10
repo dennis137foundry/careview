@@ -9,6 +9,7 @@ import profile from "./profile";
 import modals from "./modals";
 import urine from "./urine";
 import services from "./services";
+import guide from "./guide";
 import type { TKey } from "../en";
 
 const es: Record<TKey, string> = {
@@ -23,6 +24,7 @@ const es: Record<TKey, string> = {
   ...modals,
   ...urine,
   ...services,
+  ...guide,
 };
 
 export default es;

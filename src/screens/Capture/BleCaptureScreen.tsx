@@ -71,7 +71,11 @@ import {
   CAPTURE_ACCENT_SOFT,
   CAPTURE_GRADIENT,
 } from "./captureTheme";
-import { t, useT } from "../../i18n";
+import { t, useT, type TKey } from "../../i18n";
+import GuideStage, { GuideLinkButton, GUIDE_SUCCESS_SIZE } from "../../guided/GuideStage";
+import GuidedAnimation from "../../guided/GuidedAnimation";
+import { bleGuideFor, NOT_FOUND_ANIMATION, type GuideStep } from "../../guided/guides";
+import type { AnimationName } from "../../guided/animations";
 
 const { IHealthDevices } = NativeModules;
 const emitter = IHealthDevices ? new NativeEventEmitter(IHealthDevices) : null;
@@ -219,6 +223,34 @@ export default function BleCaptureScreen({ route, navigation }: any) {
   const isFocused = useIsFocused();
   const deviceType = device?.type;
 
+  // ==========================================================================
+  // Guided measurement (src/guided) — the A&D UA-651BLE only; any other
+  // generic monitor gets null and this screen is unchanged.
+  //
+  //   cuff on → press START (the phone starts listening when the patient taps
+  //   "I pressed START", so the 5-minute wait is never spent on preparation)
+  //   → "measuring" until she taps "It's done" or the monitor connects
+  //   → "keep near" until the reading arrives → success.
+  // ==========================================================================
+  const deviceModel = device?.model;
+  const deviceName = device?.name;
+  const deviceSource = device?.source;
+  const guide = useMemo(
+    () => bleGuideFor({ model: deviceModel, name: deviceName, source: deviceSource }),
+    [deviceModel, deviceName, deviceSource]
+  );
+  const guideRef = useRef(guide);
+  guideRef.current = guide;
+  const [prepIndex, setPrepIndex] = useState<number | null>(null);
+  const [waitStage, setWaitStage] = useState<"measuring" | "keepNear">("measuring");
+  const [failure, setFailure] = useState<null | {
+    anim: AnimationName;
+    titleKey: TKey;
+    messageKey: TKey;
+  }>(null);
+  // Set synchronously so a double tap can never arm twice.
+  const armingRef = useRef(false);
+
   const [phase, setPhase] = useState<Phase>("idle");
   const [statusText, setStatusText] = useState("");
   const [lastReading, setLastReading] = useState<any>(null);
@@ -348,9 +380,64 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       disarm();
       setPhase("idle");
       setStatusText("");
-      Alert.alert(t("capture.noReadingReceivedTitle"), t("capture.noReadingReceivedMsg"));
+      if (guideRef.current) {
+        setFailure({
+          anim: NOT_FOUND_ANIMATION,
+          titleKey: "capture.noReadingReceivedTitle",
+          messageKey: "capture.noReadingReceivedMsg",
+        });
+      } else {
+        Alert.alert(t("capture.noReadingReceivedTitle"), t("capture.noReadingReceivedMsg"));
+      }
     }, ARMED_TIMEOUT_MS);
   }, [deviceMac, disarm, log, successScale]);
+
+  // After the health check and battery warning. Guided: Bluetooth is checked
+  // now, before the patient puts the cuff on, then the preparation steps.
+  // Otherwise the screen arms straight away, as it always has.
+  const beginMeasurement = useCallback(async () => {
+    if (!guideRef.current) {
+      arm();
+      return;
+    }
+    try {
+      await deviceService.ensureBluetoothReady();
+    } catch (error: any) {
+      log(`Bluetooth not ready: ${error?.message || String(error)}`);
+      showBluetoothAlert(error?.status);
+      return;
+    }
+    setFailure(null);
+    setWaitStage("measuring");
+    setPrepIndex(0);
+  }, [arm, log]);
+
+  // Next on a preparation step. The last one ("I pressed START") arms; the
+  // step stays up until arming is done, and stays if it could not arm (e.g.
+  // Bluetooth was switched off meanwhile — arm() has already said so).
+  const nextPrepStep = useCallback(async () => {
+    const g = guideRef.current;
+    if (!g || prepIndex === null) return;
+    if (prepIndex < g.prep.length - 1) {
+      setPrepIndex(prepIndex + 1);
+      return;
+    }
+    if (armingRef.current) return;
+    armingRef.current = true;
+    try {
+      setWaitStage("measuring");
+      await arm();
+      if (armedRef.current) setPrepIndex(null);
+    } finally {
+      armingRef.current = false;
+    }
+  }, [arm, prepIndex]);
+
+  // The cuff is already on: straight to the START step.
+  const skipToStartStep = useCallback(() => {
+    const g = guideRef.current;
+    if (g) setPrepIndex(g.prep.length - 1);
+  }, []);
 
   // ==========================================================================
   // Entry point — daily health check gate, then arm
@@ -364,7 +451,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
         setShowHealthCheckModal(true);
         return;
       }
-      arm();
+      beginMeasurement();
     };
 
     const batt = device?.lastBattery;
@@ -382,7 +469,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     }
 
     proceed();
-  }, [device, deviceType, healthCheckCompleted, arm, log]);
+  }, [device, deviceType, healthCheckCompleted, beginMeasurement, log]);
 
   const handleHealthCheckComplete = useCallback(
     (data: any) => {
@@ -392,9 +479,9 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       if (data.hasHeadaches || data.hasVisualDisturbances) {
         log("Symptoms reported - care team will be notified");
       }
-      setTimeout(() => arm(), 400);
+      setTimeout(() => beginMeasurement(), 400);
     },
-    [arm, log, showToast]
+    [beginMeasurement, log, showToast]
   );
 
   // ==========================================================================
@@ -671,6 +758,9 @@ export default function BleCaptureScreen({ route, navigation }: any) {
       setLastReading(null);
       setSyncStatus("");
       readingReceivedRef.current = false;
+      setPrepIndex(null);
+      setWaitStage("measuring");
+      setFailure(null);
 
       if (deviceType === "BP") {
         setHealthCheckCompleted(hasDailyHealthCheckToday());
@@ -832,6 +922,35 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     );
   };
 
+  // ---- Guided view (A&D UA-651BLE only; all null otherwise) ----
+  const prepStep: GuideStep | undefined =
+    guide && prepIndex !== null ? guide.prep[prepIndex] : undefined;
+  const prepIsLast = guide && prepIndex !== null ? prepIndex >= guide.prep.length - 1 : false;
+  // A connection from the monitor means its measurement is over, whatever
+  // the patient has tapped.
+  const waitStep: GuideStep | null =
+    guide && isWaiting
+      ? phase === "receiving" || waitStage === "keepNear"
+        ? guide.keepNear
+        : guide.measuring
+      : null;
+  const failureShown = guide && phase === "idle" && !prepStep ? failure : null;
+
+  const stopWaiting = async () => {
+    await disarm();
+    setPhase("idle");
+    setStatusText("");
+    setWaitStage("measuring");
+  };
+
+  // After "no reading": back to the START step (the cuff is still on).
+  const retryFromStart = () => {
+    const g = guideRef.current;
+    setFailure(null);
+    setWaitStage("measuring");
+    if (g) setPrepIndex(g.prep.length - 1);
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -871,7 +990,83 @@ export default function BleCaptureScreen({ route, navigation }: any) {
             { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
           ]}
         >
-          {/* Device Visual */}
+          {prepStep && guide && prepIndex !== null ? (
+            // Cuff on, then press START. The patient moves on with the button.
+            <>
+              <GuideStage
+                anim={prepStep.anim}
+                title={t(prepStep.title)}
+                body={t(prepStep.body)}
+                stepLabel={t("guide.stepOf", { n: prepIndex + 1, total: guide.prep.length })}
+              />
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  onPress={nextPrepStep}
+                  activeOpacity={0.8}
+                  style={styles.primaryButton}
+                >
+                  <Text style={styles.primaryButtonText}>
+                    {prepIsLast ? t("guide.andPressedStart") : t("common.next")}
+                  </Text>
+                </TouchableOpacity>
+                {!prepIsLast ? (
+                  <GuideLinkButton label={t("guide.skipToMeasure")} onPress={skipToStartStep} />
+                ) : null}
+              </View>
+            </>
+          ) : failureShown ? (
+            // The monitor never sent anything within the wait.
+            <>
+              <GuideStage
+                anim={failureShown.anim}
+                title={t(failureShown.titleKey)}
+                body={t(failureShown.messageKey)}
+              />
+              <View style={styles.buttonContainer}>
+                <TouchableOpacity
+                  onPress={retryFromStart}
+                  activeOpacity={0.8}
+                  style={styles.primaryButton}
+                >
+                  <Text style={styles.primaryButtonText}>{t("common.retry")}</Text>
+                </TouchableOpacity>
+                <GuideLinkButton label={t("common.cancel")} onPress={() => setFailure(null)} />
+              </View>
+            </>
+          ) : waitStep ? (
+            // Measuring, then waiting for the monitor to send the reading.
+            <>
+              <GuideStage anim={waitStep.anim} title={t(waitStep.title)} body={t(waitStep.body)} />
+              <View style={styles.buttonContainer}>
+                {waitStep === guide?.measuring ? (
+                  <TouchableOpacity
+                    onPress={() => setWaitStage("keepNear")}
+                    activeOpacity={0.8}
+                    style={[styles.primaryButton, guideStyles.stackedButton]}
+                  >
+                    <Text style={styles.primaryButtonText}>{t("guide.andItsDone")}</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={stopWaiting}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+          <>
+          {/* Device Visual — a guided monitor shows its finishing animation
+              above the saved reading instead */}
+          {phase === "success" && guide ? (
+            <GuidedAnimation
+              name={guide.success}
+              size={GUIDE_SUCCESS_SIZE}
+              style={guideStyles.successCard}
+            />
+          ) : (
           <View style={[styles.deviceSection, isSuccess && styles.deviceSectionSuccess]}>
             <Animated.View
               style={[
@@ -938,6 +1133,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
               )}
             </View>
           </View>
+          )}
 
           {/* Device Info */}
           <Text style={[styles.deviceName, isSuccess && styles.deviceNameSuccess]}>
@@ -986,11 +1182,7 @@ export default function BleCaptureScreen({ route, navigation }: any) {
             {isWaiting && (
               <TouchableOpacity
                 style={styles.cancelButton}
-                onPress={async () => {
-                  await disarm();
-                  setPhase("idle");
-                  setStatusText("");
-                }}
+                onPress={stopWaiting}
                 activeOpacity={0.8}
               >
                 <Text style={styles.cancelButtonText}>{t("common.cancel")}</Text>
@@ -1009,6 +1201,8 @@ export default function BleCaptureScreen({ route, navigation }: any) {
               </Animated.View>
             )}
           </View>
+          </>
+          )}
         </Animated.View>
       </ScrollView>
 
@@ -1020,3 +1214,14 @@ export default function BleCaptureScreen({ route, navigation }: any) {
     </View>
   );
 }
+
+const guideStyles = StyleSheet.create({
+  // "It's done" sits above the red Cancel while the cuff measures.
+  stackedButton: {
+    marginBottom: 12,
+  },
+  // The finishing animation above the saved reading.
+  successCard: {
+    marginBottom: 10,
+  },
+});

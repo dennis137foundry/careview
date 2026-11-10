@@ -10,6 +10,7 @@ import profile from "./profile";
 import modals from "./modals";
 import urine from "./urine";
 import services from "./services";
+import guide from "./guide";
 
 const en = {
   ...common,
@@ -23,6 +24,7 @@ const en = {
   ...modals,
   ...urine,
   ...services,
+  ...guide,
 };
 
 export type TKey = keyof typeof en;

@@ -40,6 +40,8 @@ import {
 } from "../../services/deviceRegistrationService";
 import { t, useT, type TKey } from "../../i18n";
 import en from "../../i18n/locales/en";
+import GuidedAnimation from "../../guided/GuidedAnimation";
+import { AND_PAIRING_ANIMATION } from "../../guided/guides";
 
 // ============================================================================
 // Component
@@ -120,6 +122,8 @@ export default function AddDeviceScreen() {
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [showQRScanner, setShowQRScanner] = useState(false);
+  // The A&D pairing animation under the "hold START until Pr" hint.
+  const [showPairingDemo, setShowPairingDemo] = useState(false);
 
   const patientId = useSelector((state: RootState) => state.user.patientId);
 
@@ -724,12 +728,29 @@ export default function AddDeviceScreen() {
             silently finds nothing and the patient has no way to know why. */}
         <View style={styles.pairingHint}>
           <MaterialIcons name="info-outline" size={16} color="#5b6b7f" />
-          <Text style={styles.pairingHintText}>
-            {t("devices.adHintBefore")}
-            <Text style={styles.pairingHintBold}>Pr</Text>
-            {t("devices.adHintAfter")}
-          </Text>
+          <View style={styles.pairingHintBody}>
+            <Text style={styles.pairingHintTextInner}>
+              {t("devices.adHintBefore")}
+              <Text style={styles.pairingHintBold}>Pr</Text>
+              {t("devices.adHintAfter")}
+            </Text>
+            {/* The same instruction as an animation: finger holds START until
+                the monitor shows Pr and a flashing Bluetooth symbol. */}
+            <TouchableOpacity
+              onPress={() => setShowPairingDemo((v) => !v)}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Text style={styles.pairingDemoToggle}>
+                {showPairingDemo ? t("guide.andPairHide") : t("guide.andPairShow")}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
+        {showPairingDemo ? (
+          <GuidedAnimation name={AND_PAIRING_ANIMATION} size={200} style={styles.pairingDemo} />
+        ) : null}
       </View>
 
       {/* Device List */}
@@ -942,6 +963,24 @@ const styles = StyleSheet.create({
   pairingHintBold: {
     fontWeight: "700",
     color: "#0f2430",
+  },
+  pairingHintBody: {
+    flex: 1,
+  },
+  pairingHintTextInner: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#5b6b7f",
+  },
+  pairingDemoToggle: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#00509f",
+  },
+  pairingDemo: {
+    alignSelf: "center",
+    marginTop: 12,
   },
   listContent: {
     padding: 16,
