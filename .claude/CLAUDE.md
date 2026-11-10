@@ -313,14 +313,25 @@ onDebugLog          → { message }
   `guides.ts` (which steps per model), `GuidedAnimation.tsx` (player in a clipped light card;
   reduced motion = one still frame), `GuideStage.tsx` (card + step + title + text).
 - **Nothing advances on a timer.** Preparation steps wait for the patient's tap; capture steps
-  follow the phases the device events already drive.
-  - BP3L: sit → cuff (1–2 cm above elbow, one-finger fit) → arm at heart level → capture
-    (connecting / measuring pictures) → finishing animation over the reading.
+  follow what the device itself reports.
+  - BP3L: sit → cuff (1–2 cm above elbow, one-finger fit) → arm at heart level → capture.
+    "Connecting" until the cuff reports zeroing/pressure (`onBloodPressureProgress`), then
+    "measuring" with the live cuff pressure → finishing animation over the reading. Cuff error
+    codes → plain words (`bpErrorText`, iHealth BPDeviceError numbers, same on Android).
   - HS2S: no preparation (stepping on wakes the scale): "step on" while scanning, "stand still"
-    once found, "step off" over the weight. There is deliberately no "place the scale" step.
-  - BG5S: the meter is NOT live, so the seven steps are an optional "How to test" walkthrough on
-    the start screen, ending in the usual import. The native strip/blood/result events exist but
-    are untested on a real meter; nothing depends on them yet.
+    once found with the live weight (`onWeightProgress`), "step off" over the weight. There is
+    deliberately no "place the scale" step.
+  - BG5S: the main button is still the import. "Test now, step by step" is the LIVE test
+    (`BG5S_LIVE_STEP`): ready (tap) → insert strip (phone scans; the strip turns the meter on;
+    moves on when the meter accepts `startMeasurement` — iOS after `setDeviceClock`, Android after
+    its own "ready" + "offline_synced") → prick, drop (taps) → apply (waits) → the meter's
+    `blood_detected` → wait → its result (`onBloodGlucoseReading` after the start) goes through
+    `beginGlucoseImport` (sample-window prompt) → success shows the "throw away" step. A live
+    test never erases the meter; a stored copy of the live reading is skipped by its record id
+    or, failing that, by same meter + value within 90 s (`glucoseReadingNear`). Meter off
+    (3 min without blood / strip out) = disconnect → "the meter turned off"; meter error codes →
+    `bgErrorText`. UNTESTED on a real meter as of 2026-11-10: event order, whether a pre-inserted
+    strip reports `strip_in`, and whether the live and stored record ids match.
   - A&D UA-651BLE (`BleCaptureScreen`): cuff (two-finger fit) → press START; the phone arms when
     the patient taps "I pressed START" → "measuring" until "It's done" or the monitor connects →
     "keep near" until the reading arrives. Add Device has a "Show me how" pairing animation.

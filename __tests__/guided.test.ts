@@ -4,13 +4,19 @@ import { planPlayback, progressAt } from "../src/guided/playback";
 import {
   ALL_GUIDES,
   AND_PAIRING_ANIMATION,
+  BG5S_LIVE_STEP,
   NOT_FOUND_ANIMATION,
   TRY_AGAIN_ANIMATION,
+  bgErrorText,
+  bgLiveStepIsTap,
   bleGuideFor,
+  bpErrorText,
   captureGuideFor,
   isUA651BLE,
   type GuideStep,
 } from "../src/guided/guides";
+import es from "../src/i18n/locales/es";
+import ht from "../src/i18n/locales/ht";
 
 // What the animation brief asks of each file (markers → how it plays).
 const EXPECTED_KIND: Record<AnimationName, "introThenLoop" | "loop" | "once"> = {
@@ -179,6 +185,57 @@ describe("guides", () => {
       "bg5s_06_measuring",
       "bg5s_07_done",
     ]);
+  });
+
+  it("names the live test steps after the seven animations", () => {
+    const g = captureGuideFor({ model: "BG5S" })!;
+    expect(g.tutorial[BG5S_LIVE_STEP.READY].anim).toBe("bg5s_01_wash_hands");
+    expect(g.tutorial[BG5S_LIVE_STEP.STRIP].anim).toBe("bg5s_02_insert_strip");
+    expect(g.tutorial[BG5S_LIVE_STEP.LANCE].anim).toBe("bg5s_03_lance_finger");
+    expect(g.tutorial[BG5S_LIVE_STEP.DROP].anim).toBe("bg5s_04_blood_drop");
+    expect(g.tutorial[BG5S_LIVE_STEP.APPLY].anim).toBe("bg5s_05_apply_blood");
+    expect(g.tutorial[BG5S_LIVE_STEP.WAIT].anim).toBe("bg5s_06_measuring");
+    expect(g.tutorial[BG5S_LIVE_STEP.DONE].anim).toBe("bg5s_07_done");
+  });
+
+  it("lets the patient tap past only her own live steps; the meter moves the rest", () => {
+    const taps = Object.values(BG5S_LIVE_STEP).filter(bgLiveStepIsTap);
+    expect(taps).toEqual([BG5S_LIVE_STEP.READY, BG5S_LIVE_STEP.LANCE, BG5S_LIVE_STEP.DROP]);
+    // Never a tap past "apply" (no replaying the apply step) or the result.
+    expect(bgLiveStepIsTap(BG5S_LIVE_STEP.STRIP)).toBe(false);
+    expect(bgLiveStepIsTap(BG5S_LIVE_STEP.APPLY)).toBe(false);
+    expect(bgLiveStepIsTap(BG5S_LIVE_STEP.WAIT)).toBe(false);
+  });
+
+  it("explains cuff and meter error codes with real text in every language", () => {
+    const texts = [
+      ...Array.from({ length: 40 }, (_x, i) => bpErrorText(i)),
+      ...Array.from({ length: 12 }, (_x, i) => bgErrorText(i)),
+      bgErrorText(500),
+    ].filter(Boolean);
+    expect(texts.length).toBeGreaterThan(10);
+    for (const x of texts) {
+      for (const key of [x!.title, x!.body]) {
+        expect(en[key]).toBeTruthy();
+        expect((es as any)[key]).toBeTruthy();
+        expect((ht as any)[key]).toBeTruthy();
+      }
+    }
+  });
+
+  it("maps the cuff and meter codes the SDK documents", () => {
+    expect(bpErrorText(0)?.body).toBe("guide.bpErrMove"); // arm movement
+    expect(bpErrorText(3)?.body).toBe("guide.bpErrTight");
+    expect(bpErrorText(4)?.body).toBe("guide.bpErrLoose");
+    expect(bpErrorText(13)?.body).toBe("guide.bpErrBattery");
+    expect(bpErrorText(15)?.body).toBe("guide.bpErrRangeHigh");
+    expect(bpErrorText(11)).toBeNull(); // communication: the general "try again"
+    expect(bpErrorText(undefined)).toBeNull();
+    expect(bgErrorText(3)?.body).toBe("guide.bgErrUsedStrip");
+    expect(bgErrorText(8)?.title).toBe("guide.bgErrLoTitle");
+    expect(bgErrorText(9)?.title).toBe("guide.bgErrHiTitle");
+    expect(bgErrorText(500)).toBeNull(); // command timeout: link, not the test
+    expect(bgErrorText("3")).toBeNull();
   });
 
   it("never tells a patient to squeeze the finger", () => {

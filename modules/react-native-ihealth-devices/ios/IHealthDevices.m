@@ -183,7 +183,8 @@ RCT_EXPORT_MODULE();
     return @[@"onDeviceFound", @"onConnectionStateChanged", @"onScanStateChanged",
              @"onBloodPressureReading", @"onWeightReading", @"onBloodGlucoseReading",
              @"onGlucoseMeterEvent", @"onBluetoothStateChanged", @"onError", @"onDebugLog",
-             @"onBatteryLevel", @"onBleDeviceInfo", @"onDeviceClockSet"];
+             @"onBatteryLevel", @"onBleDeviceInfo", @"onDeviceClockSet",
+             @"onBloodPressureProgress", @"onWeightProgress"];
 }
 
 - (void)startObserving { _hasListeners = YES; }
@@ -1741,7 +1742,25 @@ RCT_EXPORT_MODULE();
     // field). Battery is queried best-effort AFTER the result is delivered,
     // while the link is still up; if the device disconnects first we simply
     // don't get a level this cycle.
-    [bp commandStartMeasureWithZeroingState:^(BOOL c){} pressure:^(NSArray *p){} waveletWithHeartbeat:^(NSArray *w){} waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
+    // Live progress for the guided capture (shown, never saved): zeroing,
+    // then the cuff pressure in mmHg while it inflates and deflates, with a
+    // heartbeat flag. Same event and fields as Android.
+    [bp commandStartMeasureWithZeroingState:^(BOOL isComplete) {
+        [self sendEventSafe:@"onBloodPressureProgress" body:@{
+            @"mac": mac, @"type": @"BP3L", @"stage": isComplete ? @"zeroed" : @"zeroing", @"source": @"iHealthSDK"
+        }];
+    } pressure:^(NSArray *p) {
+        id last = [p lastObject];
+        if ([last isKindOfClass:[NSNumber class]]) {
+            [self sendEventSafe:@"onBloodPressureProgress" body:@{
+                @"mac": mac, @"type": @"BP3L", @"stage": @"pressure", @"pressure": last, @"source": @"iHealthSDK"
+            }];
+        }
+    } waveletWithHeartbeat:^(NSArray *w) {
+        [self sendEventSafe:@"onBloodPressureProgress" body:@{
+            @"mac": mac, @"type": @"BP3L", @"stage": @"wave", @"heartbeat": @YES, @"source": @"iHealthSDK"
+        }];
+    } waveletWithoutHeartbeat:^(NSArray *w){} result:^(NSDictionary *r) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 BP3L RESULT: %@", r]];
         [self sendEventSafe:@"onBloodPressureReading" body:@{
             @"mac": mac, @"type": @"BP3L",
@@ -1843,7 +1862,14 @@ RCT_EXPORT_MODULE();
         [self sendDebugLog:[NSString stringWithFormat:@"⚠️ HS2S battery query error: %d", (int)e]];
     }];
 
-    [scale commandStartHS2SMeasureWithUser:user weight:^(NSNumber *w){} stableWeight:^(NSNumber *w) {
+    // Live (unsteady) weight while she stands on it: shown, never saved.
+    [scale commandStartHS2SMeasureWithUser:user weight:^(NSNumber *w) {
+        if (w && [w doubleValue] > 0) {
+            [self sendEventSafe:@"onWeightProgress" body:@{
+                @"mac": mac, @"type": @"HS2S", @"weight": w, @"unit": @"kg", @"source": @"iHealthSDK"
+            }];
+        }
+    } stableWeight:^(NSNumber *w) {
         [self sendDebugLog:[NSString stringWithFormat:@"🎉 HS2S STABLE: %@", w]];
         [self sendEventSafe:@"onWeightReading" body:@{
             @"mac": mac, @"type": @"HS2S", @"weight": w ?: @0, @"unit": @"kg",

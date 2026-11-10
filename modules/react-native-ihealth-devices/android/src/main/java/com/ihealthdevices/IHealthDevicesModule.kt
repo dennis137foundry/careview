@@ -140,17 +140,52 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun sendError(code: String, message: String) {
+    // `errorNum` is the device's own error code when it gave one (iHealth BP
+    // and scale error numbers); the guided capture explains it in plain words.
+    private fun sendError(code: String, message: String, mac: String? = null, errorNum: Int? = null) {
         Log.e(TAG, "Error [$code]: $message")
         try {
             val params = Arguments.createMap().apply {
                 putString("code", code)
                 putString("message", message)
+                if (mac != null) putString("mac", mac)
+                if (errorNum != null) putInt("error", errorNum)
             }
             sendEvent("onError", params)
         } catch (e: Exception) {
             // Ignore if event emitter not ready
         }
+    }
+
+    /**
+     * Live cuff progress while a measurement runs: "zeroing" / "zeroed", then
+     * "pressure" (inflating) and "wave" (deflating, with the heartbeat flag),
+     * each with the cuff pressure in mmHg. The guided capture shows the number;
+     * nothing is saved from it.
+     */
+    private fun emitBpProgress(mac: String, deviceType: String, stage: String, pressure: Int?, heartbeat: Boolean?) {
+        val params = Arguments.createMap().apply {
+            putString("mac", mac)
+            putString("type", deviceType)
+            putString("stage", stage)
+            if (pressure != null) putInt("pressure", pressure)
+            if (heartbeat != null) putBoolean("heartbeat", heartbeat)
+            putString("source", "iHealthSDK")
+        }
+        sendEvent("onBloodPressureProgress", params)
+    }
+
+    /** Live (not yet steady) weight in kg while someone stands on the scale. Shown, never saved. */
+    private fun emitWeightProgress(mac: String, deviceType: String, weightKg: Double) {
+        if (weightKg <= 0) return
+        val params = Arguments.createMap().apply {
+            putString("mac", mac)
+            putString("type", deviceType)
+            putDouble("weight", weightKg)
+            putString("unit", "kg")
+            putString("source", "iHealthSDK")
+        }
+        sendEvent("onWeightProgress", params)
     }
 
     private fun hasPermission(permission: String): Boolean {
@@ -550,6 +585,22 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 pendingClockPromise?.resolve(true)
                 pendingClockPromise = null
             }
+            // Live progress (exact SDK actions, matched before the loose
+            // "result" / "pressure" / "error" checks below).
+            action == BpProfile.ACTION_ZOREING_BP -> emitBpProgress(mac, deviceType, "zeroing", null, null)
+            action == BpProfile.ACTION_ZOREOVER_BP -> emitBpProgress(mac, deviceType, "zeroed", null, null)
+            action == BpProfile.ACTION_ONLINE_PRESSURE_BP ->
+                emitBpProgress(mac, deviceType, "pressure", json.optInt(BpProfile.BLOOD_PRESSURE_BP, 0), null)
+            action == BpProfile.ACTION_ONLINE_PULSEWAVE_BP ->
+                emitBpProgress(
+                    mac, deviceType, "wave",
+                    json.optInt(BpProfile.BLOOD_PRESSURE_BP, 0),
+                    json.optBoolean(BpProfile.FLAG_HEARTBEAT_BP, false)
+                )
+            action == BpProfile.ACTION_ERROR_BP -> {
+                val num = json.optInt(BpProfile.ERROR_NUM_BP, -1)
+                sendError("BP_ERROR", "Blood pressure error: $json", mac, if (num >= 0) num else null)
+            }
             action.contains("result", ignoreCase = true) -> {
                 // iHealth Android SDK sends uppercase keys (HP, LP, PR, AHR).
                 // Fallback to lowercase variants for defensive compatibility.
@@ -596,8 +647,13 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
             // HS2S answer to specifyTouristUsers(). A refusal (the scale is
             // already mid-weigh) shows up here in the debug log.
             action == Hs2sProfile.ACTION_SPECIFY_USERS -> sendDebugLog("HS2S: specify users answered $json")
+            // HS2S live weight while she stands on it (not the result).
+            action == Hs2sProfile.ACTION_ONLINE_REAL_TIME_WEIGHT ->
+                emitWeightProgress(mac, deviceType, json.optDouble(Hs2sProfile.DATA_WEIGHT, 0.0))
             action.contains("unstable", ignoreCase = true) || action.contains("unsteady", ignoreCase = true) -> {
-                sendDebugLog("HS UNSTABLE: weight=${json.optDouble("weight", 0.0)} kg")
+                val weight = json.optDouble("weight", 0.0)
+                sendDebugLog("HS UNSTABLE: weight=$weight kg")
+                emitWeightProgress(mac, deviceType, weight)
             }
             action.contains("result", ignoreCase = true) || action.contains("stable", ignoreCase = true) -> {
                 val weight = json.optDouble("weight", json.optDouble("Weight", 0.0))
@@ -768,8 +824,8 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
                 val num = json.optInt(Bg5sProfile.ERROR_NUM, -1)
                 val desc = json.optString(Bg5sProfile.ERROR_DESCRIPTION, "")
                 val message = "BG5S error $num $desc".trim()
-                sendGlucoseMeterEvent(mac, "error", message)
-                sendError("BG5S_ERROR", message)
+                sendGlucoseMeterEvent(mac, "error", message, if (num >= 0) num else null)
+                sendError("BG5S_ERROR", message, mac, if (num >= 0) num else null)
                 // A clock-set chain or erase that was waiting on this meter is over.
                 bg5sPurgePendingMac = null
                 pendingClockPromise?.resolve(false)
@@ -856,13 +912,16 @@ class IHealthDevicesModule(reactContext: ReactApplicationContext) :
         sendEvent("onBloodGlucoseReading", params)
     }
 
-    private fun sendGlucoseMeterEvent(mac: String, stage: String, message: String) {
+    // `errorNum`: the meter's error code on an "error" stage (Bg5sProfile
+    // ERROR_*, the same numbers as iOS BG5SError).
+    private fun sendGlucoseMeterEvent(mac: String, stage: String, message: String, errorNum: Int? = null) {
         val params = Arguments.createMap().apply {
             putString("stage", stage)
             putString("mac", mac)
             putString("type", "BG5S")
             putString("message", message)
             putString("source", "iHealthSDK")
+            if (errorNum != null) putInt("error", errorNum)
         }
         sendEvent("onGlucoseMeterEvent", params)
         sendDebugLog("BG5S $stage: $message")

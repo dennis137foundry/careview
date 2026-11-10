@@ -26,7 +26,11 @@ import { syncPendingReadings } from "../../services/vitalsSyncService";
 import { NativeModules, NativeEventEmitter } from "react-native";
 import type { RootState, AppDispatch } from "../../redux/store";
 import type { DeviceRecord } from "../../services/sqliteService";
-import { hasDailyHealthCheckToday, readingExists } from "../../services/sqliteService";
+import {
+  glucoseReadingNear,
+  hasDailyHealthCheckToday,
+  readingExists,
+} from "../../services/sqliteService";
 import DailyHealthCheckModal from "../../components/DailyHealthCheckModal";
 import { useToast } from "../../components/Toast";
 import deviceService, { type BluetoothStatus } from "../../services/deviceService";
@@ -38,6 +42,10 @@ import { t, useT, fmtDate, fmtTime, type TKey } from "../../i18n";
 import GuideStage, { GuideLinkButton, GUIDE_SUCCESS_SIZE } from "../../guided/GuideStage";
 import GuidedAnimation from "../../guided/GuidedAnimation";
 import {
+  BG5S_LIVE_STEP,
+  bgErrorText,
+  bgLiveStepIsTap,
+  bpErrorText,
   captureGuideFor,
   NOT_FOUND_ANIMATION,
   TRY_AGAIN_ANIMATION,
@@ -47,6 +55,19 @@ import type { AnimationName } from "../../guided/animations";
 
 // Below this last-known battery %, warn the user to charge before a reading.
 const LOW_BATTERY_THRESHOLD = 20;
+// BG5S live test: longest wait for the meter's result once it has accepted
+// the measurement. The meter turns itself off 3 minutes after the strip goes
+// in without blood (which ends the test through the disconnect); this only
+// catches a meter that goes quiet while staying connected.
+const BG_LIVE_RESULT_LIMIT_MS = 5 * 60 * 1000;
+// Android: a meter that never answers the unit command after its stored-record
+// pull is started anyway after this long.
+const BG_LIVE_UNIT_WAIT_MS = 2500;
+// Live cuff pressure / scale weight: redraw at most this often.
+const LIVE_VALUE_INTERVAL_MS = 200;
+// A stored glucose record with the same value as a saved reading this close
+// in time is that reading (see beginGlucoseImport).
+const BG_SAME_TEST_WINDOW_MS = 90 * 1000;
 // A battery level older than this is treated as unknown, not as current.
 const BATTERY_FRESH_MS = 30 * 60 * 1000;
 
@@ -312,17 +333,83 @@ export default function CaptureScreen({ route, navigation }: any) {
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
-  // Preparation steps (before the capture) or the "How to test" walkthrough.
-  const [walkthrough, setWalkthrough] = useState<null | {
-    mode: "prep" | "tutorial";
-    index: number;
-  }>(null);
+  // Preparation steps (before the capture), or the BG5S live test
+  // (guide.tutorial, indexed by BG5S_LIVE_STEP).
+  type Walkthrough = null | { mode: "prep" | "live"; index: number };
+  const [walkthrough, setWalkthrough] = useState<Walkthrough>(null);
   // Why the last capture stopped, shown in place of an alert (guided only).
-  const [failure, setFailure] = useState<null | {
+  // `live`: it was the BG5S live test, so Try again restarts that test.
+  type Failure = null | {
     anim: AnimationName;
     titleKey: TKey;
     messageKey: TKey;
-  }>(null);
+    live?: boolean;
+  };
+  const [failure, setFailure] = useState<Failure>(null);
+  // Handlers read and clear these refs before state so a quick double tap can
+  // never start two captures (state only catches up on the next render).
+  const walkthroughRef = useRef(walkthrough);
+  walkthroughRef.current = walkthrough;
+  const failureRef = useRef(failure);
+  failureRef.current = failure;
+  const setWalk = useCallback((w: Walkthrough) => {
+    walkthroughRef.current = w;
+    setWalkthrough(w);
+  }, []);
+
+  // Live numbers from the device while it measures (shown, never saved).
+  // BP3L: the "measuring" picture starts when the cuff itself reports
+  // zeroing or pressure, not when the phone connects.
+  const [cuffStarted, setCuffStarted] = useState(false);
+  const [livePressure, setLivePressure] = useState<number | null>(null);
+  const [liveWeightLbs, setLiveWeightLbs] = useState<number | null>(null);
+  const liveShownAtRef = useRef(0);
+
+  // ---- BG5S live test ----
+  // The phone connects to the meter and starts its measurement; the meter's
+  // own events (blood detected, result, errors, turning off) move the steps.
+  const bgLiveRef = useRef(false); // this capture is a live test
+  const bgLiveStartingRef = useRef(false);
+  const bgLiveStartedRef = useRef(false); // the meter accepted the measurement
+  const bgLiveBloodRef = useRef(false); // the meter detected blood
+  const bgLiveUnitReadyRef = useRef(false); // Android: unit set
+  const bgLiveSyncedRef = useRef(false); // Android: stored-record pull done
+  const bgLiveWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bgLiveUnitWaitRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // What the meter is doing, under the step ("waiting for blood").
+  const [bgLiveStatus, setBgLiveStatus] = useState<TKey | null>(null);
+  // The saved reading came from a live test: show the "throw away" step.
+  const [bgLiveDone, setBgLiveDone] = useState(false);
+
+  const clearBgLiveTimers = useCallback(() => {
+    if (bgLiveWatchdogRef.current) {
+      clearTimeout(bgLiveWatchdogRef.current);
+      bgLiveWatchdogRef.current = null;
+    }
+    if (bgLiveUnitWaitRef.current) {
+      clearTimeout(bgLiveUnitWaitRef.current);
+      bgLiveUnitWaitRef.current = null;
+    }
+  }, []);
+
+  const resetBgLive = useCallback(() => {
+    bgLiveRef.current = false;
+    bgLiveStartingRef.current = false;
+    bgLiveStartedRef.current = false;
+    bgLiveBloodRef.current = false;
+    bgLiveUnitReadyRef.current = false;
+    bgLiveSyncedRef.current = false;
+    clearBgLiveTimers();
+    setBgLiveStatus(null);
+  }, [clearBgLiveTimers]);
+
+  const goLiveStep = useCallback(
+    (index: number) => {
+      if (walkthroughRef.current?.mode !== "live") return;
+      setWalk({ mode: "live", index });
+    },
+    [setWalk]
+  );
 
   // A capture that went wrong. Guided: say so on the screen with the matching
   // picture and a Try again. Not guided: the alert this screen always showed.
@@ -335,6 +422,32 @@ export default function CaptureScreen({ route, navigation }: any) {
       }
     },
     []
+  );
+
+  // The live test ended without a reading: drop the link and say why.
+  // busyRef is cleared directly so the disconnect this causes is never read
+  // as a second failure.
+  const failBgLive = useCallback(
+    (anim: AnimationName, titleKey: TKey, messageKey: TKey) => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      busyRef.current = false;
+      IHealthDevices?.stopScan?.().catch(() => {});
+      IHealthDevices?.disconnectAll?.().catch(() => {});
+      IHealthDevices?.allowSleep?.();
+      targetMacRef.current = "";
+      resetBgLive();
+      setWalk(null);
+      setBusy(false);
+      setPhase("idle");
+      setStatusText("");
+      const f = { anim, titleKey, messageKey, live: true };
+      failureRef.current = f;
+      setFailure(f);
+    },
+    [resetBgLive, setWalk]
   );
 
   // ==========================================================================
@@ -392,11 +505,13 @@ export default function CaptureScreen({ route, navigation }: any) {
     IHealthDevices?.disconnectAll?.().catch(() => {});
     IHealthDevices?.allowSleep?.();
     targetMacRef.current = "";
+    resetBgLive();
+    setBgLiveDone(false);
     setBusy(false);
     setPhase("idle");
     setStatusText("");
     Alert.alert(title, message);
-  }, []);
+  }, [resetBgLive]);
 
 
   // ==========================================================================
@@ -443,8 +558,14 @@ export default function CaptureScreen({ route, navigation }: any) {
     setPendingGlucoseReading(null);
     setShowGlucoseTimingModal(false);
     targetMacRef.current = "";
-    setWalkthrough(null);
+    setWalk(null);
+    failureRef.current = null;
     setFailure(null);
+    resetBgLive();
+    setBgLiveDone(false);
+    setCuffStarted(false);
+    setLivePressure(null);
+    setLiveWeightLbs(null);
 
     setShowHealthCheckModal(false);
 
@@ -460,6 +581,8 @@ export default function CaptureScreen({ route, navigation }: any) {
     readingFade.setValue(0);
     buttonSlide.setValue(40);
   }, [
+    setWalk,
+    resetBgLive,
     pulseAnim,
     ringRotate,
     fadeAnim,
@@ -527,6 +650,10 @@ export default function CaptureScreen({ route, navigation }: any) {
       // Cleanup when LEAVING the screen — this is the safe place for BLE teardown
       return () => {
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
+        // A live test's timers must not fire on a screen that is gone (they
+        // tear down the Bluetooth link the other screen may be using).
+        bgLiveRef.current = false;
+        clearBgLiveTimers();
         // The screen is blurred (isFocused is false by the time the event
         // lands), but clear busy too so the teardown's DISCONNECTED event
         // can never be mistaken for a failed capture.
@@ -536,7 +663,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         // Allow screen to sleep when leaving capture
         IHealthDevices?.allowSleep?.();
       };
-    }, [resetState, fadeAnim, scaleAnim, deviceType])
+    }, [resetState, fadeAnim, scaleAnim, deviceType, clearBgLiveTimers])
   );
 
   // Pulse animation when busy
@@ -734,6 +861,10 @@ export default function CaptureScreen({ route, navigation }: any) {
             glucoseMacRef.current = String(data.mac || "");
             setPhase("measure");
             setStatusText(t("capture.checkingStoredReadings"));
+            // Live test: the measurement is started once the meter's own
+            // preparation is done (iOS: the BG5S effect below; Android: its
+            // "ready" + "offline_synced" events).
+            if (bgLiveRef.current) setBgLiveStatus("guide.bgLiveConnecting");
             return;
           }
 
@@ -754,6 +885,11 @@ export default function CaptureScreen({ route, navigation }: any) {
           } catch (e: any) {
             addLog(`startMeasurement error: ${e.message}`);
           }
+        } else if (busyRef.current && !readingReceivedRef.current && bgLiveRef.current) {
+          // The meter turned off mid-test: 3 minutes without blood after the
+          // strip went in, or the strip came out.
+          addLog("BG5S live: meter disconnected before a result");
+          failBgLive(TRY_AGAIN_ANIMATION, "guide.bgLiveOffTitle", "guide.bgLiveOffBody");
         } else if (busyRef.current && !readingReceivedRef.current) {
           // Unexpected disconnect — device was turned off, cuff error,
           // moved out of range, etc. Clean up and let the user know.
@@ -779,7 +915,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       }
     );
     return () => sub.remove();
-  }, [addLog, device, isFocused, showCaptureProblem]);
+  }, [addLog, device, isFocused, showCaptureProblem, failBgLive]);
 
   // Helper to sync after saving
   const syncToEMR = useCallback(async () => {
@@ -938,7 +1074,13 @@ export default function CaptureScreen({ route, navigation }: any) {
       // deterministic reading ids keep the saved ones from re-importing, and
       // the rest are offered again next time. Bounded: a meter that has gone
       // to sleep mid-prompt must not leave this screen waiting forever.
-      if (imported > 0 && leftOnMeter === 0 && mac) {
+      //
+      // Never after a live test: only that one reading came in, and the meter
+      // may hold others not imported yet (its id keeps it from importing
+      // twice later).
+      const wasLive = bgLiveRef.current;
+      resetBgLive();
+      if (imported > 0 && leftOnMeter === 0 && mac && !wasLive) {
         const erased = await Promise.race([
           deviceService.deleteDeviceRecords(mac, "BG5S"),
           new Promise<boolean>((resolve) => setTimeout(() => resolve(false), ERASE_TIMEOUT_MS)),
@@ -985,7 +1127,7 @@ export default function CaptureScreen({ route, navigation }: any) {
         setStatusText("");
       }
     },
-    [addLog, playSuccessAnimation, showToast, syncToEMR, thresholds]
+    [addLog, playSuccessAnimation, resetBgLive, showToast, syncToEMR, thresholds]
   );
 
   // Show the prompt for the head of the queue.
@@ -1031,6 +1173,17 @@ export default function CaptureScreen({ route, navigation }: any) {
         // re-save (a re-save would reset the synced flag).
         const id = buildBGReadingId(deviceIdForReading, { ...rec, timestamp: ts });
         if (readingExists(id)) {
+          alreadyCaptured += 1;
+          continue;
+        }
+        // A reading a live test saved is also kept in the meter's memory.
+        // Its record id should match; if this meter gives the copy another
+        // id, the same value at the same moment is the same test.
+        if (
+          deviceIdForReading &&
+          glucoseReadingNear(deviceIdForReading, value, ts, BG_SAME_TEST_WINDOW_MS)
+        ) {
+          addLog(`BG5S record ${rec?.dataID || "?"} matches a saved reading (same value and time)`);
           alreadyCaptured += 1;
           continue;
         }
@@ -1143,6 +1296,95 @@ export default function CaptureScreen({ route, navigation }: any) {
     );
   }, [endGlucoseImport, pendingGlucoseReading, promptNextGlucoseReading]);
 
+  // ==========================================================================
+  // BG5S live test (guides.ts BG5S_LIVE_STEP)
+  // ==========================================================================
+
+  // The meter is connected and prepared: start its blood measurement. Once
+  // it accepts, the 90-second "not found" limit is over, the patient moves on
+  // to pricking her finger, and a watchdog waits for the result.
+  const startBgLiveMeasure = useCallback(
+    async (mac: string) => {
+      if (!bgLiveRef.current || bgLiveStartedRef.current || bgLiveStartingRef.current) return;
+      bgLiveStartingRef.current = true;
+      if (bgLiveUnitWaitRef.current) {
+        clearTimeout(bgLiveUnitWaitRef.current);
+        bgLiveUnitWaitRef.current = null;
+      }
+      addLog("BG5S live: starting the meter's measurement");
+      try {
+        try {
+          await IHealthDevices.startMeasurement(mac);
+        } catch (e: any) {
+          // iOS: a meter that refuses the plain start may want its code set
+          // first (the path the debug screen used).
+          if (Platform.OS === "ios" && IHealthDevices?.debugBG5SSetCodeAndStart) {
+            addLog(`BG5S live: start refused (${e?.message || e}); trying set-code-and-start`);
+            await IHealthDevices.debugBG5SSetCodeAndStart(mac);
+          } else {
+            throw e;
+          }
+        }
+      } catch (e: any) {
+        bgLiveStartingRef.current = false;
+        addLog(`BG5S live: the meter did not start: ${e?.message || String(e)}`);
+        if (bgLiveRef.current) {
+          failBgLive(TRY_AGAIN_ANIMATION, "capture.deviceErrorTitle", "capture.deviceErrorMsg");
+        }
+        return;
+      }
+      bgLiveStartingRef.current = false;
+      if (!bgLiveRef.current) return; // cancelled meanwhile
+      bgLiveStartedRef.current = true;
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      bgLiveWatchdogRef.current = setTimeout(() => {
+        if (!bgLiveRef.current || readingReceivedRef.current) return;
+        addLog("BG5S live: no result within the limit");
+        failBgLive(TRY_AGAIN_ANIMATION, "guide.noReadingTitle", "guide.bgLiveNoResultBody");
+      }, BG_LIVE_RESULT_LIMIT_MS);
+      setBgLiveStatus(null);
+      const w = walkthroughRef.current;
+      if (w?.mode === "live" && w.index <= BG5S_LIVE_STEP.STRIP) goLiveStep(BG5S_LIVE_STEP.LANCE);
+    },
+    [addLog, failBgLive, goLiveStep]
+  );
+
+  // The meter's result: saved through the usual import (dated, checked
+  // against what is already saved, sample-window prompt). The success view
+  // then shows the "throw away the strip" step.
+  const handleBgLiveResult = useCallback(
+    (data: any) => {
+      const value = Number(data?.value);
+      if (!Number.isFinite(value) || value <= 0) return;
+      clearBgLiveTimers();
+      addLog(`BG5S live: result ${value} ${data?.unit || "mg/dL"} (dataID=${data?.dataID || "?"})`);
+      setBgLiveStatus(null);
+      setBgLiveDone(true);
+      setWalk(null);
+      const mac = String(data?.mac || targetMacRef.current || "");
+      beginGlucoseImport(
+        [
+          {
+            value,
+            unit: data?.unit || "mg/dL",
+            dataID: data?.dataID || "",
+            // Live: taken this moment, on a clock the app just set.
+            timestamp: typeof data?.timestamp === "number" ? data.timestamp : Date.now(),
+            canCorrect: false,
+            mac,
+            type: "BG5S",
+            source: "iHealthSDK",
+          },
+        ],
+        mac
+      );
+    },
+    [addLog, beginGlucoseImport, clearBgLiveTimers, setWalk]
+  );
+
   // BG5S capture uses the working debug path: connect, pull stored records,
   // then ask for the sample window before saving and syncing.
   //
@@ -1199,6 +1441,13 @@ export default function CaptureScreen({ route, navigation }: any) {
           addLog("BG5S clock could not be set this visit; importing with the last known offset");
         }
 
+        // Live test: start the meter's measurement instead of pulling its
+        // memory (stored readings stay there for the import).
+        if (bgLiveRef.current) {
+          await startBgLiveMeasure(String(data.mac));
+          return;
+        }
+
         const payload = await readStoredBG5SData(data.mac);
         const records: any[] = Array.isArray(payload?.records) ? payload.records : [];
         beginGlucoseImport(
@@ -1207,6 +1456,10 @@ export default function CaptureScreen({ route, navigation }: any) {
         );
       } catch (e: any) {
         addLog(`BG5S stored read error: ${e?.message || String(e)}`);
+        if (bgLiveRef.current) {
+          failBgLive(TRY_AGAIN_ANIMATION, "capture.deviceErrorTitle", "capture.deviceErrorMsg");
+          return;
+        }
         IHealthDevices?.stopScan?.().catch(() => {});
         IHealthDevices?.disconnectAll?.().catch(() => {});
         IHealthDevices?.allowSleep?.();
@@ -1219,7 +1472,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     });
 
     return () => sub.remove();
-  }, [addLog, deviceType, beginGlucoseImport, isFocused]);
+  }, [addLog, deviceType, beginGlucoseImport, isFocused, startBgLiveMeasure, failBgLive]);
 
   // Native events are broadcast to every mounted listener. A reading (or a
   // glucose record, or an error) belongs to THIS screen only when this
@@ -1240,6 +1493,111 @@ export default function CaptureScreen({ route, navigation }: any) {
     [isFocused]
   );
 
+  // What the meter reports during a live test. Stage names: Android
+  // IHealthDevicesModule.handleBG5SNotification, iOS the BG5S delegate.
+  const handleBgLiveMeterEvent = useCallback(
+    (data: any) => {
+      if (!bgLiveRef.current || !ownsEvent(data?.mac)) return;
+      const stage = String(data?.stage || "");
+      const mac = String(data?.mac || targetMacRef.current || "");
+      const w = walkthroughRef.current;
+
+      // The strip came out before any blood: back to inserting one.
+      const stripRemoved = () => {
+        if (!bgLiveStartedRef.current || bgLiveBloodRef.current) return;
+        setBgLiveStatus("guide.bgLiveStripOut");
+        goLiveStep(BG5S_LIVE_STEP.STRIP);
+      };
+      // A strip went in once the measurement was running: on to pricking.
+      const stripInserted = () => {
+        if (!bgLiveStartedRef.current || bgLiveBloodRef.current) return;
+        setBgLiveStatus(null);
+        if (w?.mode === "live" && w.index === BG5S_LIVE_STEP.STRIP) {
+          goLiveStep(BG5S_LIVE_STEP.LANCE);
+        }
+      };
+
+      switch (stage) {
+        // Android: the connect chain (clock → unit → stored-record pull)
+        // finishes before the measurement may start.
+        case "ready":
+          bgLiveUnitReadyRef.current = true;
+          if (bgLiveSyncedRef.current) startBgLiveMeasure(mac);
+          return;
+        case "offline_synced":
+          bgLiveSyncedRef.current = true;
+          androidBGBatchRef.current = []; // left on the meter for the import
+          if (bgLiveUnitReadyRef.current) {
+            startBgLiveMeasure(mac);
+          } else if (!bgLiveUnitWaitRef.current) {
+            bgLiveUnitWaitRef.current = setTimeout(() => {
+              bgLiveUnitWaitRef.current = null;
+              startBgLiveMeasure(mac);
+            }, BG_LIVE_UNIT_WAIT_MS);
+          }
+          return;
+        case "strip_in": // Android
+          stripInserted();
+          return;
+        case "strip_out": // Android
+          stripRemoved();
+          return;
+        case "strip_state": // iOS
+          if (data?.stateText === "strip_removed") stripRemoved();
+          else if (data?.stateText === "strip_inserted") stripInserted();
+          return;
+        case "blood_detected":
+          bgLiveBloodRef.current = true;
+          setBgLiveStatus(null);
+          goLiveStep(BG5S_LIVE_STEP.WAIT);
+          return;
+        case "error": // Android
+        case "device_error": {
+          // iOS
+          const text = bgErrorText(data?.error);
+          addLog(`BG5S live: meter error ${String(data?.error)} ${data?.message || ""}`);
+          failBgLive(
+            TRY_AGAIN_ANIMATION,
+            text?.title ?? "capture.deviceErrorTitle",
+            text?.body ?? "capture.deviceErrorMsg"
+          );
+          return;
+        }
+        default:
+          return;
+      }
+    },
+    [addLog, failBgLive, goLiveStep, ownsEvent, startBgLiveMeasure]
+  );
+
+  // Live cuff pressure (BP3L) and weight (HS2S) while the device measures.
+  useEffect(() => {
+    if (!emitter) return;
+    const tooSoon = () => {
+      const now = Date.now();
+      if (now - liveShownAtRef.current < LIVE_VALUE_INTERVAL_MS) return true;
+      liveShownAtRef.current = now;
+      return false;
+    };
+    const subs = [
+      emitter.addListener("onBloodPressureProgress", (data: any) => {
+        if (guideRef.current?.model !== "BP3L" || !ownsEvent(data?.mac)) return;
+        setCuffStarted(true);
+        const p = Number(data?.pressure);
+        if (!Number.isFinite(p) || p <= 0 || tooSoon()) return;
+        setLivePressure(Math.round(p));
+      }),
+      emitter.addListener("onWeightProgress", (data: any) => {
+        if (guideRef.current?.model !== "HS2S" || !ownsEvent(data?.mac)) return;
+        const kg = Number(data?.weight);
+        if (!Number.isFinite(kg) || kg <= 0 || tooSoon()) return;
+        // Same rounding as the saved weight.
+        setLiveWeightLbs(Math.floor(kg * 2.20462 * 10) / 10);
+      }),
+    ];
+    return () => subs.forEach((s) => s.remove());
+  }, [ownsEvent]);
+
   // Listen for readings
   useEffect(() => {
     if (!emitter) return;
@@ -1257,6 +1615,13 @@ export default function CaptureScreen({ route, navigation }: any) {
       }),
       emitter.addListener("onBloodGlucoseReading", (data: any) => {
         if (device?.type !== "BG" || !ownsEvent(data?.mac)) return;
+        if (bgLiveRef.current) {
+          // Live test: what Android sends on connect is the meter's stored
+          // memory (left there for the import); the reading that follows the
+          // started measurement is this test's result.
+          if (bgLiveStartedRef.current) handleBgLiveResult(data);
+          return;
+        }
         if (Platform.OS !== "android") return; // iOS pulls the batch itself
         // Android delivers the meter's stored records one event at a time,
         // each with the meter's timestamp and its time-proof flag. Collect
@@ -1266,6 +1631,10 @@ export default function CaptureScreen({ route, navigation }: any) {
       }),
       emitter.addListener("onGlucoseMeterEvent", (data: any) => {
         if (device?.type !== "BG") return;
+        if (bgLiveRef.current) {
+          handleBgLiveMeterEvent(data);
+          return;
+        }
         if (Platform.OS !== "android") return;
         if (data?.stage !== "offline_synced" || !ownsEvent(data?.mac)) return;
         const batch = androidBGBatchRef.current;
@@ -1299,6 +1668,17 @@ export default function CaptureScreen({ route, navigation }: any) {
         // If THIS screen is actively trying to capture, reset and tell the user.
         // A blurred capture screen must not tear down another screen's link.
         if (isFocused && busyRef.current && !readingReceivedRef.current) {
+          if (bgLiveRef.current) {
+            // The meter's own error event (onGlucoseMeterEvent) explains its
+            // errors; anything else that is not Bluetooth ends the test here.
+            if (code.startsWith("BG5S")) return;
+            if (!BLUETOOTH_ERROR_CODES.has(code)) {
+              failBgLive(TRY_AGAIN_ANIMATION, "capture.deviceErrorTitle", "capture.deviceErrorMsg");
+              return;
+            }
+            resetBgLive();
+            setWalk(null);
+          }
           if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
@@ -1313,10 +1693,13 @@ export default function CaptureScreen({ route, navigation }: any) {
           if (BLUETOOTH_ERROR_CODES.has(code)) {
             showBluetoothAlert(data);
           } else {
+            // The BP3L guide explains the cuff's own error code.
+            const cuff = guideRef.current?.model === "BP3L" ? bpErrorText(data?.error) : null;
+            if (cuff) addLog(`Cuff error code ${String(data?.error)}`);
             showCaptureProblem(
               TRY_AGAIN_ANIMATION,
-              "capture.deviceErrorTitle",
-              "capture.deviceErrorMsg"
+              cuff?.title ?? "capture.deviceErrorTitle",
+              cuff?.body ?? "capture.deviceErrorMsg"
             );
           }
         }
@@ -1324,19 +1707,20 @@ export default function CaptureScreen({ route, navigation }: any) {
     ];
 
     return () => subs.forEach((s) => s.remove());
-  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast, ownsEvent, isFocused, showCaptureProblem]);
+  }, [addLog, device, saveBPReading, saveWeightReading, beginGlucoseImport, dispatch, showToast, ownsEvent, isFocused, showCaptureProblem, failBgLive, resetBgLive, setWalk, handleBgLiveResult, handleBgLiveMeterEvent]);
 
   // ============================================================================
   // START CAPTURE
   // ============================================================================
-  const startCapture = useCallback(async () => {
+  // Resolves true once the phone is looking for the device.
+  const startCapture = useCallback(async (): Promise<boolean> => {
     if (!device) {
       Alert.alert(t("common.error"), t("capture.deviceNotFound"));
-      return;
+      return false;
     }
     if (!IHealthDevices || !emitter) {
       Alert.alert(t("common.error"), t("capture.nativeModuleMissing"));
-      return;
+      return false;
     }
 
     try {
@@ -1347,13 +1731,18 @@ export default function CaptureScreen({ route, navigation }: any) {
       setBusy(false);
       setPhase("idle");
       setStatusText("");
-      return;
+      return false;
     }
 
     // Prevent screen from sleeping during capture
     IHealthDevices.keepAwake?.();
 
+    failureRef.current = null;
     setFailure(null);
+    setCuffStarted(false);
+    setLivePressure(null);
+    setLiveWeightLbs(null);
+    if (!bgLiveRef.current) setBgLiveDone(false);
     setBusy(true);
     setLastReading(null);
     setSyncStatus("");
@@ -1406,7 +1795,7 @@ export default function CaptureScreen({ route, navigation }: any) {
       IHealthDevices?.allowSleep?.();
       setBusy(false);
       setPhase("idle");
-      return;
+      return false;
     }
 
     timeoutRef.current = setTimeout(() => {
@@ -1414,6 +1803,16 @@ export default function CaptureScreen({ route, navigation }: any) {
       // Never found (still scanning) is a different problem from found but no
       // reading; the guided screen shows the matching help picture.
       const neverFound = phaseRef.current === "auth" || phaseRef.current === "scan";
+      // A live test that never got the meter started (it clears this timer
+      // once the meter accepts the measurement).
+      if (bgLiveRef.current) {
+        failBgLive(
+          neverFound ? NOT_FOUND_ANIMATION : TRY_AGAIN_ANIMATION,
+          neverFound ? "guide.notFoundTitle" : "guide.noReadingTitle",
+          neverFound ? "guide.bgLiveNotFoundBody" : "capture.timeoutMsg"
+        );
+        return;
+      }
       IHealthDevices.stopScan?.().catch(() => {});
       IHealthDevices?.allowSleep?.();
       setBusy(false);
@@ -1437,7 +1836,8 @@ export default function CaptureScreen({ route, navigation }: any) {
         Alert.alert(t("capture.timeoutTitle"), t("capture.timeoutMsg"));
       }
     }, 90000);
-  }, [device, addLog, successScale]);
+    return true;
+  }, [device, addLog, successScale, failBgLive]);
 
   // After the health check (BP) and battery warning: a guided device first
   // shows its preparation steps; the last one starts the capture. Otherwise
@@ -1545,6 +1945,9 @@ export default function CaptureScreen({ route, navigation }: any) {
     // state after the next render, but the event can arrive first now that
     // Android disconnects for real).
     busyRef.current = false;
+    // A live test ends with the capture: no step left on screen, no timer.
+    resetBgLive();
+    setWalk(null);
     try {
       await IHealthDevices?.stopScan?.();
       await IHealthDevices?.disconnectAll?.();
@@ -1553,7 +1956,7 @@ export default function CaptureScreen({ route, navigation }: any) {
     setBusy(false);
     setPhase("idle");
     setStatusText("");
-  }, [addLog]);
+  }, [addLog, resetBgLive, setWalk]);
 
   const done = useCallback(() => {
     IHealthDevices?.allowSleep?.();
@@ -1566,59 +1969,93 @@ export default function CaptureScreen({ route, navigation }: any) {
   // The handlers read and clear refs before state so a quick double tap can
   // never start two captures (state only catches up on the next render).
   // ==========================================================================
-  const walkthroughRef = useRef(walkthrough);
-  walkthroughRef.current = walkthrough;
-  const failureRef = useRef(failure);
-  failureRef.current = failure;
 
-  // Leave the walkthrough: preparation → the capture; "How to test" → the
-  // usual import, through start() so Bluetooth and battery are checked.
+  // Leave the preparation steps for the capture.
   const finishWalkthrough = useCallback(() => {
     const w = walkthroughRef.current;
-    if (!w) return;
-    walkthroughRef.current = null;
-    setWalkthrough(null);
-    if (w.mode === "prep") startCapture();
-    else start();
-  }, [startCapture, start]);
+    if (!w || w.mode !== "prep") return;
+    setWalk(null);
+    startCapture();
+  }, [setWalk, startCapture]);
+
+  // BG5S live test: the phone starts looking for the meter as the patient
+  // reaches "insert a strip" (inserting it is what turns the meter on).
+  const startBgLive = useCallback(async () => {
+    resetBgLive();
+    bgLiveRef.current = true;
+    setBgLiveDone(false);
+    setBgLiveStatus("guide.bgLiveFinding");
+    const started = await startCapture();
+    if (!started) {
+      resetBgLive();
+      setWalk(null);
+    }
+  }, [resetBgLive, setWalk, startCapture]);
 
   const nextWalkStep = useCallback(() => {
     const w = walkthroughRef.current;
     const g = guideRef.current;
     if (!w || !g) return;
-    const steps = w.mode === "prep" ? g.prep : g.tutorial;
-    if (w.index >= steps.length - 1) {
+    if (w.mode === "live") {
+      // Only the patient's own steps move on with a tap; the rest wait for
+      // the meter.
+      if (!bgLiveStepIsTap(w.index)) return;
+      if (w.index === BG5S_LIVE_STEP.READY) {
+        setWalk({ mode: "live", index: BG5S_LIVE_STEP.STRIP });
+        startBgLive();
+        return;
+      }
+      setWalk({ mode: "live", index: w.index + 1 });
+      return;
+    }
+    if (w.index >= g.prep.length - 1) {
       finishWalkthrough();
       return;
     }
-    const next = { ...w, index: w.index + 1 };
-    walkthroughRef.current = next;
-    setWalkthrough(next);
-  }, [finishWalkthrough]);
+    setWalk({ ...w, index: w.index + 1 });
+  }, [finishWalkthrough, setWalk, startBgLive]);
 
-  const closeWalkthrough = useCallback(() => {
-    walkthroughRef.current = null;
-    setWalkthrough(null);
-  }, []);
-
-  const openTutorial = useCallback(() => {
+  const openBgLive = useCallback(() => {
     if (!guideRef.current?.tutorial.length) return;
-    setFailure(null);
-    setWalkthrough({ mode: "tutorial", index: 0 });
-  }, []);
-
-  // Straight back to the capture: preparation is already done.
-  const retryCapture = useCallback(() => {
-    if (!failureRef.current) return;
     failureRef.current = null;
     setFailure(null);
+    setBgLiveDone(false);
+    setWalk({ mode: "live", index: BG5S_LIVE_STEP.READY });
+  }, [setWalk]);
+
+  // Close the live test before it has started (its first step).
+  const closeWalkthrough = useCallback(() => {
+    setWalk(null);
+  }, [setWalk]);
+
+  // Straight back to the capture: preparation is already done. A live test
+  // starts again from inserting the strip.
+  const retryCapture = useCallback(() => {
+    const f = failureRef.current;
+    if (!f) return;
+    failureRef.current = null;
+    setFailure(null);
+    if (f.live) {
+      setWalk({ mode: "live", index: BG5S_LIVE_STEP.STRIP });
+      startBgLive();
+      return;
+    }
     startCapture();
-  }, [startCapture]);
+  }, [setWalk, startBgLive, startCapture]);
 
   const dismissFailure = useCallback(() => {
     failureRef.current = null;
     setFailure(null);
   }, []);
+
+  // A live test that went wrong may still have left its result on the meter:
+  // bring it in with the usual import.
+  const importAfterFailure = useCallback(() => {
+    if (!failureRef.current) return;
+    failureRef.current = null;
+    setFailure(null);
+    start();
+  }, [start]);
 
   // Stop the import. Untagged readings stay on the meter (memory is not
   // erased) and are offered again next time; anything already tagged is
@@ -1857,16 +2294,38 @@ export default function CaptureScreen({ route, navigation }: any) {
     walkthrough && guide ? (walkthrough.mode === "prep" ? guide.prep : guide.tutorial) : [];
   const walkStep = walkthrough ? walkSteps[walkthrough.index] : undefined;
   const walkIsLast = walkthrough ? walkthrough.index >= walkSteps.length - 1 : false;
+  const liveWalk = walkthrough?.mode === "live";
+  // Live test: what the meter is doing, under the step.
+  const liveStatus: string | undefined = !liveWalk
+    ? undefined
+    : bgLiveStatus
+      ? t(bgLiveStatus)
+      : walkthrough?.index === BG5S_LIVE_STEP.APPLY
+        ? t("guide.bgLiveWaitingBlood")
+        : undefined;
   // The capture's own phases pick the picture; the device events drive them.
+  // BP3L: "measuring" only once the cuff itself reports it has started.
   const phaseStep: GuideStep | null =
     guide && phase !== "idle" && phase !== "success"
       ? phase === "measure"
-        ? guide.measure
+        ? guide.model === "BP3L" && !cuffStarted
+          ? guide.connect
+          : guide.measure
         : phase === "connect"
           ? guide.connect
           : guide.scan
       : null;
+  // The live number under the capture picture.
+  const phaseLiveValue =
+    guide?.model === "BP3L" && phase === "measure" && livePressure !== null
+      ? { value: String(livePressure), unit: "mmHg", label: t("guide.bpPressureLabel") }
+      : guide?.model === "HS2S" && (phase === "connect" || phase === "measure") && liveWeightLbs !== null
+        ? { value: liveWeightLbs.toFixed(1), unit: "lbs" }
+        : null;
   const failureShown = guide && phase === "idle" && !walkStep ? failure : null;
+  // Shown with a reading saved by the live test: throw away strip and lancet.
+  const liveDoneStep: GuideStep | null =
+    bgLiveDone && guide ? guide.tutorial[BG5S_LIVE_STEP.DONE] ?? null : null;
 
   const progressBar =
     busy && phase !== "success" ? (
@@ -1935,9 +2394,39 @@ export default function CaptureScreen({ route, navigation }: any) {
             { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
           ]}
         >
-          {walkStep && walkthrough ? (
-            // Preparation steps, or the "How to test" walkthrough: the patient
-            // moves on with the buttons.
+          {walkStep && walkthrough && liveWalk ? (
+            // BG5S live test: the patient's own steps have Next; the others
+            // wait for the meter (status under the step says what for).
+            <>
+              <GuideStage
+                anim={walkStep.anim}
+                title={t(walkStep.title)}
+                body={t(walkStep.body)}
+                stepLabel={t("guide.stepOf", {
+                  n: walkthrough.index + 1,
+                  total: walkSteps.length,
+                })}
+                status={liveStatus}
+              />
+              <View style={styles.buttonContainer}>
+                {bgLiveStepIsTap(walkthrough.index) ? (
+                  <TouchableOpacity
+                    onPress={nextWalkStep}
+                    activeOpacity={0.8}
+                    style={styles.primaryButton}
+                  >
+                    <Text style={styles.primaryButtonText}>{t("common.next")}</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {walkthrough.index === BG5S_LIVE_STEP.READY ? (
+                  <GuideLinkButton label={t("common.close")} onPress={closeWalkthrough} />
+                ) : (
+                  <GuideLinkButton label={t("common.cancel")} onPress={cancel} />
+                )}
+              </View>
+            </>
+          ) : walkStep && walkthrough ? (
+            // Preparation steps: the patient moves on with the buttons.
             <>
               <GuideStage
                 anim={walkStep.anim}
@@ -1955,20 +2444,12 @@ export default function CaptureScreen({ route, navigation }: any) {
                   style={styles.primaryButton}
                 >
                   <Text style={styles.primaryButtonText}>
-                    {!walkIsLast
-                      ? t("common.next")
-                      : walkthrough.mode === "prep"
-                        ? t("guide.startMeasuring")
-                        : t("guide.importReading")}
+                    {!walkIsLast ? t("common.next") : t("guide.startMeasuring")}
                   </Text>
                 </TouchableOpacity>
-                {walkthrough.mode === "prep" ? (
-                  !walkIsLast ? (
-                    <GuideLinkButton label={t("guide.skipToMeasure")} onPress={finishWalkthrough} />
-                  ) : null
-                ) : (
-                  <GuideLinkButton label={t("common.close")} onPress={closeWalkthrough} />
-                )}
+                {!walkIsLast ? (
+                  <GuideLinkButton label={t("guide.skipToMeasure")} onPress={finishWalkthrough} />
+                ) : null}
               </View>
             </>
           ) : failureShown ? (
@@ -1987,13 +2468,21 @@ export default function CaptureScreen({ route, navigation }: any) {
                 >
                   <Text style={styles.primaryButtonText}>{t("common.retry")}</Text>
                 </TouchableOpacity>
+                {failureShown.live ? (
+                  <GuideLinkButton label={t("guide.importReading")} onPress={importAfterFailure} />
+                ) : null}
                 <GuideLinkButton label={t("common.cancel")} onPress={dismissFailure} />
               </View>
             </>
           ) : phaseStep ? (
             // Capturing: the picture for the phase the device is in.
             <>
-              <GuideStage anim={phaseStep.anim} title={t(phaseStep.title)} body={t(phaseStep.body)} />
+              <GuideStage
+                anim={phaseStep.anim}
+                title={t(phaseStep.title)}
+                body={t(phaseStep.body)}
+                liveValue={phaseLiveValue}
+              />
               {progressBar}
               <View style={styles.buttonContainer}>{cancelButton}</View>
             </>
@@ -2003,7 +2492,7 @@ export default function CaptureScreen({ route, navigation }: any) {
               above the saved reading instead */}
           {phase === "success" && guide ? (
             <GuidedAnimation
-              name={guide.success}
+              name={liveDoneStep ? liveDoneStep.anim : guide.success}
               size={GUIDE_SUCCESS_SIZE}
               style={styles.guideSuccessCard}
             />
@@ -2087,6 +2576,12 @@ export default function CaptureScreen({ route, navigation }: any) {
           {phase === "success" && lastReading ? (
             <Animated.View style={{ opacity: readingFade }}>
               {renderReadingDisplay()}
+              {liveDoneStep ? (
+                <View style={styles.liveDone}>
+                  <Text style={styles.liveDoneTitle}>{t(liveDoneStep.title)}</Text>
+                  <Text style={styles.liveDoneBody}>{t(liveDoneStep.body)}</Text>
+                </View>
+              ) : null}
             </Animated.View>
           ) : (
             <View style={styles.statusSection}>
@@ -2119,9 +2614,9 @@ export default function CaptureScreen({ route, navigation }: any) {
               </TouchableOpacity>
             )}
 
-            {/* Glucose meter: the optional step-by-step "How to test" */}
+            {/* Glucose meter: test now with the phone following the meter */}
             {phase === "idle" && guide && guide.tutorial.length > 0 ? (
-              <GuideLinkButton label={t("guide.howToTest")} onPress={openTutorial} />
+              <GuideLinkButton label={t("guide.bgTestNow")} onPress={openBgLive} />
             ) : null}
 
             {cancelButton}
@@ -2224,6 +2719,24 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#1a1a2e",
+  },
+  liveDone: {
+    marginTop: 14,
+    paddingHorizontal: 8,
+    alignItems: "center",
+  },
+  liveDoneTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#fff",
+    textAlign: "center",
+  },
+  liveDoneBody: {
+    marginTop: 6,
+    fontSize: 15,
+    lineHeight: 21,
+    color: "rgba(255,255,255,0.8)",
+    textAlign: "center",
   },
   errorContainer: {
     flex: 1,

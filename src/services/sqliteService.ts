@@ -952,6 +952,29 @@ export function readingExists(id: string): boolean {
   }
 }
 
+/**
+ * A glucose reading from this meter with this value, saved within `windowMs`
+ * of `ts`. Backs up the meter's own record id when the import meets a reading
+ * that a live test already saved (the meter keeps a copy in its memory).
+ */
+export function glucoseReadingNear(
+  deviceId: string,
+  value: number,
+  ts: number,
+  windowMs: number
+): boolean {
+  try {
+    const res = db.execute(
+      "SELECT 1 FROM readings WHERE deviceId = ? AND type = 'BG' AND value = ? AND ts BETWEEN ? AND ? LIMIT 1;",
+      [deviceId, value, ts - windowMs, ts + windowMs]
+    );
+    return !!res.rows && res.rows.length > 0;
+  } catch (e) {
+    console.error("[DB] Failed to check for a nearby glucose reading:", e);
+    return false;
+  }
+}
+
 export function getAllReadings(): SavedReading[] {
   try {
     const owner = currentPatientId();

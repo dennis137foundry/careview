@@ -7,16 +7,25 @@
  * used as a timer.
  *
  *  - BP3L (iHealth cuff, CaptureScreen): three preparation steps the patient
- *    taps through, then the existing capture — phone finds the cuff, connects,
- *    the cuff measures, the reading arrives.
+ *    taps through, then the capture — phone finds the cuff, connects; the
+ *    "measuring" picture starts when the cuff itself reports zeroing or
+ *    pressure, with the live cuff pressure shown; the reading arrives. Cuff
+ *    error codes are explained in plain words (bpErrorText).
  *  - HS2S (iHealth scale, CaptureScreen): no preparation. Stepping on is what
- *    wakes the scale, so "step on" shows while the phone looks for it.
- *  - BG5S (iHealth glucose meter, CaptureScreen): the meter is not live — the
- *    patient tests on the meter and the app imports the stored readings
- *    afterwards. The seven steps are therefore an optional "How to test"
- *    walkthrough the patient pages through, ending with the usual import.
- *    (The native layer can report strip / blood / result events, but that live
- *    path has not been tested on a real meter, so nothing here depends on it.)
+ *    wakes the scale, so "step on" shows while the phone looks for it; the
+ *    scale's live weight shows while she stands still.
+ *  - BG5S (iHealth glucose meter, CaptureScreen): two ways in.
+ *      Import (the main button, unchanged): test on the meter, the app pulls
+ *      the stored readings afterwards.
+ *      Live "Test now, step by step" (the seven `tutorial` steps): the phone
+ *      connects to the meter and starts its measurement. Inserting the strip
+ *      is what turns the meter on, so step 2 waits for the meter to connect
+ *      and accept the measurement; prick and drop are the patient's taps; the
+ *      meter's "blood detected" moves to "wait for your result"; its result is
+ *      saved through the usual sample-window prompt; step 7 (throw away)
+ *      shows with the saved reading. Meter error codes: bgErrorText. The
+ *      meter turning off (3 minutes without blood, strip out) ends the test.
+ *      BG5S_LIVE_STEP names the step indexes.
  *  - A&D UA-651BLE (BleCaptureScreen): the patient starts the monitor with its
  *    START button and the reading comes to the phone afterwards. Two
  *    preparation steps, then "measuring" until the patient says it is done or
@@ -41,7 +50,7 @@ export type CaptureGuide = {
   model: "BP3L" | "HS2S" | "BG5S";
   /** Shown before the capture starts; the patient taps through them. */
   prep: GuideStep[];
-  /** Optional "How to test" walkthrough offered on the start screen. */
+  /** The BG5S live test, step by step (BG5S_LIVE_STEP); empty for the others. */
   tutorial: GuideStep[];
   /** While the phone looks for the device. */
   scan: GuideStep;
@@ -158,3 +167,101 @@ export function bleGuideFor(device: DeviceLike): BleGuide | null {
 
 /** Every guide, for tests. */
 export const ALL_GUIDES = { BP3L, HS2S, BG5S, UA651BLE };
+
+/**
+ * The BG5S live test walks the seven `tutorial` steps by index. Which steps
+ * wait for the patient and which for the meter:
+ *   READY  (tap) → STRIP (meter connects and accepts the measurement)
+ *   → LANCE (tap) → DROP (tap) → APPLY (meter: blood detected; also from
+ *   LANCE / DROP if she is quicker than her taps) → WAIT (meter: result)
+ *   → DONE (shown with the saved reading).
+ */
+export const BG5S_LIVE_STEP = {
+  READY: 0,
+  STRIP: 1,
+  LANCE: 2,
+  DROP: 3,
+  APPLY: 4,
+  WAIT: 5,
+  DONE: 6,
+} as const;
+
+/** Steps the patient moves on from with a tap; the others wait for the meter. */
+export function bgLiveStepIsTap(index: number): boolean {
+  return (
+    index === BG5S_LIVE_STEP.READY ||
+    index === BG5S_LIVE_STEP.LANCE ||
+    index === BG5S_LIVE_STEP.DROP
+  );
+}
+
+export type DeviceErrorText = { title: TKey; body: TKey };
+
+/**
+ * A cuff error code in plain words (iHealth BP error numbers: iOS
+ * BPDeviceError in BPMacroFile.h, the same numbers on Android's
+ * ERROR_NUM_BP). Null for the codes that are not about the measurement
+ * (data / communication), which keep the general "try again".
+ */
+export function bpErrorText(code: unknown): DeviceErrorText | null {
+  const n = typeof code === "number" ? code : Number.NaN;
+  const title: TKey = "guide.bpErrTitle";
+  switch (n) {
+    case 0: // arm / wrist movement
+    case 17: // movement beyond range
+      return { title, body: "guide.bpErrMove" };
+    case 1: // no systolic
+    case 2: // no diastolic
+      return { title, body: "guide.bpErrNoPulse" };
+    case 3: // blocked, or cuff too tight
+      return { title, body: "guide.bpErrTight" };
+    case 4: // leaking, or cuff too loose
+      return { title, body: "guide.bpErrLoose" };
+    case 5: // over 300 mmHg
+    case 6: // over 15 mmHg for 160 s
+      return { title, body: "guide.bpErrPressure" };
+    case 13:
+      return { title, body: "guide.bpErrBattery" };
+    case 15: // systolic over 260 or diastolic over 199
+      return { title, body: "guide.bpErrRangeHigh" };
+    case 16: // systolic under 60 or diastolic under 40
+      return { title, body: "guide.bpErrRangeLow" };
+    case 18: // heart rate over limit
+    case 19: // heart rate under limit
+    case 20: // average pressure over limit
+      return { title, body: "guide.bpErrRepeat" };
+    default:
+      return null;
+  }
+}
+
+/**
+ * A glucose meter error code in plain words (iOS BG5SError in BGMacroFile.h;
+ * Android Bg5sProfile.ERROR_* — the same numbers). Null for codes that are
+ * about the Bluetooth link or the app, which keep the general "try again".
+ */
+export function bgErrorText(code: unknown): DeviceErrorText | null {
+  const n = typeof code === "number" ? code : Number.NaN;
+  const title: TKey = "guide.bgErrTitle";
+  switch (n) {
+    case 0:
+      return { title, body: "guide.bgErrLowBattery" };
+    case 1: // strip pulled out during the measurement
+      return { title, body: "guide.bgErrStripOut" };
+    case 3: // used strip or moisture
+      return { title, body: "guide.bgErrUsedStrip" };
+    case 5: // too cold
+    case 6: // too hot
+      return { title, body: "guide.bgErrTemperature" };
+    case 8: // below the meter's range (LO)
+      return { title: "guide.bgErrLoTitle", body: "guide.bgErrLoBody" };
+    case 9: // above the meter's range (HI)
+      return { title: "guide.bgErrHiTitle", body: "guide.bgErrHiBody" };
+    case 2: // reference voltage
+    case 4: // reading transmission (EEPROM)
+    case 10: // factory error
+      return { title, body: "guide.bgErrRepeat" };
+    default:
+      return null;
+  }
+}

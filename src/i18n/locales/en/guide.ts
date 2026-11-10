@@ -2,8 +2,10 @@
 //
 // The animations have no words in them, so this text carries every
 // instruction. It follows each manufacturer's own guide (iHealth BP3L and BG5S
-// quick start guides; A&D UA-651BLE quick start guide and manual). Keep it
-// that way: a change here is a change to patient instructions.
+// quick start guides; A&D UA-651BLE quick start guide and manual). The error
+// texts (guide.bpErr*, guide.bgErr*) follow what iHealth's SDK documents for
+// each device error code. Keep it that way: a change here is a change to
+// patient instructions.
 export default {
   // Shared
   "guide.stepOf": "Step {n} of {total}",
@@ -27,6 +29,26 @@ export default {
     "Keep your arm resting at heart level. CareView starts the measurement by itself.",
   "guide.bp3lMeasureTitle": "Measuring…",
   "guide.bp3lMeasureBody": "Stay still and don't talk until the cuff loosens.",
+  "guide.bpPressureLabel": "Cuff pressure",
+  // Cuff error codes (iHealth BP error numbers), in plain words.
+  "guide.bpErrTitle": "The cuff stopped the measurement",
+  "guide.bpErrMove":
+    "Your arm moved during the measurement. Rest your arm on the table, stay still and quiet, and try again.",
+  "guide.bpErrNoPulse":
+    "The cuff couldn't read your blood pressure. Check that it is on your bare upper arm at heart level, stay still, and try again.",
+  "guide.bpErrTight":
+    "The cuff may be too tight, or the tube is bent or blocked. Loosen the cuff so one finger slides under the edge, check the tube, and try again.",
+  "guide.bpErrLoose":
+    "The cuff is too loose or is losing air. Wrap it snugly so only one finger slides under the edge, and try again.",
+  "guide.bpErrPressure":
+    "The cuff stopped because the pressure went too high. Rest for a few minutes, check the cuff, and try again.",
+  "guide.bpErrBattery": "The cuff's battery is low. Charge it, then try again.",
+  "guide.bpErrRangeHigh":
+    "Your blood pressure was higher than the cuff can measure. Rest quietly for 5 minutes and measure again. If this happens again, contact your healthcare provider right away.",
+  "guide.bpErrRangeLow":
+    "Your blood pressure was lower than the cuff can measure. Rest and measure again. If this happens again, contact your healthcare provider right away.",
+  "guide.bpErrRepeat":
+    "The cuff couldn't finish the measurement. Rest for a minute, stay still and quiet, and try again.",
 
   // iHealth HS2S scale
   "guide.hs2sStepOnTitle": "Step onto the scale",
@@ -35,8 +57,8 @@ export default {
   "guide.hs2sStandTitle": "Stand still…",
   "guide.hs2sStandBody": "Keep your arms relaxed until your weight is captured.",
 
-  // iHealth BG5S glucose meter ("How to test" walkthrough, then the import)
-  "guide.howToTest": "How to test",
+  // iHealth BG5S glucose meter (live test step by step; the import stays)
+  "guide.bgTestNow": "Test now, step by step",
   "guide.importReading": "Import my reading",
   "guide.bgReadyTitle": "Get ready",
   "guide.bgReadyBody":
@@ -61,6 +83,33 @@ export default {
   "guide.bgFindTitle": "Finding your meter…",
   "guide.bgImportTitle": "Getting readings from your meter…",
   "guide.bgNearBody": "Keep the meter close to your phone.",
+  // Live test: what the meter is doing, under the step.
+  "guide.bgLiveFinding": "Looking for your meter. Inserting the strip turns it on.",
+  "guide.bgLiveConnecting": "Meter found. Getting it ready…",
+  "guide.bgLiveWaitingBlood": "The meter is waiting for blood.",
+  "guide.bgLiveStripOut": "The strip came out. Insert a strip to continue.",
+  "guide.bgLiveNotFoundBody":
+    "Make sure a strip is in the meter and the meter is on and close to your phone, then try again.",
+  "guide.bgLiveOffTitle": "The meter turned off",
+  "guide.bgLiveOffBody":
+    "This happens when blood isn't added within 3 minutes of inserting the strip, or when the strip comes out. Take the strip out and start again. Use a new strip if it already has blood on it.",
+  "guide.bgLiveNoResultBody":
+    "The meter didn't send a result. If it shows one, tap Import my reading to bring it in. Otherwise start again with a new strip.",
+  // Meter error codes (iHealth BG5S error numbers), in plain words.
+  "guide.bgErrTitle": "The meter stopped the test",
+  "guide.bgErrLowBattery": "The meter's battery is low. Charge it, then test again.",
+  "guide.bgErrStripOut": "The strip came out during the test. Test again with a new strip.",
+  "guide.bgErrUsedStrip":
+    "This strip is used or wet. Throw it away and test again with a new strip.",
+  "guide.bgErrTemperature":
+    "The meter is too cold or too hot. Leave it at room temperature for at least 30 minutes, then test again.",
+  "guide.bgErrRepeat": "The meter couldn't finish the test. Test again with a new strip.",
+  "guide.bgErrLoTitle": "Below the meter's range (LO)",
+  "guide.bgErrLoBody":
+    "Your glucose is lower than the meter can measure. Test again with a new strip. If you get this result again, contact your healthcare provider right away.",
+  "guide.bgErrHiTitle": "Above the meter's range (HI)",
+  "guide.bgErrHiBody":
+    "Your glucose is higher than the meter can measure. Test again with a new strip. If you get this result again, contact your healthcare provider right away.",
 
   // A&D UA-651BLE cuff with its own monitor
   "guide.andCuffTitle": "Put on the cuff",

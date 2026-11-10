@@ -23,6 +23,25 @@ const es: Record<keyof typeof en, string> = {
     "Mantenga el brazo apoyado a la altura del corazón. CareView inicia la medición automáticamente.",
   "guide.bp3lMeasureTitle": "Midiendo…",
   "guide.bp3lMeasureBody": "Quédese quieta y no hable hasta que el brazalete se afloje.",
+  "guide.bpPressureLabel": "Presión del brazalete",
+  "guide.bpErrTitle": "El brazalete detuvo la medición",
+  "guide.bpErrMove":
+    "Movió el brazo durante la medición. Apoye el brazo sobre la mesa, quédese quieta y en silencio, e inténtelo de nuevo.",
+  "guide.bpErrNoPulse":
+    "El brazalete no pudo leer su presión arterial. Revise que esté en la parte superior del brazo, sobre la piel, a la altura del corazón; quédese quieta e inténtelo de nuevo.",
+  "guide.bpErrTight":
+    "Es posible que el brazalete esté demasiado apretado, o que el tubo esté doblado o bloqueado. Aflójelo para que quepa un dedo debajo del borde, revise el tubo e inténtelo de nuevo.",
+  "guide.bpErrLoose":
+    "El brazalete está demasiado flojo o está perdiendo aire. Ajústelo para que solo quepa un dedo debajo del borde e inténtelo de nuevo.",
+  "guide.bpErrPressure":
+    "El brazalete se detuvo porque la presión subió demasiado. Descanse unos minutos, revise el brazalete e inténtelo de nuevo.",
+  "guide.bpErrBattery": "La batería del brazalete está baja. Cárguela e inténtelo de nuevo.",
+  "guide.bpErrRangeHigh":
+    "Su presión arterial fue más alta de lo que el brazalete puede medir. Descanse en silencio 5 minutos y vuelva a medirse. Si vuelve a pasar, comuníquese de inmediato con su proveedor de atención médica.",
+  "guide.bpErrRangeLow":
+    "Su presión arterial fue más baja de lo que el brazalete puede medir. Descanse y vuelva a medirse. Si vuelve a pasar, comuníquese de inmediato con su proveedor de atención médica.",
+  "guide.bpErrRepeat":
+    "El brazalete no pudo terminar la medición. Descanse un minuto, quédese quieta y en silencio, e inténtelo de nuevo.",
 
   // Báscula iHealth HS2S
   "guide.hs2sStepOnTitle": "Súbase a la báscula",
@@ -32,7 +51,7 @@ const es: Record<keyof typeof en, string> = {
   "guide.hs2sStandBody": "Mantenga los brazos relajados hasta que se registre su peso.",
 
   // Glucómetro iHealth BG5S
-  "guide.howToTest": "Cómo hacer la prueba",
+  "guide.bgTestNow": "Hacer la prueba ahora, paso a paso",
   "guide.importReading": "Importar mi lectura",
   "guide.bgReadyTitle": "Prepárese",
   "guide.bgReadyBody":
@@ -57,6 +76,34 @@ const es: Record<keyof typeof en, string> = {
   "guide.bgFindTitle": "Buscando su glucómetro…",
   "guide.bgImportTitle": "Obteniendo las lecturas de su glucómetro…",
   "guide.bgNearBody": "Mantenga el glucómetro cerca de su teléfono.",
+  "guide.bgLiveFinding": "Buscando su glucómetro. Al insertar la tira, se enciende.",
+  "guide.bgLiveConnecting": "Glucómetro encontrado. Preparándolo…",
+  "guide.bgLiveWaitingBlood": "El glucómetro está esperando la sangre.",
+  "guide.bgLiveStripOut": "La tira se salió. Inserte una tira para continuar.",
+  "guide.bgLiveNotFoundBody":
+    "Asegúrese de que haya una tira en el glucómetro y de que esté encendido y cerca de su teléfono; luego inténtelo de nuevo.",
+  "guide.bgLiveOffTitle": "El glucómetro se apagó",
+  "guide.bgLiveOffBody":
+    "Esto pasa cuando no se aplica sangre en los 3 minutos después de insertar la tira, o cuando la tira se sale. Saque la tira y empiece de nuevo. Use una tira nueva si ya tiene sangre.",
+  "guide.bgLiveNoResultBody":
+    "El glucómetro no envió un resultado. Si muestra uno, toque Importar mi lectura para traerlo. Si no, empiece de nuevo con una tira nueva.",
+  "guide.bgErrTitle": "El glucómetro detuvo la prueba",
+  "guide.bgErrLowBattery":
+    "La batería del glucómetro está baja. Cárguela y vuelva a hacer la prueba.",
+  "guide.bgErrStripOut":
+    "La tira se salió durante la prueba. Vuelva a hacer la prueba con una tira nueva.",
+  "guide.bgErrUsedStrip":
+    "Esta tira ya se usó o está mojada. Deséchela y vuelva a hacer la prueba con una tira nueva.",
+  "guide.bgErrTemperature":
+    "El glucómetro está demasiado frío o demasiado caliente. Déjelo a temperatura ambiente por lo menos 30 minutos y vuelva a hacer la prueba.",
+  "guide.bgErrRepeat":
+    "El glucómetro no pudo terminar la prueba. Vuelva a hacerla con una tira nueva.",
+  "guide.bgErrLoTitle": "Por debajo del rango del glucómetro (LO)",
+  "guide.bgErrLoBody":
+    "Su glucosa está más baja de lo que el glucómetro puede medir. Vuelva a hacer la prueba con una tira nueva. Si obtiene este resultado otra vez, comuníquese de inmediato con su proveedor de atención médica.",
+  "guide.bgErrHiTitle": "Por encima del rango del glucómetro (HI)",
+  "guide.bgErrHiBody":
+    "Su glucosa está más alta de lo que el glucómetro puede medir. Vuelva a hacer la prueba con una tira nueva. Si obtiene este resultado otra vez, comuníquese de inmediato con su proveedor de atención médica.",
 
   // Brazalete A&D UA-651BLE con monitor
   "guide.andCuffTitle": "Póngase el brazalete",
